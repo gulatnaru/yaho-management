@@ -1,7 +1,7 @@
 ---
 name: architect
 description: 확정된 요구사항을 데이터 모델/API/UI 설계와 구현 순서로 옮긴다. 구현 시작 전 설계 단계에서 MUST BE USED. 파일을 수정하지 않는다.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 model: inherit
 color: blue
 ---

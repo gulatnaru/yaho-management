@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: 코드 품질과 보안을 검토한다. QA 통과 후 PR 전에 MUST BE USED. 파일을 수정하지 않는다.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 model: inherit
 color: yellow
 ---

@@ -1,7 +1,7 @@
 ---
 name: qa
 description: 구현된 기능을 요구사항 기준으로 검증한다. 코드 작성이 끝난 직후 MUST BE USED. 파일을 수정하지 않고 문제만 보고한다.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 model: inherit
 color: orange
 ---

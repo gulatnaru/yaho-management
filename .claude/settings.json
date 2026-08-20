@@ -8,9 +8,7 @@
       "Bash(npx prisma migrate dev:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git branch:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git branch:*)"
     ],
     "deny": [
       "Read(./.env)",
@@ -18,7 +16,9 @@
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(npx prisma migrate reset:*)",
-      "Bash(npx prisma db push:*)"
+      "Bash(npx prisma db push:*)",
+      "Bash(sed -i:*)",
+      "Bash(tee:*)"
     ]
   }
 }
