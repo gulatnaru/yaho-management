@@ -85,3 +85,11 @@
 - Decision: unique 제약을 제거하고 동의/철회마다 행을 추가하는 append-only 구조로 바꾼다. action(AGREED/REVOKED)과 recordedAt 을 기록하고, 현재 상태는 최신 행으로 판단한다.
 - Reason: 이력 테이블을 따로 두는 것보다 단순하다. "언제 동의했고 언제 철회했는가" 증빙이 그대로 남는다.
 - Consequences: 현재 동의 여부를 알려면 최신 행을 조회해야 하므로 쿼리가 한 단계 늘어난다. (childId, consentType, recordedAt) 인덱스로 대응한다.
+
+## ADR-009: CI에서 Playwright e2e를 아직 실행하지 않는다
+- Status: Accepted
+- Date: 2026-08-20
+- Context: Phase 1 QA에서 tests/e2e/auth.spec.ts를 발견했으나 CI(.github/workflows/ci.yml)에는 실행 단계가 없다. e2e는 실제 DB에 대해 로그인 플로우를 검증해야 하는데, 테스트용 DB를 어떻게 프로비저닝하고 시딩/초기화할지에 대한 전략이 아직 정해지지 않았다.
+- Decision: 테스트 DB 전략이 확정되기 전까지 CI에서 Playwright e2e 단계를 추가하지 않는다. e2e 테스트 파일 자체는 리포지토리에 유지하고 로컬에서 수동으로 실행한다.
+- Reason: DB 전략 없이 e2e를 CI에 억지로 넣으면 flaky 해지거나, 목업으로 대체되어 실제 인증 흐름을 검증하지 못하는 테스트가 되어 회귀 방지 효과가 떨어진다. 테스트 DB 전략을 먼저 정한 뒤 정식으로 CI에 편입하는 것이 안전하다.
+- Consequences: e2e로만 잡히는 회귀(예: 비인증 접근 시 /login 리다이렉트)는 PR마다 자동 검증되지 않는다. 테스트 DB 전략이 확정되면 CI에 Playwright 단계를 추가하는 후속 작업이 필요하다.
