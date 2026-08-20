@@ -1,0 +1,426 @@
+// YAHO Management System — Prisma Schema (draft)
+// 기준: REQUIREMENTS.md v2 / docs/DATABASE.md / docs/DECISIONS.md
+//
+// 원칙
+// - 금액은 정수 KRW
+// - 물리 삭제 대신 isActive / status 로 이력 보존
+// - 민감 안전 정보는 ChildSafetyInfo 로 분리 (기본 조회에 include 금지)
+// - 일부 제약은 Prisma 로 표현 불가하여 migration 에 raw SQL CHECK 로 추가한다 (파일 하단 참조)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  TEACHER // 요구사항 17장: 구조만 열어두고 초기에는 ADMIN 중심으로 운영
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNSPECIFIED
+}
+
+enum RelationshipType {
+  FRIEND
+  SIBLING
+  // 향후 BROTHER / SISTER 확장 가능
+}
+
+enum ConsentType {
+  PRIVACY // 개인정보 수집·이용 (필수)
+  SENSITIVE_INFO // 민감정보 수집 (필수, 별도 동의)
+  PHOTO_SHARE // 활동 사진 보호자 공유 (필수)
+  PHOTO_MARKETING // 활동 사진 홍보 활용 (선택)
+}
+
+enum ConsentAction {
+  AGREED
+  REVOKED
+}
+
+enum ProgramStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ClassStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum ClassCancelReason {
+  WEATHER
+  SAFETY
+  MINIMUM_ENROLLMENT
+  OPERATION
+  OTHER
+}
+
+enum ReservationStatus {
+  RESERVED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum ReservationCancelReason {
+  PERSONAL
+  ILLNESS
+  SCHEDULE
+  WEATHER
+  DUPLICATE
+  OPERATION
+  OTHER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+enum PaymentStatus {
+  PAID
+  PARTIAL_REFUNDED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CARD
+  TRANSFER
+  CASH
+  OTHER
+}
+
+enum PayerType {
+  GUARDIAN
+  ORGANIZATION // ADR-005: 기관 도입 전까지는 사용하지 않음
+}
+
+enum RefundReason {
+  PERSONAL
+  ILLNESS
+  WEATHER
+  SCHEDULE
+  DUPLICATE_PAYMENT
+  CLASS_CANCELLED
+  OPERATION
+  OTHER
+}
+
+enum RefundStatus {
+  REQUESTED
+  COMPLETED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// User
+// ─────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String? // Auth.js Credentials 사용 시. OAuth 도입 시 Account/Session 모델 추가 필요
+  role      Role     @default(ADMIN)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cancelledClasses      ClassSchedule[] @relation("ClassCancelledBy")
+  cancelledReservations Reservation[]   @relation("ReservationCancelledBy")
+  processedRefunds      Refund[]        @relation("RefundProcessedBy")
+  safetyInfoUpdates     ChildSafetyInfo[] @relation("SafetyInfoUpdatedBy")
+}
+
+// ─────────────────────────────────────────────
+// Child — 기본 고객 단위 (ADR-001)
+// ─────────────────────────────────────────────
+
+model Child {
+  id            String    @id @default(cuid())
+  name          String
+  birthDate     DateTime? @db.Date
+  gender        Gender    @default(UNSPECIFIED)
+  guardianName  String?
+  guardianPhone String?
+  memo          String?
+  isActive      Boolean   @default(true)
+  registeredAt  DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  safetyInfo       ChildSafetyInfo?
+  consents         ChildConsent[]
+  reservations     Reservation[]
+  relationshipsAsA Relationship[]   @relation("RelationshipChildA")
+  relationshipsAsB Relationship[]   @relation("RelationshipChildB")
+
+  @@index([name])
+  @@index([guardianPhone])
+  @@index([isActive])
+}
+
+// 민감정보. 목록 조회에 include 하지 않는다 (ADR-006)
+model ChildSafetyInfo {
+  id                     String   @id @default(cuid())
+  childId                String   @unique
+  allergies              String?
+  emergencyNotes         String? // 현장에서 즉시 알아야 할 사항에 한정. 진단명/병력/복용약 이력 금지
+  emergencyContactName   String?
+  emergencyContactPhone  String?
+  emergencyContactRelation String?
+  updatedById            String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  child       Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  updatedBy   User? @relation("SafetyInfoUpdatedBy", fields: [updatedById], references: [id])
+}
+
+// append-only 이력. 동의/철회할 때마다 새 행을 쌓는다.
+// 현재 상태 = 해당 consentType 의 recordedAt 최신 행. 기존 행을 수정하거나 삭제하지 않는다.
+model ChildConsent {
+  id          String        @id @default(cuid())
+  childId     String
+  consentType ConsentType
+  action      ConsentAction
+  recordedAt  DateTime      @default(now())
+  memo        String?
+  createdAt   DateTime      @default(now())
+
+  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, consentType, recordedAt])
+}
+
+// 아이 간 관계. 양방향 중복 방지를 위해 항상 childAId < childBId 로 정렬 저장
+model Relationship {
+  id        String           @id @default(cuid())
+  childAId  String
+  childBId  String
+  type      RelationshipType
+  createdAt DateTime         @default(now())
+
+  childA Child @relation("RelationshipChildA", fields: [childAId], references: [id], onDelete: Cascade)
+  childB Child @relation("RelationshipChildB", fields: [childBId], references: [id], onDelete: Cascade)
+
+  @@unique([childAId, childBId, type])
+  @@index([childAId])
+  @@index([childBId])
+}
+
+// ─────────────────────────────────────────────
+// Teacher / Program / ClassSchedule
+// ─────────────────────────────────────────────
+
+model Teacher {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  memo      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  classes ClassTeacher[]
+}
+
+model Program {
+  id              String        @id @default(cuid())
+  name            String
+  description     String?
+  targetAgeMin    Int?
+  targetAgeMax    Int?
+  defaultDuration Int? // 분 단위
+  defaultPrice    Int           @default(0) // KRW
+  status          ProgramStatus @default(ACTIVE)
+  memo            String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  classes ClassSchedule[]
+
+  @@index([status])
+}
+
+model ClassSchedule {
+  id        String      @id @default(cuid())
+  programId String
+  startsAt  DateTime // UTC 저장, KST 표시
+  endsAt    DateTime
+  location  String
+  capacity  Int         @default(8) // ADR-004: 상한 8 검증은 서버 규칙. DB 는 1 이상만 보장
+  status    ClassStatus @default(SCHEDULED)
+  memo      String?
+
+  // 클래스 전체 취소 (ADR-002)
+  cancelledAt     DateTime?
+  cancelReason    ClassCancelReason?
+  cancelDetail    String?
+  cancelledById   String?
+
+  // 클래스 단위 안전 정보 (요구사항 20-1.5)
+  insured        Boolean @default(false)
+  insurer        String?
+  insurancePolicyNo String?
+  safetyMemo     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  program      Program        @relation(fields: [programId], references: [id])
+  cancelledBy  User?          @relation("ClassCancelledBy", fields: [cancelledById], references: [id])
+  teachers     ClassTeacher[]
+  reservations Reservation[]
+
+  @@index([startsAt])
+  @@index([status])
+  @@index([programId])
+}
+
+model ClassTeacher {
+  id              String   @id @default(cuid())
+  classScheduleId String
+  teacherId       String
+  createdAt       DateTime @default(now())
+
+  classSchedule ClassSchedule @relation(fields: [classScheduleId], references: [id], onDelete: Cascade)
+  teacher       Teacher       @relation(fields: [teacherId], references: [id])
+
+  @@unique([classScheduleId, teacherId])
+}
+
+// ─────────────────────────────────────────────
+// Reservation — 아이 1명 단위 (ADR-001, ADR-003)
+// ─────────────────────────────────────────────
+
+model Reservation {
+  id              String            @id @default(cuid())
+  childId         String
+  classScheduleId String
+  status          ReservationStatus @default(RESERVED)
+  attendance      AttendanceStatus?
+  reservedAt      DateTime          @default(now())
+  memo            String?
+
+  // 개인 예약 취소 (클래스 전체 취소와 구분)
+  cancelledAt   DateTime?
+  cancelReason  ReservationCancelReason?
+  cancelDetail  String?
+  cancelledById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  child         Child         @relation(fields: [childId], references: [id])
+  classSchedule ClassSchedule @relation(fields: [classScheduleId], references: [id])
+  cancelledBy   User?         @relation("ReservationCancelledBy", fields: [cancelledById], references: [id])
+  paymentItem   PaymentItem?
+
+  @@unique([classScheduleId, childId])
+  @@index([childId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// Payment / PaymentItem / Refund (ADR-005)
+// ─────────────────────────────────────────────
+
+// 결제 1건. 현재는 PaymentItem 1건만 붙지만, 기관 일괄 결제 시 N건이 된다
+model Payment {
+  id          String        @id @default(cuid())
+  payerType   PayerType     @default(GUARDIAN)
+  payerName   String?
+  method      PaymentMethod
+  status      PaymentStatus @default(PAID)
+  paidAt      DateTime      @default(now())
+  totalAmount Int // 각 item 의 paidAmount 합계
+  memo        String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  items PaymentItem[]
+
+  @@index([paidAt])
+  @@index([status])
+}
+
+// 예약별 청구 명세. 매출 집계는 반드시 이 테이블 기준으로 한다
+model PaymentItem {
+  id             String   @id @default(cuid())
+  paymentId      String
+  reservationId  String   @unique
+  amount         Int // 정가
+  discountAmount Int      @default(0)
+  paidAmount     Int // amount - discountAmount
+  refundedAmount Int      @default(0) // 환불 누계. Refund 생성/취소 시 같은 트랜잭션에서 갱신한다
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  payment     Payment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+  refunds     Refund[]
+
+  @@index([paymentId])
+}
+
+model Refund {
+  id            String       @id @default(cuid())
+  paymentItemId String
+  amount        Int
+  reason        RefundReason
+  reasonDetail  String?
+  status        RefundStatus @default(COMPLETED)
+  refundedAt    DateTime     @default(now())
+  processedById String?
+  createdAt     DateTime     @default(now())
+
+  paymentItem PaymentItem @relation(fields: [paymentItemId], references: [id])
+  processedBy User?       @relation("RefundProcessedBy", fields: [processedById], references: [id])
+
+  @@index([paymentItemId])
+  @@index([refundedAt])
+}
+
+// ─────────────────────────────────────────────
+// Prisma 로 표현 불가 — migration 에 raw SQL 로 추가할 CHECK 제약
+// ─────────────────────────────────────────────
+//
+// ALTER TABLE "Relationship"
+//   ADD CONSTRAINT "relationship_not_self" CHECK ("childAId" <> "childBId"),
+//   ADD CONSTRAINT "relationship_sorted_pair" CHECK ("childAId" < "childBId");
+//
+// ALTER TABLE "ClassSchedule"
+//   ADD CONSTRAINT "class_capacity_positive" CHECK ("capacity" >= 1),
+//   ADD CONSTRAINT "class_time_order" CHECK ("endsAt" > "startsAt");
+//
+// ALTER TABLE "PaymentItem"
+//   ADD CONSTRAINT "payment_item_amount_nonneg" CHECK ("amount" >= 0 AND "discountAmount" >= 0 AND "paidAmount" >= 0),
+//   ADD CONSTRAINT "payment_item_paid_calc" CHECK ("paidAmount" = "amount" - "discountAmount"),
+//   ADD CONSTRAINT "payment_item_refund_limit" CHECK ("refundedAmount" >= 0 AND "refundedAmount" <= "paidAmount");
+//
+// ALTER TABLE "Refund"
+//   ADD CONSTRAINT "refund_amount_positive" CHECK ("amount" > 0);
+//
+// 서버에서만 검증하는 규칙 (QA 필수 항목)
+// - capacity <= 8
+// - 클래스별 RESERVED 예약 수 <= capacity
+// - CANCELLED 클래스에는 신규 예약 불가
+// - 비활성 Child 신규 예약 제외
+// - PaymentItem.refundedAmount 와 Refund 행 합계의 일치 (DB 는 상한만 보장한다)
+// - 클래스당 Teacher 2명 배정
