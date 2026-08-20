@@ -12,6 +12,7 @@ QA 가 PASS 하지 않았거나 Reviewer 가 CHANGES_REQUIRED 를 냈으면 여�
 feature/<name> / hotfix/<name>
 
 ## 커밋 전
+- 커밋 전 반드시 git branch --show-current 로 현재 브랜치를 확인한다. main 이면 즉시 멈추고 사용자에게 알린다.
 - git status / git diff 로 변경 확인
 - secrets, .env 가 포함되지 않았는지 확인
 - lint / test / build 결과 확인
