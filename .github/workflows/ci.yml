@@ -23,7 +23,7 @@ jobs:
         run: npm ci
 
       - name: Prisma generate
-        run: npx prisma generate
+        run: npm run prisma:generate
 
       - name: Lint
         run: npm run lint
