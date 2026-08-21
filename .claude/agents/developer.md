@@ -34,6 +34,7 @@ DB 가 막아주지 않고 서버에서만 검증하는 규칙이다. 테스트�
 
 ## 마무리
 npm run lint / npm test / npm run build 를 실행하고 결과를 보고한다.
+`npm run build` 실행 전 `lsof -nP -iTCP:3000 -sTCP:LISTEN` 등으로 로컬 dev 서버(`npm run dev`)가 떠 있는지 먼저 확인한다. 떠 있으면 build 를 생략하고 그 사실을 보고한다 — 두 명령이 `.next` 캐시를 공유해 충돌하면 실제 브라우저에서만 CSS 가 깨지는 등 lint/test/build 로는 못 잡는 결함이 생긴다.
 
 ## 완료 보고
 ### Changed
