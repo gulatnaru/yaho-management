@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { calculateAge } from "@/lib/children/age";
+import { toTelHref } from "@/lib/children/contact";
 import { getChildDetail } from "@/lib/children/queries";
 import { ChildStatusToggle } from "../_components/child-status-toggle";
 import { PlaceholderSection } from "../_components/placeholder-section";
@@ -66,7 +67,15 @@ export default async function ChildDetailPage({ params }: ChildDetailPageProps) 
           </div>
           <div>
             <p className="text-sm text-slate-500">보호자 연락처</p>
-            <p>{child.guardianPhone ?? "미입력"}</p>
+            <p>
+              {child.guardianPhone ? (
+                <a className="hover:underline" href={toTelHref(child.guardianPhone)}>
+                  {child.guardianPhone}
+                </a>
+              ) : (
+                "미입력"
+              )}
+            </p>
           </div>
           <div>
             <p className="text-sm text-slate-500">상태</p>

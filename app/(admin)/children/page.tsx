@@ -8,18 +8,17 @@ import { ChildTable } from "./_components/child-table";
 export const dynamic = "force-dynamic";
 
 interface ChildrenPageProps {
-  searchParams: Promise<{ q?: string; status?: string; birthDate?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; page?: string }>;
 }
 
 function parseStatus(value?: string): ChildListStatus {
   return value === "all" || value === "inactive" ? value : "active";
 }
 
-function buildPageHref(params: { q?: string; status: ChildListStatus; birthDate?: string; page: number }) {
+function buildPageHref(params: { q?: string; status: ChildListStatus; page: number }) {
   const query = new URLSearchParams();
   if (params.q) query.set("q", params.q);
   if (params.status !== "all") query.set("status", params.status);
-  if (params.birthDate) query.set("birthDate", params.birthDate);
   query.set("page", String(params.page));
   return `/children?${query.toString()}`;
 }
@@ -32,7 +31,6 @@ export default async function ChildrenPage({ searchParams }: ChildrenPageProps) 
   const { children, total, page: currentPage, totalPages } = await listChildren({
     q: resolvedParams.q,
     status,
-    birthDate: resolvedParams.birthDate,
     page,
   });
 
@@ -45,7 +43,7 @@ export default async function ChildrenPage({ searchParams }: ChildrenPageProps) 
         </Link>
       </div>
 
-      <ChildSearchForm birthDate={resolvedParams.birthDate} q={resolvedParams.q} status={status} />
+      <ChildSearchForm q={resolvedParams.q} status={status} />
 
       <p className="text-sm text-slate-500">총 {total}명</p>
 
@@ -56,7 +54,7 @@ export default async function ChildrenPage({ searchParams }: ChildrenPageProps) 
           {currentPage > 1 ? (
             <Link
               className="text-slate-600 hover:underline"
-              href={buildPageHref({ q: resolvedParams.q, status, birthDate: resolvedParams.birthDate, page: currentPage - 1 })}
+              href={buildPageHref({ q: resolvedParams.q, status, page: currentPage - 1 })}
             >
               이전
             </Link>
@@ -69,7 +67,7 @@ export default async function ChildrenPage({ searchParams }: ChildrenPageProps) 
           {currentPage < totalPages ? (
             <Link
               className="text-slate-600 hover:underline"
-              href={buildPageHref({ q: resolvedParams.q, status, birthDate: resolvedParams.birthDate, page: currentPage + 1 })}
+              href={buildPageHref({ q: resolvedParams.q, status, page: currentPage + 1 })}
             >
               다음
             </Link>

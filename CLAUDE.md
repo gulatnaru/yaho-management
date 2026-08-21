@@ -1,5 +1,11 @@
 @AGENTS.md
 
+## Source of Truth 보충
+
+AGENTS.md 의 Source of Truth 목록(REQUIREMENTS.md / docs/DECISIONS.md / ARCHITECTURE.md / AGENTS.md / 기존 구현)에
+`docs/UI-GUIDELINES.md` 를 추가한다. UI 관련 사항(브레이크포인트, 네비게이션, 목록 열 상한, 검색/필터 접힘, 연락처 표시 등)은
+REQUIREMENTS.md 와 함께 docs/UI-GUIDELINES.md 를 따른다.
+
 ## Claude Code 전용
 
 역할은 `.claude/agents/` 의 서브에이전트로, 단계는 `.claude/commands/` 의 슬래시 커맨드로 실행한다.
