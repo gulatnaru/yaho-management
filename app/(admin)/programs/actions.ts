@@ -19,7 +19,6 @@ function parseProgramForm(formData: FormData) {
     targetAgeMax: formData.get("targetAgeMax") || undefined,
     defaultDuration: formData.get("defaultDuration") || undefined,
     defaultPrice: formData.get("defaultPrice") || undefined,
-    status: formData.get("status") || undefined,
     memo: formData.get("memo") || undefined,
   });
 }
@@ -42,7 +41,7 @@ export async function createProgram(_prevState: ProgramFormState, formData: Form
         targetAgeMax: result.data.targetAgeMax ?? null,
         defaultDuration: result.data.defaultDuration ?? null,
         defaultPrice: result.data.defaultPrice,
-        status: result.data.status,
+        status: "ACTIVE",
         memo: result.data.memo || null,
       },
     });
@@ -78,7 +77,6 @@ export async function updateProgram(
         targetAgeMax: result.data.targetAgeMax ?? null,
         defaultDuration: result.data.defaultDuration ?? null,
         defaultPrice: result.data.defaultPrice,
-        status: result.data.status,
         memo: result.data.memo || null,
       },
     });

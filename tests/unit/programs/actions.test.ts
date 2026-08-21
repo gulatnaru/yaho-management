@@ -82,6 +82,28 @@ describe("createProgram validation", () => {
   });
 });
 
+describe("updateProgram", () => {
+  beforeEach(() => {
+    requireAdminMock.mockReset();
+    requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
+    updateMock.mockReset();
+    updateMock.mockResolvedValue({});
+  });
+
+  it("never includes status in the update payload, even if the form data contains one", async () => {
+    const formData = formDataWithName("발레 A반");
+    // status는 이 폼에서 절대 받지 않는다 — setProgramStatus로만 변경한다.
+    // 누군가 실수로 폼에 status 필드를 다시 추가해도 updateProgram이 이를 무시하는지 검증.
+    formData.set("status", "INACTIVE");
+
+    await expect(updateProgram("program-1", {}, formData)).rejects.toThrow("REDIRECT");
+
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const [[callArg]] = updateMock.mock.calls;
+    expect(callArg.data).not.toHaveProperty("status");
+  });
+});
+
 describe("setProgramStatus", () => {
   beforeEach(() => {
     requireAdminMock.mockReset();

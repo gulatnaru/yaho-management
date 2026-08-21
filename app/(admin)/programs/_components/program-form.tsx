@@ -4,7 +4,6 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { createProgram, updateProgram, type ProgramFormState } from "../actions";
 
@@ -15,7 +14,6 @@ export type ProgramFormDefaultValues = {
   targetAgeMax: string;
   defaultDuration: string;
   defaultPrice: string;
-  status: "ACTIVE" | "INACTIVE";
   memo: string;
 };
 
@@ -32,7 +30,6 @@ const emptyDefaults: ProgramFormDefaultValues = {
   targetAgeMax: "",
   defaultDuration: "",
   defaultPrice: "0",
-  status: "ACTIVE",
   memo: "",
 };
 
@@ -132,19 +129,6 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
         {state.errors?.defaultPrice ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.defaultPrice[0]}
-          </p>
-        ) : null}
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="status">운영상태</Label>
-        <Select defaultValue={defaultValues.status} id="status" name="status">
-          <option value="ACTIVE">활성</option>
-          <option value="INACTIVE">비활성</option>
-        </Select>
-        {state.errors?.status ? (
-          <p className="text-sm text-red-600" role="alert">
-            {state.errors.status[0]}
           </p>
         ) : null}
       </div>

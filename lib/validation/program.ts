@@ -30,7 +30,6 @@ export const programInputSchema = z
     targetAgeMax: optionalNonNegativeInt,
     defaultDuration: optionalPositiveInt,
     defaultPrice: priceInput,
-    status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
     memo: z.string().optional(),
   })
   .refine(

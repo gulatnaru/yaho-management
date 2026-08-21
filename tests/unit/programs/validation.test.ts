@@ -6,7 +6,6 @@ describe("programInputSchema", () => {
     const result = programInputSchema.safeParse({ name: "발레 A반" });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.status).toBe("ACTIVE");
       expect(result.data.defaultPrice).toBe(0);
     }
   });
@@ -72,22 +71,6 @@ describe("programInputSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.defaultPrice).toBe(0);
-    }
-  });
-
-  it("defaults status to ACTIVE when omitted", () => {
-    const result = programInputSchema.safeParse({ name: "발레 A반" });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.status).toBe("ACTIVE");
-    }
-  });
-
-  it("accepts an explicit INACTIVE status", () => {
-    const result = programInputSchema.safeParse({ name: "발레 A반", status: "INACTIVE" });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.status).toBe("INACTIVE");
     }
   });
 });

@@ -30,7 +30,6 @@ export default async function EditProgramPage({ params }: EditProgramPageProps) 
           targetAgeMax: program.targetAgeMax === null ? "" : String(program.targetAgeMax),
           defaultDuration: program.defaultDuration === null ? "" : String(program.defaultDuration),
           defaultPrice: String(program.defaultPrice),
-          status: program.status,
           memo: program.memo ?? "",
         }}
         mode="edit"
