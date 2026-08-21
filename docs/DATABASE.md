@@ -114,11 +114,13 @@ ChildConsent 는 append-only 다. 기존 행을 수정하거나 삭제하지 않
 - 취소/환불 등 중요한 변경에는 처리자(userId)와 처리일시를 남긴다.
 - 개인정보 저장을 최소화한다.
 
-## Raw SQL CHECK 제약 마이그레이션 절차
-`prisma/schema.prisma` 하단에 정리된 CHECK 제약(Prisma가 표현하지 못하는 제약)처럼 **모델 필드 자체는 바뀌지 않고 raw SQL 제약만 추가하는 경우**, `npx prisma migrate dev`는 스키마 diff를 감지하지 못해 마이그레이션 파일을 만들지 않는다. Phase 2(`child_name_not_blank`), Phase 3(`teacher_name_not_blank`, `program_name_not_blank` 외 3건)에서 매번 이 문제로 개발자가 절차를 즉석에서 재구성했다. 다음 절차를 따른다.
+## CHECK 제약만 추가하는 마이그레이션 작성 절차
+`prisma/schema.prisma` 하단에 정리된 CHECK 제약(Prisma가 표현하지 못하는 제약)처럼 **모델 필드 자체는 바뀌지 않고 raw SQL 제약만 추가하는 경우**, `npx prisma migrate dev`는 스키마 diff를 감지하지 못해 마이그레이션 파일을 만들지 않는다. Phase 2(`child_name_not_blank`), Phase 3(`teacher_name_not_blank`, `program_name_not_blank` 외 3건)에서 매번 이 문제로 개발자가 절차를 즉석에서 재구성했다. 이건 규칙을 몰라서가 아니라 방법을 몰라서 반복된 문제이므로, 아래를 그대로 따라 하면 되는 절차로 남긴다.
 
-1. `prisma/migrations/<YYYYMMDDHHMMSS>_<name>/migration.sql` 폴더와 파일을 직접 생성한다(`migrate dev`가 생성해주지 않는다).
+1. **폴더 명명 규칙**: `prisma/migrations/<YYYYMMDDHHMMSS>_<snake_case_설명>/` 폴더를 직접 만든다(`migrate dev`가 생성해주지 않는다). 타임스탬프는 `date +%Y%m%d%H%M%S`(UTC) 로 얻거나 직전 마이그레이션보다 큰 값을 수동으로 채운다. 이름 예: `20260821170000_add_program_check_constraints`. 그 안에 `migration.sql` 파일 하나를 만든다.
 2. `migration.sql`에는 `ALTER TABLE ... ADD CONSTRAINT ... CHECK (...)` 구문만 작성하고, Zod 검증이 1차 방어선이며 CHECK은 2차 방어선임을 주석으로 남긴다.
-3. `npx prisma migrate deploy`로 적용한다(`migrate dev`가 아니다 — 로컬 개발 DB라도 diff가 없는 이 경우엔 `deploy`를 쓴다).
-4. `npx prisma migrate status`로 적용 여부를 확인하고 결과를 완료 보고에 남긴다.
+3. **`npx prisma migrate deploy`로 적용한다.** `migrate dev`가 아니다 — 로컬 개발 DB라도 diff가 없는 이 경우엔 `deploy`를 쓴다.
+4. **`npx prisma migrate status`로 적용 여부를 확인**하고("Database schema is up to date!" 확인) 결과를 완료 보고에 남긴다.
 5. 추가한 CHECK 제약은 `prisma/schema.prisma` 하단 주석 블록에도 동기화해 다음 담당자가 전체 제약 목록을 한눈에 볼 수 있게 한다.
+
+**`npx prisma migrate reset`은 이 절차의 어느 단계에서도 사용하지 않는다.** `migrate dev`가 diff를 못 잡는다고 해서 reset으로 마이그레이션 히스토리를 새로 만들면 기존 데이터가 전부 삭제된다 — AGENTS.md의 Dangerous Commands 목록에 이미 있는 금지 사항이지만, "diff가 안 잡혀서 당황했을 때" 가장 먼저 시도하고 싶어지는 명령이라 이 절차 안에서도 다시 명시한다.
