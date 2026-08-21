@@ -32,19 +32,4 @@ describe("buildChildListWhere", () => {
     expect(where.isActive).toBe(true);
     expect(where.OR).toBeDefined();
   });
-
-  it("filters by an exact birthDate when a valid YYYY-MM-DD is provided", () => {
-    const where = buildChildListWhere({ status: "all", birthDate: "2018-05-01" });
-    expect(where.birthDate).toEqual(new Date("2018-05-01"));
-  });
-
-  it("ignores an invalid birthDate string without throwing", () => {
-    const where = buildChildListWhere({ status: "all", birthDate: "not-a-date" });
-    expect(where.birthDate).toBeUndefined();
-  });
-
-  it("ignores a blank birthDate", () => {
-    const where = buildChildListWhere({ status: "all", birthDate: "   " });
-    expect(where.birthDate).toBeUndefined();
-  });
 });

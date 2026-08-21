@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { calculateAge } from "@/lib/children/age";
+import { toTelHref } from "@/lib/children/contact";
 import { isProfileIncomplete } from "@/lib/children/profile-completeness";
 import { IncompleteProfileBadge } from "./incomplete-profile-badge";
 
@@ -32,44 +31,32 @@ export function ChildTable({ items }: ChildTableProps) {
       <TableHeader>
         <TableRow>
           <TableHead>이름</TableHead>
-          <TableHead>생년월일 / 연령</TableHead>
           <TableHead>보호자 연락처</TableHead>
-          <TableHead>친구 수</TableHead>
-          <TableHead>형제/자매 수</TableHead>
-          <TableHead>최근 예약</TableHead>
-          <TableHead>누적 예약 횟수</TableHead>
-          <TableHead>상태</TableHead>
+          <TableHead>예약일자</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {items.map((child) => {
-          const age = calculateAge(child.birthDate);
-          return (
-            <TableRow key={child.id}>
-              <TableCell>
-                <Link className="flex items-center gap-2 font-medium hover:underline" href={`/children/${child.id}`}>
-                  {child.name}
-                  {isProfileIncomplete(child) ? <IncompleteProfileBadge /> : null}
-                </Link>
-              </TableCell>
-              <TableCell>
-                {child.birthDate
-                  ? `${child.birthDate.toISOString().slice(0, 10)} (만 ${age}세)`
-                  : "미입력"}
-              </TableCell>
-              <TableCell>{child.guardianPhone ?? "미입력"}</TableCell>
-              <TableCell>–</TableCell>
-              <TableCell>–</TableCell>
-              <TableCell>–</TableCell>
-              <TableCell>–</TableCell>
-              <TableCell>
-                <Badge variant={child.isActive ? "success" : "secondary"}>
-                  {child.isActive ? "활성" : "비활성"}
-                </Badge>
-              </TableCell>
-            </TableRow>
-          );
-        })}
+        {items.map((child) => (
+          <TableRow key={child.id}>
+            <TableCell>
+              <Link className="flex items-center gap-2 font-medium hover:underline" href={`/children/${child.id}`}>
+                {child.name}
+                {isProfileIncomplete(child) ? <IncompleteProfileBadge /> : null}
+              </Link>
+            </TableCell>
+            <TableCell>
+              {child.guardianPhone ? (
+                <a className="hover:underline" href={toTelHref(child.guardianPhone)}>
+                  {child.guardianPhone}
+                </a>
+              ) : (
+                "미입력"
+              )}
+            </TableCell>
+            {/* ADR-015: Phase 5(예약) 착수 후 Reservation.reservedAt 조회로 교체 */}
+            <TableCell>–</TableCell>
+          </TableRow>
+        ))}
       </TableBody>
     </Table>
   );

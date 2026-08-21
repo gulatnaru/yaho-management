@@ -6,7 +6,6 @@ export const CHILD_LIST_PAGE_SIZE = 20;
 export type ListChildrenParams = {
   q?: string;
   status: ChildListStatus;
-  birthDate?: string;
   page?: number;
 };
 
@@ -21,7 +20,7 @@ const CHILD_LIST_SELECT = {
 } as const;
 
 export async function listChildren(params: ListChildrenParams) {
-  const where = buildChildListWhere({ q: params.q, status: params.status, birthDate: params.birthDate });
+  const where = buildChildListWhere({ q: params.q, status: params.status });
   const page = params.page && params.page > 0 ? params.page : 1;
 
   const [children, total] = await Promise.all([
