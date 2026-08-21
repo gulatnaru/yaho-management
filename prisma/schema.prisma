@@ -401,6 +401,9 @@ model Refund {
 // Prisma 로 표현 불가 — migration 에 raw SQL 로 추가할 CHECK 제약
 // ─────────────────────────────────────────────
 //
+// ALTER TABLE "Child"
+//   ADD CONSTRAINT "child_name_not_blank" CHECK (btrim("name") <> '');
+//
 // ALTER TABLE "Relationship"
 //   ADD CONSTRAINT "relationship_not_self" CHECK ("childAId" <> "childBId"),
 //   ADD CONSTRAINT "relationship_sorted_pair" CHECK ("childAId" < "childBId");
