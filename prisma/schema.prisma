@@ -404,6 +404,9 @@ model Refund {
 // ALTER TABLE "Child"
 //   ADD CONSTRAINT "child_name_not_blank" CHECK (btrim("name") <> '');
 //
+// ALTER TABLE "Teacher"
+//   ADD CONSTRAINT "teacher_name_not_blank" CHECK (btrim("name") <> '');
+//
 // ALTER TABLE "Relationship"
 //   ADD CONSTRAINT "relationship_not_self" CHECK ("childAId" <> "childBId"),
 //   ADD CONSTRAINT "relationship_sorted_pair" CHECK ("childAId" < "childBId");
@@ -419,6 +422,16 @@ model Refund {
 //
 // ALTER TABLE "Refund"
 //   ADD CONSTRAINT "refund_amount_positive" CHECK ("amount" > 0);
+//
+// ALTER TABLE "Program"
+//   ADD CONSTRAINT "program_name_not_blank" CHECK (btrim("name") <> ''),
+//   ADD CONSTRAINT "program_target_age_range" CHECK (
+//     ("targetAgeMin" IS NULL OR "targetAgeMin" >= 0)
+//     AND ("targetAgeMax" IS NULL OR "targetAgeMax" >= 0)
+//     AND ("targetAgeMin" IS NULL OR "targetAgeMax" IS NULL OR "targetAgeMin" <= "targetAgeMax")
+//   ),
+//   ADD CONSTRAINT "program_default_duration_positive" CHECK ("defaultDuration" IS NULL OR "defaultDuration" > 0),
+//   ADD CONSTRAINT "program_default_price_nonneg" CHECK ("defaultPrice" >= 0);
 //
 // 서버에서만 검증하는 규칙 (QA 필수 항목)
 // - capacity <= 8

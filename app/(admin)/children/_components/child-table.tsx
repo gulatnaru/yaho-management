@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { toTelHref } from "@/lib/children/contact";
+import { toTelHref } from "@/lib/shared/contact";
 import { isProfileIncomplete } from "@/lib/children/profile-completeness";
 import { IncompleteProfileBadge } from "./incomplete-profile-badge";
 

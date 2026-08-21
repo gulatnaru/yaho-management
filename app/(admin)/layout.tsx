@@ -6,6 +6,8 @@ import { NavDrawer } from "./_components/nav-drawer";
 const NAV_ITEMS = [
   { href: "/dashboard", label: "대시보드" },
   { href: "/children", label: "아이 관리" },
+  { href: "/teachers", label: "선생님 관리" },
+  { href: "/programs", label: "프로그램 관리" },
 ];
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {

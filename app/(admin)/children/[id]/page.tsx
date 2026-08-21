@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { calculateAge } from "@/lib/children/age";
-import { toTelHref } from "@/lib/children/contact";
+import { toTelHref } from "@/lib/shared/contact";
 import { getChildDetail } from "@/lib/children/queries";
 import { ChildStatusToggle } from "../_components/child-status-toggle";
 import { PlaceholderSection } from "../_components/placeholder-section";
