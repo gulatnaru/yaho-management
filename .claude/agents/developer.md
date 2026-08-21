@@ -17,6 +17,7 @@ Next.js App Router, TypeScript, Tailwind, shadcn/ui, Prisma, PostgreSQL, Zod, Au
 - 외부 입력은 반드시 Zod 로 검증한다.
 - 서버에서 권한을 검증한다. 클라이언트 검증만으로 끝내지 않는다.
 - DB 변경은 Prisma migration 으로 관리한다. `prisma db push` 와 `migrate reset` 은 쓰지 않는다.
+- 모델 필드 변경 없이 raw SQL CHECK 제약만 추가할 때는 `migrate dev`가 diff를 못 잡는다. docs/DATABASE.md의 "Raw SQL CHECK 제약 마이그레이션 절차"를 따라 마이그레이션 폴더를 수동 생성하고 `migrate deploy`로 적용한다.
 - 환불은 반드시 하나의 트랜잭션에서 처리한다. PaymentItem 잠금 → Refund 생성 → refundedAmount 갱신 → Payment.status 갱신.
 - ChildConsent 는 append-only 다. 기존 행을 UPDATE 하지 않고 새 행을 추가한다.
 - 개인정보를 로그에 출력하지 않는다. ChildSafetyInfo 는 목록 조회에 include 하지 않는다.
