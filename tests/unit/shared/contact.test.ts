@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toTelHref } from "@/lib/children/contact";
+import { toTelHref } from "@/lib/shared/contact";
 
 describe("toTelHref", () => {
   it("normalizes a hyphen/space-separated phone number into a tel: href", () => {
