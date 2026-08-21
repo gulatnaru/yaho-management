@@ -113,3 +113,12 @@ ChildConsent 는 append-only 다. 기존 행을 수정하거나 삭제하지 않
 - 물리 삭제 대신 isActive / 상태 컬럼으로 이력을 보존한다.
 - 취소/환불 등 중요한 변경에는 처리자(userId)와 처리일시를 남긴다.
 - 개인정보 저장을 최소화한다.
+
+## Raw SQL CHECK 제약 마이그레이션 절차
+`prisma/schema.prisma` 하단에 정리된 CHECK 제약(Prisma가 표현하지 못하는 제약)처럼 **모델 필드 자체는 바뀌지 않고 raw SQL 제약만 추가하는 경우**, `npx prisma migrate dev`는 스키마 diff를 감지하지 못해 마이그레이션 파일을 만들지 않는다. Phase 2(`child_name_not_blank`), Phase 3(`teacher_name_not_blank`, `program_name_not_blank` 외 3건)에서 매번 이 문제로 개발자가 절차를 즉석에서 재구성했다. 다음 절차를 따른다.
+
+1. `prisma/migrations/<YYYYMMDDHHMMSS>_<name>/migration.sql` 폴더와 파일을 직접 생성한다(`migrate dev`가 생성해주지 않는다).
+2. `migration.sql`에는 `ALTER TABLE ... ADD CONSTRAINT ... CHECK (...)` 구문만 작성하고, Zod 검증이 1차 방어선이며 CHECK은 2차 방어선임을 주석으로 남긴다.
+3. `npx prisma migrate deploy`로 적용한다(`migrate dev`가 아니다 — 로컬 개발 DB라도 diff가 없는 이 경우엔 `deploy`를 쓴다).
+4. `npx prisma migrate status`로 적용 여부를 확인하고 결과를 완료 보고에 남긴다.
+5. 추가한 CHECK 제약은 `prisma/schema.prisma` 하단 주석 블록에도 동기화해 다음 담당자가 전체 제약 목록을 한눈에 볼 수 있게 한다.
