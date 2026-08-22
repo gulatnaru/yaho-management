@@ -117,6 +117,13 @@ Payment / Refund → Revenue(집계)
 5. DB operation
 6. Error handling
 
+### 7.1 상태 확인 후 쓰기(check-then-write) 패턴
+서버 상태(예: ClassSchedule.status, 정원 등)를 먼저 조회해서 조건을 확인한 뒤 별도로 갱신하는 모든 액션은, **확인과 쓰기 사이의 레이스 컨디션을 반드시 최종 쓰기 자체로 막는다.** `findUnique` 로 확인만 하고 `update` 로 무조건 쓰는 방식은 확인 시점과 쓰기 시점 사이에 다른 요청이 상태를 바꿔도 막지 못한다.
+
+대신 최종 쓰기를 `updateMany({ where: { id, ...확인하려던조건 }, data })` 형태의 조건부 갱신으로 하고, 반환된 `count` 로 성공 여부를 판단한다(`count === 0` 이면 조건이 더 이상 성립하지 않는 것 — 실패로 처리한다).
+
+예: Phase 4 클래스 취소/수정은 `updateMany({ where: { id, status: "SCHEDULED" }, ... })` 로 상태 레이스를 막는다(Phase 4 코드 리뷰에서 발견, `app/(admin)/classes/actions.ts` 참고). Phase 5 예약 생성의 정원 검증(현재 예약 수 < capacity 확인 후 예약 생성)도 같은 패턴이 필요하다 — 확인만 하고 무조건 생성하면 동시 예약 시 정원을 초과할 수 있다.
+
 ## 8. Server / Client
 기본은 Server Component.
 브라우저 상호작용이 필요한 경우에만 Client Component를 사용한다.
