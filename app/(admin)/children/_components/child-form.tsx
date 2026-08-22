@@ -44,7 +44,7 @@ export function ChildForm({ mode, childId, defaultValues = emptyDefaults }: Chil
         <Label htmlFor="name">
           이름 <span className="text-red-600">*</span>
         </Label>
-        <Input defaultValue={defaultValues.name} id="name" name="name" required />
+        <Input defaultValue={state.values?.name ?? defaultValues.name} id="name" name="name" required />
         {state.errors?.name ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.name[0]}
@@ -54,7 +54,12 @@ export function ChildForm({ mode, childId, defaultValues = emptyDefaults }: Chil
 
       <div className="space-y-1.5">
         <Label htmlFor="birthDate">생년월일</Label>
-        <Input defaultValue={defaultValues.birthDate} id="birthDate" name="birthDate" type="date" />
+        <Input
+          defaultValue={state.values?.birthDate ?? defaultValues.birthDate}
+          id="birthDate"
+          name="birthDate"
+          type="date"
+        />
         {state.errors?.birthDate ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.birthDate[0]}
@@ -64,7 +69,11 @@ export function ChildForm({ mode, childId, defaultValues = emptyDefaults }: Chil
 
       <div className="space-y-1.5">
         <Label htmlFor="gender">성별</Label>
-        <Select defaultValue={defaultValues.gender} id="gender" name="gender">
+        <Select
+          defaultValue={(state.values?.gender as ChildFormDefaultValues["gender"]) ?? defaultValues.gender}
+          id="gender"
+          name="gender"
+        >
           <option value="UNSPECIFIED">선택 안 함</option>
           <option value="MALE">남</option>
           <option value="FEMALE">여</option>
@@ -78,7 +87,11 @@ export function ChildForm({ mode, childId, defaultValues = emptyDefaults }: Chil
 
       <div className="space-y-1.5">
         <Label htmlFor="guardianName">보호자 이름</Label>
-        <Input defaultValue={defaultValues.guardianName} id="guardianName" name="guardianName" />
+        <Input
+          defaultValue={state.values?.guardianName ?? defaultValues.guardianName}
+          id="guardianName"
+          name="guardianName"
+        />
         {state.errors?.guardianName ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.guardianName[0]}
@@ -89,7 +102,7 @@ export function ChildForm({ mode, childId, defaultValues = emptyDefaults }: Chil
       <div className="space-y-1.5">
         <Label htmlFor="guardianPhone">보호자 연락처</Label>
         <Input
-          defaultValue={defaultValues.guardianPhone}
+          defaultValue={state.values?.guardianPhone ?? defaultValues.guardianPhone}
           id="guardianPhone"
           name="guardianPhone"
           placeholder="010-1234-5678"
@@ -103,7 +116,7 @@ export function ChildForm({ mode, childId, defaultValues = emptyDefaults }: Chil
 
       <div className="space-y-1.5">
         <Label htmlFor="memo">운영 메모</Label>
-        <Textarea defaultValue={defaultValues.memo} id="memo" name="memo" rows={4} />
+        <Textarea defaultValue={state.values?.memo ?? defaultValues.memo} id="memo" name="memo" rows={4} />
         {state.errors?.memo ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.memo[0]}

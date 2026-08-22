@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/children", label: "아이 관리" },
   { href: "/teachers", label: "선생님 관리" },
   { href: "/programs", label: "프로그램 관리" },
+  { href: "/classes", label: "클래스 일정" },
 ];
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {
