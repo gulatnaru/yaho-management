@@ -80,6 +80,34 @@ describe("createTeacher validation", () => {
     expect(result.errors?.name).toBeDefined();
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  // 버그 리그레션: React 19 Server Action 폼은 액션 완료 시 uncontrolled 필드를 defaultValue로
+  // 리셋한다. 검증 실패 시 사용자가 입력했던 원본 값을 `values`로 돌려주지 않으면 재렌더링 시
+  // 입력값이 전부 사라진다. actions가 이 원본 값을 그대로 보존해 돌려주는지 검증한다.
+  it("returns the submitted raw values in `values` when validation fails, so the form can preserve them", async () => {
+    const formData = new FormData();
+    formData.set("name", "   ");
+    formData.set("phone", "abc"); // invalid phone format
+    formData.set("memo", "메모");
+
+    const result = await createTeacher({}, formData);
+
+    expect(result.errors?.name).toBeDefined();
+    expect(result.values).toEqual({ name: "   ", phone: "abc", memo: "메모" });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("updateTeacher also returns the submitted raw values in `values` when validation fails", async () => {
+    const formData = new FormData();
+    formData.set("name", "");
+    formData.set("phone", "abc");
+
+    const result = await updateTeacher("teacher-1", {}, formData);
+
+    expect(result.errors).toBeDefined();
+    expect(result.values).toMatchObject({ name: "", phone: "abc" });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("setTeacherActive", () => {

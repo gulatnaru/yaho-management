@@ -45,7 +45,7 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
         <Label htmlFor="name">
           프로그램명 <span className="text-red-600">*</span>
         </Label>
-        <Input defaultValue={defaultValues.name} id="name" name="name" required />
+        <Input defaultValue={state.values?.name ?? defaultValues.name} id="name" name="name" required />
         {state.errors?.name ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.name[0]}
@@ -55,7 +55,12 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
 
       <div className="space-y-1.5">
         <Label htmlFor="description">설명</Label>
-        <Textarea defaultValue={defaultValues.description} id="description" name="description" rows={3} />
+        <Textarea
+          defaultValue={state.values?.description ?? defaultValues.description}
+          id="description"
+          name="description"
+          rows={3}
+        />
         {state.errors?.description ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.description[0]}
@@ -67,7 +72,7 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
         <div className="space-y-1.5">
           <Label htmlFor="targetAgeMin">대상연령 최소</Label>
           <Input
-            defaultValue={defaultValues.targetAgeMin}
+            defaultValue={state.values?.targetAgeMin ?? defaultValues.targetAgeMin}
             id="targetAgeMin"
             min={0}
             name="targetAgeMin"
@@ -84,7 +89,7 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
         <div className="space-y-1.5">
           <Label htmlFor="targetAgeMax">대상연령 최대</Label>
           <Input
-            defaultValue={defaultValues.targetAgeMax}
+            defaultValue={state.values?.targetAgeMax ?? defaultValues.targetAgeMax}
             id="targetAgeMax"
             min={0}
             name="targetAgeMax"
@@ -102,7 +107,7 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
       <div className="space-y-1.5">
         <Label htmlFor="defaultDuration">기본 소요시간(분)</Label>
         <Input
-          defaultValue={defaultValues.defaultDuration}
+          defaultValue={state.values?.defaultDuration ?? defaultValues.defaultDuration}
           id="defaultDuration"
           min={1}
           name="defaultDuration"
@@ -119,7 +124,7 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
       <div className="space-y-1.5">
         <Label htmlFor="defaultPrice">기본가격(원)</Label>
         <Input
-          defaultValue={defaultValues.defaultPrice}
+          defaultValue={state.values?.defaultPrice ?? defaultValues.defaultPrice}
           id="defaultPrice"
           min={0}
           name="defaultPrice"
@@ -135,7 +140,7 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
 
       <div className="space-y-1.5">
         <Label htmlFor="memo">메모</Label>
-        <Textarea defaultValue={defaultValues.memo} id="memo" name="memo" rows={4} />
+        <Textarea defaultValue={state.values?.memo ?? defaultValues.memo} id="memo" name="memo" rows={4} />
         {state.errors?.memo ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.memo[0]}

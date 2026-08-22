@@ -37,7 +37,7 @@ export function TeacherForm({ mode, teacherId, defaultValues = emptyDefaults }: 
         <Label htmlFor="name">
           이름 <span className="text-red-600">*</span>
         </Label>
-        <Input defaultValue={defaultValues.name} id="name" name="name" required />
+        <Input defaultValue={state.values?.name ?? defaultValues.name} id="name" name="name" required />
         {state.errors?.name ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.name[0]}
@@ -47,7 +47,12 @@ export function TeacherForm({ mode, teacherId, defaultValues = emptyDefaults }: 
 
       <div className="space-y-1.5">
         <Label htmlFor="phone">연락처</Label>
-        <Input defaultValue={defaultValues.phone} id="phone" name="phone" placeholder="010-1234-5678" />
+        <Input
+          defaultValue={state.values?.phone ?? defaultValues.phone}
+          id="phone"
+          name="phone"
+          placeholder="010-1234-5678"
+        />
         {state.errors?.phone ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.phone[0]}
@@ -57,7 +62,7 @@ export function TeacherForm({ mode, teacherId, defaultValues = emptyDefaults }: 
 
       <div className="space-y-1.5">
         <Label htmlFor="memo">운영 메모</Label>
-        <Textarea defaultValue={defaultValues.memo} id="memo" name="memo" rows={4} />
+        <Textarea defaultValue={state.values?.memo ?? defaultValues.memo} id="memo" name="memo" rows={4} />
         {state.errors?.memo ? (
           <p className="text-sm text-red-600" role="alert">
             {state.errors.memo[0]}
