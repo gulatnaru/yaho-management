@@ -439,4 +439,4 @@ model Refund {
 // - CANCELLED 클래스에는 신규 예약 불가
 // - 비활성 Child 신규 예약 제외
 // - PaymentItem.refundedAmount 와 Refund 행 합계의 일치 (DB 는 상한만 보장한다)
-// - 클래스당 Teacher 2명 배정
+// - 클래스당 Teacher 최소 1명 배정 (원칙은 2명, 2명 미만은 경고만 — ADR-019)
