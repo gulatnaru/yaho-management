@@ -288,3 +288,11 @@
 - Decision: `createReservationCore`의 락 조회를 `endsAt`도 함께 select하도록 확장하고, `getClassDisplayStatus`로 판정한 표시상 ENDED 상태도 기존 `ClassNotScheduledError`를 던지도록 수정한다. 연쇄적으로 `lib/reservations/candidates.ts::listScheduledClassCandidatesWithCapacity`(예약 후보 목록에서 종료된 클래스 제외)와 `lib/reservations/prefill-warning.ts::resolveClassPrefillWarning`(종료된 클래스에 대해 "정원이 가득 찼습니다" 대신 "선택한 클래스는 이미 종료되었습니다"로 메시지 정정)도 함께 수정한다. Playwright E2E(`tests/e2e/class-ended-lifecycle.spec.ts`)로 종료된 클래스에 대한 예약 생성이 서버에서 거부됨을 검증한다.
 - Reason: ADR-024(취소된 예약의 재예약 처리)와 ADR-027(종료된 클래스/예약의 수정·취소 서버 차단)이 이미 "종료된 클래스에 대한 쓰기 동작은 서버가 막아야 한다"는 원칙을 세웠으나, 예약 "생성" 경로의 락 조회 자체가 `endsAt`을 보지 않아 이 원칙의 적용 범위에서 누락되어 있었다. 버튼 숨김만으로는 직접 제출을 막지 못하므로 서버 액션 검증이 반드시 필요하다.
 - Consequences: 이 버그는 Phase 5 신규 기능 개발 중 발견되어 병합 전에 수정되었으므로 프로덕션 노출은 없다. 다만 "표시 계층에서만 막고 서버 검증이 빠졌던 케이스"라는 성격의 결함이 이번에 한 곳(예약 생성)에서 확인된 만큼, 종료(ENDED)/취소(CANCELLED) 판정이 관여하는 다른 쓰기 경로에도 유사한 누락이 없는지 QA 단계에서 재점검이 필요하다.
+
+## ADR-030: Preview 배포의 DB는 별도 DB Branching 없이 공유 Supabase 프로젝트 1개를 쓴다 (Option A)
+- Status: Accepted
+- Date: 2026-08-23
+- Context: Vercel 배포를 준비하면서 Preview 배포(PR별 배포)가 어떤 DB를 바라볼지 정해야 한다. docs/DEPLOYMENT.md의 기존 Environment separation 절은 "Preview 전용 Supabase 프로젝트 또는 DB branch"라고만 적어 두 옵션 중 무엇을 쓸지 미정이었다. 후보는 (A) Preview 전용이지만 모든 PR이 공유하는 Supabase 프로젝트 1개, (B) PR/브랜치마다 별도로 분리된 DB(Supabase DB Branching 등)다.
+- Decision: Option A를 채택한다 — Preview 배포는 운영(Production) DB와는 분리되어 있지만 모든 PR이 공유하는 Supabase 프로젝트 1개를 사용한다. PR/브랜치별 DB Branching은 채택하지 않는다. Preview 배포 자체는 계속 켜 둔다.
+- Reason: docs/DEPLOYMENT.md의 Migration policy(ADR 이전부터 기록됨)에 따라 Preview 배포에서는 migration을 자동 실행하지 않는다 — 즉 Preview DB의 스키마는 PR마다 달라지지 않고 항상 수동으로 관리되는 하나의 스키마 상태를 공유한다. 이 때문에 PR별로 DB를 물리적으로 격리해야 할 필요성이 낮다. 또한 이 프로젝트는 동시에 여러 PR이 열려 있는 경우가 드물어 여러 PR이 같은 Preview DB의 테스트 데이터를 두고 충돌할 실익도 작다. DB Branching은 관리 복잡도(브랜치 생성/삭제 자동화, 브랜치별 마이그레이션 동기화)를 추가하는데, 위 두 이유로 그 비용을 감수할 근거가 부족하다.
+- Consequences: 여러 PR의 Preview 배포가 같은 Supabase 프로젝트의 데이터를 공유하므로, 한 PR의 Preview에서 만든 테스트 데이터가 다른 PR의 Preview 화면에도 보일 수 있다. 이는 알려진 트레이드오프로 받아들인다. 동시에 열린 PR이 많아지거나, Preview 데이터 충돌이 실제로 문제가 되면 그때 Option B(DB Branching) 도입을 재검토한다. docs/DEPLOYMENT.md의 Environment separation 절 문구를 이 결정에 맞춰 정정한다.
