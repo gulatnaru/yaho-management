@@ -226,7 +226,7 @@
 - Context: ARCHITECTURE.md §7.1이 Phase 5 예약 생성의 "정원 확인 후 INSERT" 레이스를 지목했다. Phase 4의 updateMany 조건부 갱신 패턴은 기존 행 갱신에는 맞지만, "집계값 확인 후 새 행 삽입"에는 그대로 적용할 수 없다.
 - Decision: ClassSchedule 행을 SELECT ... FOR UPDATE로 잠그고, 같은 트랜잭션 안에서 RESERVED 예약 수를 세어 capacity와 비교한 뒤 예약을 쓴다(생성 또는 재활성화). ClassSchedule에 reservedCount 같은 카운터 컬럼을 추가하지 않는다.
 - Reason: docs/DATABASE.md의 환불 상한 처리(PaymentItem 행 잠금)와 동일한 패턴이라 일관성이 높고 스키마 변경이 없다. 카운터 방식은 취소 시 감소라는 두 번째 동시성 문제를 새로 만들지만, COUNT 기반 방식은 취소를 그냥 카운트에서 제외하는 것만으로 8.3 요구를 만족한다.
-- Consequences: 예약 생성마다 COUNT 쿼리가 하나 늘지만 클래스당 최대 8명이라 비용이 무시할 수준이다. 실제 동시성 검증은 Vitest(트랜잭션 mock)로 커버되지 않으므로 배포 전 수동/스크립트 기반 검증이 필요하다.
+- Consequences: 예약 생성마다 COUNT 쿼리가 하나 늘지만 클래스당 최대 8명이라 비용이 무시할 수준이다. 실제 동시성 검증은 Vitest(트랜잭션 mock)로 커버되지 않으므로 배포 전 수동/스크립트 기반 검증이 필요하다. REQUIREMENTS.md 24장에 자동화 통합 테스트 부재를 백로그로 기록함(Phase 5 코드 리뷰, 2026-08-23).
 
 ## ADR-024: 취소된 예약에 대한 재예약은 새 행이 아니라 기존 행을 RESERVED로 되돌린다
 - Status: Accepted

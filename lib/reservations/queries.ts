@@ -49,10 +49,11 @@ export async function listReservations(params: ListReservationsParams) {
   };
 }
 
+// Phase 8(결제/환불) 소유 필드인 paymentItem 과 Phase 6(출결) 소유 필드인 attendance 는
+// 목록과 마찬가지로 이번 Phase 스코프가 아니므로 select 하지 않는다.
 const RESERVATION_DETAIL_SELECT = {
   id: true,
   status: true,
-  attendance: true,
   reservedAt: true,
   memo: true,
   cancelledAt: true,
