@@ -6,6 +6,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAdmin } from "@/lib/auth/authorization";
 import { cancelClassInputSchema, classInputSchema, type ClassInput } from "@/lib/validation/class";
+import { getClassDisplayStatus } from "@/lib/classes/status";
 
 /**
  * 트랜잭션 내부에서 "확인 후 쓰기" 사이의 레이스 컨디션을 막기 위해 던지는 내부 전용 에러들이다.
@@ -211,7 +212,7 @@ export async function updateClass(
 
   const current = await prisma.classSchedule.findUnique({
     where: { id },
-    select: { status: true },
+    select: { status: true, endsAt: true },
   });
 
   if (!current) {
@@ -219,9 +220,11 @@ export async function updateClass(
   }
 
   // ADR-020: 취소/완료된 클래스는 기본정보(메모 포함)를 수정할 수 없다. 필드별로 나눠 잠그지 않는다.
-  if (current.status !== "SCHEDULED") {
+  // DB status 는 계속 SCHEDULED 로 남지만, endsAt 이 지난 클래스는 화면상 "종료됨"으로 표시되므로
+  // 표시상 종료된 클래스도 동일하게 수정을 막는다(getClassDisplayStatus, lib/classes/status.ts).
+  if (getClassDisplayStatus(current) !== "SCHEDULED") {
     return {
-      formError: "취소되었거나 완료된 클래스는 수정할 수 없습니다.",
+      formError: "취소되었거나 종료된 클래스는 수정할 수 없습니다.",
       values: readClassFormValues(formData),
     };
   }
@@ -362,16 +365,18 @@ export async function cancelClass(
 
   const current = await prisma.classSchedule.findUnique({
     where: { id },
-    select: { status: true },
+    select: { status: true, endsAt: true },
   });
 
   if (!current) {
     return { formError: "클래스를 찾을 수 없습니다.", values: readCancelClassFormValues(formData) };
   }
 
-  if (current.status !== "SCHEDULED") {
+  // DB status 는 계속 SCHEDULED 로 남지만, endsAt 이 지난 클래스는 화면상 "완료"로 표시되므로
+  // 표시상 종료된 클래스의 취소도 동일하게 막는다(getClassDisplayStatus, lib/classes/status.ts).
+  if (getClassDisplayStatus(current) !== "SCHEDULED") {
     return {
-      formError: "이미 취소되었거나 완료된 클래스는 다시 취소할 수 없습니다.",
+      formError: "이미 취소되었거나 종료된 클래스는 취소할 수 없습니다.",
       values: readCancelClassFormValues(formData),
     };
   }

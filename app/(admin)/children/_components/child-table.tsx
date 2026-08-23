@@ -11,6 +11,8 @@ export type ChildListRow = {
   guardianName: string | null;
   guardianPhone: string | null;
   isActive: boolean;
+  /** 가장 가까운 미래 RESERVED 예약의 클래스 시작일(KST "YYYY-MM-DD"). 없으면 null(ADR-012: "–" 표기). */
+  nextReservationDate: string | null;
 };
 
 export interface ChildTableProps {
@@ -32,7 +34,7 @@ export function ChildTable({ items }: ChildTableProps) {
         <TableRow>
           <TableHead>이름</TableHead>
           <TableHead>보호자 연락처</TableHead>
-          <TableHead>예약일자</TableHead>
+          <TableHead>다음 예약</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -53,8 +55,7 @@ export function ChildTable({ items }: ChildTableProps) {
                 "미입력"
               )}
             </TableCell>
-            {/* ADR-015: Phase 5(예약) 착수 후 Reservation.reservedAt 조회로 교체 */}
-            <TableCell>–</TableCell>
+            <TableCell>{child.nextReservationDate ?? "–"}</TableCell>
           </TableRow>
         ))}
       </TableBody>

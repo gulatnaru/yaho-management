@@ -213,9 +213,78 @@
 - Consequences: REQUIREMENTS.md 16장의 클래스 검색 항목이 5개에서 2개로 줄어든다. 프로그램/장소/선생님 검색은 "나중에 추가할 예정"으로 남겨두는 것이 아니라 "지금 만들지 않는" 것이다 — 이후 특정 선생님의 일정을 한눈에 봐야 하는 등 실제 운영 니즈가 확인되면 그때 별도 ADR로 재논의한다.
 
 ## ADR-022: 목록 화면 기본 필터는 "지금 처리해야 할 것"만 보여준다 — 클래스 목록은 SCHEDULED 기본 + startsAt 오름차순, 원칙은 Phase 5 예약에도 적용한다
-- Status: Accepted
+- Status: Accepted (Context의 자동 전환 전제는 ADR-026으로 정정됨, 목록 필터 결론 자체는 유지)
 - Date: 2026-08-22
 - Context: Phase 4 클래스 목록 설계 중, Teacher/Program 목록처럼 기본 필터를 "활성만" 좁히려 했으나 클래스는 시간이 지나면 자동으로 COMPLETED 상태가 되는 성격이 걸림돌이 됐다. 기본 필터를 예정(SCHEDULED)으로 좁히면 방금 끝난 수업이 기본 목록에서 바로 안 보이게 되는데, 이 트레이드오프를 어떻게 풀지 결정이 필요했다.
 - Decision: 목록 화면의 기본 상태 필터는 "지금 처리해야 할 것"만 보여주는 것을 원칙으로 한다. 클래스 목록은 기본 상태 필터를 SCHEDULED(예정)로 좁히고, 정렬은 startsAt 오름차순(다가오는 클래스가 위로)으로 한다. 지난/취소/완료된 클래스는 상태 필터에서 명시적으로 선택해야 조회된다 — 숨기는 것이 아니라 기본값에서 걸러둘 뿐 항상 조회 가능하다.
 - Reason: 운영자가 목록을 열었을 때 가장 먼저 봐야 하는 것은 앞으로 처리해야 할 일이지 이미 끝난 이력이 아니다. Teacher/Program의 "활성만 기본 노출" 원칙과 같은 철학의 연장이지만, "활성/비활성" 이분법이 아니라 시간이 지나면 자동으로 상태가 바뀌는 도메인(클래스, 그리고 향후 예약)에서는 "지금 처리해야 할 것"이라는 더 일반화된 원칙으로 표현해야 한다.
 - Consequences: 이 원칙은 Phase 5(예약) 목록 설계에도 그대로 적용해야 한다 — 예약도 시간이 지나면 상태가 자동으로 바뀌는 도메인이므로, Phase 5 착수 시 이 ADR을 다시 참고해서 기본 필터/정렬을 결정해야 한다(임의로 다른 기준을 새로 만들지 않는다). 향후 유사한 기간성 데이터(매출 등)에도 이 원칙이 적용될 수 있는지는 그때 판단한다.
+
+## ADR-023: 정원 동시성 제어는 ClassSchedule 행 잠금(SELECT ... FOR UPDATE)으로 처리하고 카운터 컬럼을 두지 않는다
+- Status: Accepted
+- Date: 2026-08-22
+- Context: ARCHITECTURE.md §7.1이 Phase 5 예약 생성의 "정원 확인 후 INSERT" 레이스를 지목했다. Phase 4의 updateMany 조건부 갱신 패턴은 기존 행 갱신에는 맞지만, "집계값 확인 후 새 행 삽입"에는 그대로 적용할 수 없다.
+- Decision: ClassSchedule 행을 SELECT ... FOR UPDATE로 잠그고, 같은 트랜잭션 안에서 RESERVED 예약 수를 세어 capacity와 비교한 뒤 예약을 쓴다(생성 또는 재활성화). ClassSchedule에 reservedCount 같은 카운터 컬럼을 추가하지 않는다.
+- Reason: docs/DATABASE.md의 환불 상한 처리(PaymentItem 행 잠금)와 동일한 패턴이라 일관성이 높고 스키마 변경이 없다. 카운터 방식은 취소 시 감소라는 두 번째 동시성 문제를 새로 만들지만, COUNT 기반 방식은 취소를 그냥 카운트에서 제외하는 것만으로 8.3 요구를 만족한다.
+- Consequences: 예약 생성마다 COUNT 쿼리가 하나 늘지만 클래스당 최대 8명이라 비용이 무시할 수준이다. 실제 동시성 검증은 Vitest(트랜잭션 mock)로 커버되지 않으므로 배포 전 수동/스크립트 기반 검증이 필요하다. REQUIREMENTS.md 24장에 자동화 통합 테스트 부재를 백로그로 기록함(Phase 5 코드 리뷰, 2026-08-23).
+
+## ADR-024: 취소된 예약에 대한 재예약은 새 행이 아니라 기존 행을 RESERVED로 되돌린다
+- Status: Accepted
+- Date: 2026-08-22
+- Context: Reservation.@@unique([classScheduleId, childId])는 상태와 무관하게 조합당 1행만 허용한다. 아이가 예약을 취소한 뒤 같은 클래스에 다시 예약하려 하면 INSERT가 유니크 제약에 걸려 영구히 막힌다.
+- Decision: 예약 생성 시 기존 (classScheduleId, childId) 행이 CANCELLED면 새 행을 만들지 않고 그 행의 상태를 RESERVED로 되돌리고 취소 관련 필드(cancelledAt/cancelReason/cancelDetail/cancelledById)를 초기화한다(reservedAt 갱신). RESERVED면 중복으로 차단, COMPLETED/NO_SHOW면 차단한다.
+- Reason: 스키마(유니크 제약)를 바꾸지 않으면서 "재신청" 현실 시나리오를 막지 않기 위함이다.
+- Consequences: 재예약 시 원래 최초 예약 시각이 남지 않을 뿐 아니라, **이전 취소 사유/취소일시/처리자 같은 취소 이력 자체가 덮어써져 사라진다.** 지금은 별도 이력 테이블을 만들 정도로 이 정보를 감사(audit) 목적으로 반드시 보존해야 한다는 요구가 확인되지 않아 이 비용을 감수한다. 운영 중 취소·재예약이 잦아지고 "이 아이가 과거에 몇 번 취소했었는지" 같은 이력 조회가 실제로 필요해지면, Reservation 과 별도로 취소 이력을 append-only 로 쌓는 테이블(ChildConsent 의 append-only 패턴 참고)을 재검토해야 한다 — REQUIREMENTS.md 24장에 남겨둔다.
+
+## ADR-025: 비활성 아이의 신규 예약은 서버가 하드 블로킹한다
+- Status: Accepted
+- Date: 2026-08-22
+- Context: REQUIREMENTS 10.4는 "비활성 아이는 신규 예약 대상에서 제외할 수 있다"는 완화된 표현을 쓴다.
+- Decision: 예약 생성 후보 목록은 활성 아이만 노출하고, 생성 시점에도 서버가 재확인해 비활성 아이에 대한 직접 제출을 거부한다(ADR-018의 프로그램/선생님 패턴과 동일 강도).
+- Reason: 비활성 아이는 이력 보존을 위한 archive 상태(3.1)이므로 새 예약을 허용할 운영상 근거가 없다.
+- Consequences: 운영 중 비활성 아이에게도 예외적으로 새 예약이 필요한 사례가 확인되면 재논의가 필요하다.
+
+## ADR-026: ClassSchedule/Reservation의 COMPLETED 전환은 쓰지 않는다 — "종료됨/종료"는 endsAt 기준 조회 시점 계산으로만 화면에 표시한다 (ADR-022 전제 정정)
+- Status: Accepted
+- Date: 2026-08-23
+- Context: ADR-022는 "클래스는 시간이 지나면 자동으로 COMPLETED 상태가 되는 성격"이라는 전제로 클래스 목록 기본 필터(SCHEDULED 기본 노출)를 결정했다. 그러나 이 자동 전환을 실제로 수행하는 메커니즘(배치, 크론, 조회 시 upsert 등 어떤 형태로든)은 코드에도 REQUIREMENTS.md에도 존재한 적이 없었다. 이 사실은 Phase 5 실사용 중, 지난 클래스가 DB상 영원히 SCHEDULED로 남아 재예약이 막히는 것처럼 보이는 문제로 처음 제기되었다. 조사 결과 재예약 차단 자체는 ADR-024대로 정상 동작이었고(취소된 예약이 아니라 애초에 지난 클래스에 새로 예약하려던 시도가 막힌 것), 진짜 문제는 ClassSchedule과 Reservation 모두에 "완료" 판정을 실제로 기록하는 메커니즘 자체가 없었다는 것이었다.
+- Decision:
+  1. ClassSchedule.status와 Reservation.status를 COMPLETED로 전환하는 쓰기 경로는 이번 결정으로 만들지 않는다. DB의 status 값(SCHEDULED/RESERVED)은 그대로 둔다.
+  2. 대신 조회/표시 시점에 `endsAt`이 현재 시각보다 과거이면, 클래스는 목록/상세 화면에서 "종료됨"으로 표시한다.
+  3. RESERVED 상태인 예약 중 소속 클래스가 위 2번 기준으로 "종료됨"인 경우, 예약 목록/상세에서 "예약됨" 대신 "종료"로 표시한다. CANCELLED 예약은 이 규칙과 무관하게 그대로 "취소"로 표시한다.
+  4. 지난(종료된) 클래스의 목록/상세 화면에서는 "예약 추가" 버튼을 노출하지 않는다.
+  5. 이 판정은 DB 값을 바꾸지 않는 순수 조회 시점 계산이며, `lib/classes/datetime.ts`의 기존 KST 유틸을 재사용해 서버 판정 시각과 클래스 시각의 타임존 기준을 일치시킨다.
+  6. 예약의 실제 참석 여부(출결, PRESENT/ABSENT)와 그에 따른 진짜 COMPLETED/NO_SHOW 전환은 Phase 6(안전 정보/출결)의 몫으로 그대로 남긴다. ADR-024(취소된 예약의 재예약 처리)는 이번 결정으로 재확인되었을 뿐 변경되지 않는다.
+- Reason: (1) 클래스 종료 시점에 예약 상태를 일괄 COMPLETED로 실제로 기록해버리면, 아직 출결이 확인되지 않은 상태에서 "참여완료"라는 부정확한 데이터가 만들어지고 Phase 6에서 이를 다시 정리해야 하는 비용이 생긴다. (2) 클래스 판정을 조회 시점 계산으로 하기로 했으므로, 예약도 같은 원칙(DB를 건드리지 않고 화면에서만 계산)으로 일관되게 맞추는 것이 자연스럽다. (3) 이 프로젝트에는 배치/크론 인프라가 전혀 없다(`.github/workflows/`에 CI만 존재). DB 값을 실제로 쓰는 방식(배치 전환이든 별도 관리자 확정 버튼이든)은 그 자체로 별도의 인프라/화면 설계가 필요한 더 큰 작업이므로, 지금은 필요 최소한으로 화면 계산만 한다.
+- Consequences: `ClassSchedule.status`의 `COMPLETED`, `Reservation.status`의 `COMPLETED`/`NO_SHOW` enum 값은 당분간 DB에 전혀 쓰이지 않는다(죽은 값 상태). 향후 매출 집계, 배치 리포트 등에서 "실제로 DB에 COMPLETED라고 기록된 값"이 필요해지는 시점이 오면, 별도로 전환 메커니즘(수동 확정 버튼 또는 배치/크론)을 설계해야 한다 — REQUIREMENTS.md 24장에 백로그로 남긴다. 화면의 "종료됨/종료" 판정은 매 요청마다 서버 시각 기준으로 계산되므로, 캐싱을 도입할 경우 이 판정이 요청 시점과 어긋나지 않도록 주의해야 한다.
+
+## ADR-027: 종료된(표시상 ENDED) 클래스/예약은 정보 수정 및 취소를 서버가 차단한다 (ADR-020/ADR-026 적용 범위 확장)
+- Status: Accepted
+- Date: 2026-08-23
+- Context: ADR-026은 클래스/예약의 "종료" 판정을 조회 시점 계산(endsAt 기준)으로 화면 표시에만 반영하기로 했다. 그런데 "예약 추가" 버튼 외에 클래스 취소/클래스 정보 수정/예약 취소 같은 쓰기 동작들은 여전히 DB의 실제 status(SCHEDULED/RESERVED)만 보고 있어서, 종료된(하지만 DB상 SCHEDULED인) 클래스에 대해 정보 수정·취소가 계속 가능한 상태였다. 특히 ADR-020(취소/완료된 클래스는 기본정보 수정 불가)의 원래 취지가 "표시상 완료된 클래스"에는 적용되지 않는 허점이 생겼다.
+- Decision: ADR-026의 조회 시점 "종료" 판정(getClassDisplayStatus/getReservationDisplayStatus)을 아래 쓰기 동작에도 서버 측에서 확장 적용한다 — 버튼을 숨기는 것만으로는 직접 URL 접근/폼 재제출을 막지 못하므로 서버 액션에도 동일한 검증을 추가한다.
+  1. 클래스 정보 수정(updateClass): 클래스가 종료됨(ENDED)이면 CANCELLED인 경우와 동일하게 수정을 거부한다. ADR-020의 "취소/완료된 클래스는 수정 불가" 원칙이 표시상 완료(ENDED)에도 동일하게 적용되는 것으로 본다 — ADR-020 자체를 수정하는 것이 아니라 그 원칙의 적용 범위를 명확히 하는 것이다.
+  2. 클래스 취소(cancelClass): 이미 종료된(ENDED) 클래스는 취소할 수 없다 — 끝난 수업을 사후에 "취소"로 표시하는 것은 의미가 없다.
+  3. 예약 취소(cancelReservation): 소속 클래스가 종료됐으면(ENDED) 그 예약도 취소할 수 없다.
+  각 경우 버튼도 화면에서 숨긴다(이미 존재하는 표시 로직 확장).
+- Reason: "표시가 종료인데 DB 조작은 여전히 허용된다"는 상태는 사용자에게 혼란을 주고, 실제로 이미 끝난 일에 대한 취소/수정이라는 의미 없는 쓰기를 허용하게 된다. 서버 액션까지 막아야 버튼 숨김을 우회한 직접 제출도 차단된다.
+- Consequences: 클래스가 끝난 뒤 사후에 취소 처리가 필요한 실제 상황(예: 우천으로 취소해야 했는데 당일 즉시 처리하지 못하고 클래스 시간이 지나버린 경우)이 생기면, 지금 이 결정 하에서는 관리자가 화면에서 취소할 방법이 없다. 이 문제는 지금 임의로 해결책을 정하지 않고 REQUIREMENTS.md 24장 백로그로 남긴다 — 실제로 이런 사례가 발생하면 그때 필요한 방법(예: 시간 제한 없는 사후 취소 허용, 또는 별도 관리자 전용 강제 취소 경로)을 논의한다.
+
+## ADR-028: 클래스/예약 목록의 상태 필터도 endsAt 기준 표시 상태와 같은 기준으로 동작한다 — 배지 라벨은 "완료"로 통일한다 (ADR-022/ADR-026 적용 범위 확장)
+- Status: Accepted
+- Date: 2026-08-23
+- Context: ADR-026은 클래스/예약의 "종료" 판정을 화면 표시(배지 라벨)에만 적용하기로 했다. 그런데 목록 화면의 상태 **필터**(ADR-021/ADR-022로 확정된 "상태" 검색 항목)는 여전히 DB의 원시 status 값만 비교하고 있어서, "예정" 필터로 조회해도 이미 endsAt이 지난 클래스/예약이 함께 나오는 문제가 있었다. 이는 REQUIREMENTS.md 8.6에 "기본 필터는 DB status 기준이며 8.5의 화면 표시와는 별개"라고 명시적으로 적어뒀던 것과도 배치된다 — 그 문장은 실제 사용성 확인 후 틀린 결론으로 판명났다.
+- Decision:
+  1. 클래스 목록: "예정"(SCHEDULED) 필터 = `status === SCHEDULED AND endsAt >= now`. "완료"(COMPLETED) 필터 = `status === SCHEDULED AND endsAt < now`. "취소"(CANCELLED)/"전체"(all) 필터는 시간 조건 없이 기존 그대로 동작한다.
+  2. 예약 목록: "예약됨"(RESERVED) 필터 = `status === RESERVED AND 소속 클래스.endsAt >= now`. "완료"(COMPLETED) 필터 = `status === RESERVED AND 소속 클래스.endsAt < now`. "취소"(CANCELLED)/"노쇼"(NO_SHOW)/"전체"(all) 필터는 시간 조건 없이 기존 그대로 동작한다.
+  3. 배지 표시 라벨도 "종료됨"/"종료" 대신 "완료"로 통일한다(REQUIREMENTS.md 8.5의 클래스 COMPLETED="진행완료", 10.3의 예약 COMPLETED="참여완료" 표현과 정신을 맞춘다 — 화면 배지 자체는 짧게 "완료"로 표시한다).
+- Reason: DB에 실제로 COMPLETED를 쓰지 않기로 한 이상(ADR-026), "완료"라는 개념을 화면 표시뿐 아니라 필터 검색에서도 조회 가능해야 실제로 쓸모가 있다. 필터가 DB 원시값만 본다면 "예정" 필터가 사실상 "예정+완료 전부"가 되어 ADR-022의 "지금 처리해야 할 것만 보여준다" 원칙이 깨진다.
+- Consequences: `buildClassListWhere`/`buildReservationListWhere`는 이제 `now`를 인자로 받는 순수 함수가 되어야 한다(테스트에서 고정 시각 주입 가능). REQUIREMENTS.md 8.6의 기존 문장("이 기본 필터의 SCHEDULED는 DB status 값을 기준으로 하며... 별개다")은 이 ADR로 대체된다. 목록 필터 동작과 상태에 따른 버튼 노출은 Playwright E2E로 검증하고 로컬 통과를 확인한 뒤에만 완료로 본다(REQUIREMENTS.md 23장 Definition of Done 참고).
+
+## ADR-029: 예약 생성 서버 검증이 표시상 종료(ENDED)된 클래스를 걸러내지 못하던 공백을 메운다 (ADR-024/ADR-027 적용 범위 보강)
+- Status: Accepted
+- Date: 2026-08-23
+- Context: `app/(admin)/reservations/actions.ts`의 `createReservationCore`는 예약 생성 시 `SELECT status FROM ClassSchedule ... FOR UPDATE`로 클래스를 잠그고 `status !== "SCHEDULED"`만 검사했다. ADR-026 결정에 따라 클래스는 종료되어도 DB의 `status`가 SCHEDULED로 남고 화면 표시만 `endsAt` 기준으로 "완료"로 계산되므로, 이 검사만으로는 이미 끝난 클래스에 대한 신규 예약 생성을 막지 못했다. 화면(UI)에서는 종료된 클래스에 "예약 추가" 버튼을 숨겼지만(ADR-026/ADR-027), 서버 액션이 이를 독립적으로 재검증하지 않아 직접 URL 조작이나 stale form 재제출로 종료된 클래스에 예약이 실제로 생성될 수 있는, 표시 계층에서만 막고 서버 검증이 빠졌던 케이스였다. Phase 5 개발 중 `tests/e2e/class-ended-lifecycle.spec.ts` Playwright E2E를 작성하는 과정에서 발견되었다.
+- Decision: `createReservationCore`의 락 조회를 `endsAt`도 함께 select하도록 확장하고, `getClassDisplayStatus`로 판정한 표시상 ENDED 상태도 기존 `ClassNotScheduledError`를 던지도록 수정한다. 연쇄적으로 `lib/reservations/candidates.ts::listScheduledClassCandidatesWithCapacity`(예약 후보 목록에서 종료된 클래스 제외)와 `lib/reservations/prefill-warning.ts::resolveClassPrefillWarning`(종료된 클래스에 대해 "정원이 가득 찼습니다" 대신 "선택한 클래스는 이미 종료되었습니다"로 메시지 정정)도 함께 수정한다. Playwright E2E(`tests/e2e/class-ended-lifecycle.spec.ts`)로 종료된 클래스에 대한 예약 생성이 서버에서 거부됨을 검증한다.
+- Reason: ADR-024(취소된 예약의 재예약 처리)와 ADR-027(종료된 클래스/예약의 수정·취소 서버 차단)이 이미 "종료된 클래스에 대한 쓰기 동작은 서버가 막아야 한다"는 원칙을 세웠으나, 예약 "생성" 경로의 락 조회 자체가 `endsAt`을 보지 않아 이 원칙의 적용 범위에서 누락되어 있었다. 버튼 숨김만으로는 직접 제출을 막지 못하므로 서버 액션 검증이 반드시 필요하다.
+- Consequences: 이 버그는 Phase 5 신규 기능 개발 중 발견되어 병합 전에 수정되었으므로 프로덕션 노출은 없다. 다만 "표시 계층에서만 막고 서버 검증이 빠졌던 케이스"라는 성격의 결함이 이번에 한 곳(예약 생성)에서 확인된 만큼, 종료(ENDED)/취소(CANCELLED) 판정이 관여하는 다른 쓰기 경로에도 유사한 누락이 없는지 QA 단계에서 재점검이 필요하다.

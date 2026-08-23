@@ -40,6 +40,41 @@ describe("buildClassListWhere", () => {
       lt: new Date("2026-09-05T15:00:00.000Z"),
     });
   });
+
+  describe("display-status-aware SCHEDULED/COMPLETED filtering", () => {
+    const now = new Date("2026-09-10T00:00:00.000Z");
+
+    it("status=SCHEDULED filters to DB status SCHEDULED and endsAt >= now", () => {
+      const where = buildClassListWhere({ status: "SCHEDULED" }, now);
+      expect(where).toEqual({ status: "SCHEDULED", endsAt: { gte: now } });
+    });
+
+    it("status=COMPLETED filters to DB status SCHEDULED and endsAt < now", () => {
+      const where = buildClassListWhere({ status: "COMPLETED" }, now);
+      expect(where).toEqual({ status: "SCHEDULED", endsAt: { lt: now } });
+    });
+
+    it("status=CANCELLED has no endsAt condition", () => {
+      const where = buildClassListWhere({ status: "CANCELLED" }, now);
+      expect(where).toEqual({ status: "CANCELLED" });
+      expect(where.endsAt).toBeUndefined();
+    });
+
+    it("status=all has no status or endsAt condition", () => {
+      const where = buildClassListWhere({ status: "all" }, now);
+      expect(where).toEqual({});
+      expect(where.endsAt).toBeUndefined();
+    });
+
+    it("defaults now to the current time when not provided", () => {
+      const before = new Date();
+      const where = buildClassListWhere({ status: "SCHEDULED" });
+      const after = new Date();
+      const gte = (where.endsAt as { gte: Date }).gte;
+      expect(gte.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(gte.getTime()).toBeLessThanOrEqual(after.getTime());
+    });
+  });
 });
 
 describe("parseClassListStatus", () => {
