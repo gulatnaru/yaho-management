@@ -280,3 +280,11 @@
   3. 배지 표시 라벨도 "종료됨"/"종료" 대신 "완료"로 통일한다(REQUIREMENTS.md 8.5의 클래스 COMPLETED="진행완료", 10.3의 예약 COMPLETED="참여완료" 표현과 정신을 맞춘다 — 화면 배지 자체는 짧게 "완료"로 표시한다).
 - Reason: DB에 실제로 COMPLETED를 쓰지 않기로 한 이상(ADR-026), "완료"라는 개념을 화면 표시뿐 아니라 필터 검색에서도 조회 가능해야 실제로 쓸모가 있다. 필터가 DB 원시값만 본다면 "예정" 필터가 사실상 "예정+완료 전부"가 되어 ADR-022의 "지금 처리해야 할 것만 보여준다" 원칙이 깨진다.
 - Consequences: `buildClassListWhere`/`buildReservationListWhere`는 이제 `now`를 인자로 받는 순수 함수가 되어야 한다(테스트에서 고정 시각 주입 가능). REQUIREMENTS.md 8.6의 기존 문장("이 기본 필터의 SCHEDULED는 DB status 값을 기준으로 하며... 별개다")은 이 ADR로 대체된다. 목록 필터 동작과 상태에 따른 버튼 노출은 Playwright E2E로 검증하고 로컬 통과를 확인한 뒤에만 완료로 본다(REQUIREMENTS.md 23장 Definition of Done 참고).
+
+## ADR-029: 예약 생성 서버 검증이 표시상 종료(ENDED)된 클래스를 걸러내지 못하던 공백을 메운다 (ADR-024/ADR-027 적용 범위 보강)
+- Status: Accepted
+- Date: 2026-08-23
+- Context: `app/(admin)/reservations/actions.ts`의 `createReservationCore`는 예약 생성 시 `SELECT status FROM ClassSchedule ... FOR UPDATE`로 클래스를 잠그고 `status !== "SCHEDULED"`만 검사했다. ADR-026 결정에 따라 클래스는 종료되어도 DB의 `status`가 SCHEDULED로 남고 화면 표시만 `endsAt` 기준으로 "완료"로 계산되므로, 이 검사만으로는 이미 끝난 클래스에 대한 신규 예약 생성을 막지 못했다. 화면(UI)에서는 종료된 클래스에 "예약 추가" 버튼을 숨겼지만(ADR-026/ADR-027), 서버 액션이 이를 독립적으로 재검증하지 않아 직접 URL 조작이나 stale form 재제출로 종료된 클래스에 예약이 실제로 생성될 수 있는, 표시 계층에서만 막고 서버 검증이 빠졌던 케이스였다. Phase 5 개발 중 `tests/e2e/class-ended-lifecycle.spec.ts` Playwright E2E를 작성하는 과정에서 발견되었다.
+- Decision: `createReservationCore`의 락 조회를 `endsAt`도 함께 select하도록 확장하고, `getClassDisplayStatus`로 판정한 표시상 ENDED 상태도 기존 `ClassNotScheduledError`를 던지도록 수정한다. 연쇄적으로 `lib/reservations/candidates.ts::listScheduledClassCandidatesWithCapacity`(예약 후보 목록에서 종료된 클래스 제외)와 `lib/reservations/prefill-warning.ts::resolveClassPrefillWarning`(종료된 클래스에 대해 "정원이 가득 찼습니다" 대신 "선택한 클래스는 이미 종료되었습니다"로 메시지 정정)도 함께 수정한다. Playwright E2E(`tests/e2e/class-ended-lifecycle.spec.ts`)로 종료된 클래스에 대한 예약 생성이 서버에서 거부됨을 검증한다.
+- Reason: ADR-024(취소된 예약의 재예약 처리)와 ADR-027(종료된 클래스/예약의 수정·취소 서버 차단)이 이미 "종료된 클래스에 대한 쓰기 동작은 서버가 막아야 한다"는 원칙을 세웠으나, 예약 "생성" 경로의 락 조회 자체가 `endsAt`을 보지 않아 이 원칙의 적용 범위에서 누락되어 있었다. 버튼 숨김만으로는 직접 제출을 막지 못하므로 서버 액션 검증이 반드시 필요하다.
+- Consequences: 이 버그는 Phase 5 신규 기능 개발 중 발견되어 병합 전에 수정되었으므로 프로덕션 노출은 없다. 다만 "표시 계층에서만 막고 서버 검증이 빠졌던 케이스"라는 성격의 결함이 이번에 한 곳(예약 생성)에서 확인된 만큼, 종료(ENDED)/취소(CANCELLED) 판정이 관여하는 다른 쓰기 경로에도 유사한 누락이 없는지 QA 단계에서 재점검이 필요하다.
