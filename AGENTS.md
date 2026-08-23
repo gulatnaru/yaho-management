@@ -110,6 +110,13 @@ npm run build
 npx prisma migrate dev
 npx prisma studio
 
+`npm run build` 는 `npm run dev` 와 `.next` 캐시를 공유한다. 역할과 무관하게(개발/QA/임시 진단 목적 포함)
+`npm run build` 를 실행하기 전에는 `pgrep -f "next dev"` 등 포트에 의존하지 않는 방법으로 로컬 dev 서버가
+떠 있는지 먼저 확인한다. 떠 있으면 build 를 생략하고 `npx tsc --noEmit` + lint + test 로 대체한 뒤 그 사실을
+보고한다. 두 명령이 충돌하면 lint/test/build 는 모두 통과한 채로 실제 브라우저에서만 CSS 붕괴, 날짜 계산
+오류 등으로 나타나 다른 버그로 오진하기 쉽다(docs/METRICS.md PR 5, Phase 4/PR 10, "공통" 행 — 동일 유형
+3회 반복, 포트 3000 고정 점검 방식이던 이전 규칙(PR #9)으로는 다른 포트에서 뜬 dev 서버를 잡지 못했다).
+
 ## Completion Report
 ### Changed
 ### Tests

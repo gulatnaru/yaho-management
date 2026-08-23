@@ -18,7 +18,7 @@ feature/<name> / hotfix/<name>
 - 커밋 전 반드시 git branch --show-current 로 현재 브랜치를 확인한다. main 이면 즉시 멈추고 사용자에게 알린다.
 - git status / git diff 로 변경 확인
 - secrets, .env 가 포함되지 않았는지 확인
-- lint / test / build 결과 확인. build 전에는 `lsof -nP -iTCP:3000 -sTCP:LISTEN` 으로 로컬 dev 서버가 떠 있는지 확인한다 — 떠 있으면 build 를 생략하고 그 사실을 보고한다(같은 `.next` 캐시를 공유해 충돌하면 브라우저에서만 드러나는 결함이 생긴다)
+- lint / test / build 결과 확인. build 전에는 `pgrep -f "next dev"` 로 로컬 dev 서버가 떠 있는지 확인한다(포트를 지정하는 `lsof -iTCP:3000` 방식은 dev 서버가 3000번이 아닌 다른 포트로 떴을 때 못 잡으므로 쓰지 않는다) — 떠 있으면 build 를 생략하고 그 사실을 보고한다(같은 `.next` 캐시를 공유해 충돌하면 브라우저에서만 드러나는 결함이 생긴다)
 
 ## 커밋
 Conventional Commits.
