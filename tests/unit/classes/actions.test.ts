@@ -211,16 +211,28 @@ describe("updateClass locks CANCELLED/COMPLETED classes", () => {
 
     const result = await updateClass("class-1", {}, validFormData({ memo: "메모만 변경" }));
 
-    expect(result.formError).toBe("취소되었거나 완료된 클래스는 수정할 수 없습니다.");
+    expect(result.formError).toBe("취소되었거나 종료된 클래스는 수정할 수 없습니다.");
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
   it("rejects updates when the class is COMPLETED", async () => {
-    classFindUniqueMock.mockResolvedValue({ status: "COMPLETED" });
+    // COMPLETED 는 이미 끝난 수업에서만 나올 수 있는 상태이므로 endsAt 도 과거로 함께 준다.
+    classFindUniqueMock.mockResolvedValue({ status: "COMPLETED", endsAt: new Date("2020-01-01T00:00:00Z") });
 
     const result = await updateClass("class-1", {}, validFormData());
 
-    expect(result.formError).toBe("취소되었거나 완료된 클래스는 수정할 수 없습니다.");
+    expect(result.formError).toBe("취소되었거나 종료된 클래스는 수정할 수 없습니다.");
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  // 회귀 테스트: DB status 는 계속 SCHEDULED 로 남지만(ADR, endsAt 기준 표시 전용 "종료" 계산),
+  // endsAt 이 이미 지난 클래스는 getClassDisplayStatus 기준 ENDED 로 계산되어 수정을 막아야 한다.
+  it("rejects updates when the class is still SCHEDULED in DB but endsAt has already passed (display ENDED)", async () => {
+    classFindUniqueMock.mockResolvedValue({ status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") });
+
+    const result = await updateClass("class-1", {}, validFormData());
+
+    expect(result.formError).toBe("취소되었거나 종료된 클래스는 수정할 수 없습니다.");
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
@@ -405,17 +417,30 @@ describe("cancelClass", () => {
 
     const result = await cancelClass("class-1", {}, cancelFormData());
 
-    expect(result.formError).toBe("이미 취소되었거나 완료된 클래스는 다시 취소할 수 없습니다.");
+    expect(result.formError).toBe("이미 취소되었거나 종료된 클래스는 취소할 수 없습니다.");
     expect(classScheduleUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("rejects cancelling a class that is already COMPLETED", async () => {
     requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
-    classFindUniqueMock.mockResolvedValue({ status: "COMPLETED" });
+    // COMPLETED 는 이미 끝난 수업에서만 나올 수 있는 상태이므로 endsAt 도 과거로 함께 준다.
+    classFindUniqueMock.mockResolvedValue({ status: "COMPLETED", endsAt: new Date("2020-01-01T00:00:00Z") });
 
     const result = await cancelClass("class-1", {}, cancelFormData());
 
-    expect(result.formError).toBe("이미 취소되었거나 완료된 클래스는 다시 취소할 수 없습니다.");
+    expect(result.formError).toBe("이미 취소되었거나 종료된 클래스는 취소할 수 없습니다.");
+    expect(classScheduleUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  // 회귀 테스트: DB status 는 계속 SCHEDULED 로 남지만, endsAt 이 이미 지난 클래스는
+  // getClassDisplayStatus 기준 ENDED 로 계산되어 취소도 막아야 한다.
+  it("rejects cancelling a class that is still SCHEDULED in DB but endsAt has already passed (display ENDED)", async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+    classFindUniqueMock.mockResolvedValue({ status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") });
+
+    const result = await cancelClass("class-1", {}, cancelFormData());
+
+    expect(result.formError).toBe("이미 취소되었거나 종료된 클래스는 취소할 수 없습니다.");
     expect(classScheduleUpdateManyMock).not.toHaveBeenCalled();
   });
 

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { getClassDetail } from "@/lib/classes/queries";
+import { getClassDisplayStatus } from "@/lib/classes/status";
 import { ClassCancelForm } from "../../_components/class-cancel-form";
 
 interface CancelClassPageProps {
@@ -22,13 +23,13 @@ export default async function CancelClassPage({ params }: CancelClassPageProps) 
     </Link>
   );
 
-  if (classDetail.status !== "SCHEDULED") {
+  if (getClassDisplayStatus(classDetail) !== "SCHEDULED") {
     return (
       <section className="space-y-6">
         {backLink}
         <h1 className="text-2xl font-bold">클래스 취소</h1>
         <p className="rounded-lg border border-dashed border-slate-200 p-6 text-sm text-slate-600">
-          이미 취소되었거나 완료된 클래스입니다.
+          이미 취소되었거나 종료된 클래스입니다.
         </p>
       </section>
     );

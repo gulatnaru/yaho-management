@@ -27,11 +27,25 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * 클래스 목록 조회용 where 절을 만드는 순수 함수.
  * ADR-021: 검색은 날짜(기간)와 상태 2개 항목뿐이다 — 프로그램/장소/선생님 검색은 만들지 않는다.
  * dateFrom/dateTo 는 KST 기준 날짜 문자열("YYYY-MM-DD")이다.
+ *
+ * status 는 화면 표시 상태(getClassDisplayStatus) 기준으로 해석한다 — DB 의 ClassSchedule.status 는
+ * COMPLETED 로 절대 갱신되지 않으므로(lib/classes/status.ts), "SCHEDULED"/"COMPLETED" 필터는
+ * 둘 다 DB status="SCHEDULED" 를 전제로 endsAt 기준 now 와 비교해 나눈다.
+ * "CANCELLED"/"all" 은 시간 조건 없이 기존대로 동작한다.
  */
-export function buildClassListWhere(params: ClassListParams): Prisma.ClassScheduleWhereInput {
+export function buildClassListWhere(
+  params: ClassListParams,
+  now: Date = new Date(),
+): Prisma.ClassScheduleWhereInput {
   const where: Prisma.ClassScheduleWhereInput = {};
 
-  if (params.status && params.status !== "all") {
+  if (params.status === "SCHEDULED") {
+    where.status = "SCHEDULED";
+    where.endsAt = { gte: now };
+  } else if (params.status === "COMPLETED") {
+    where.status = "SCHEDULED";
+    where.endsAt = { lt: now };
+  } else if (params.status && params.status !== "all") {
     where.status = params.status;
   }
 

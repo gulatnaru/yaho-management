@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PlaceholderSection } from "@/app/(admin)/children/_components/placeholder-section";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { formatKstDate, formatKstDateTimeRange, formatKstTime } from "@/lib/classes/datetime";
 import { getClassDetail } from "@/lib/classes/queries";
+import { getClassDisplayStatus, type ClassDisplayStatus } from "@/lib/classes/status";
 import { isUnderStaffed } from "@/lib/classes/teacher-warning";
+import { listReservationsByClassSchedule } from "@/lib/reservations/queries";
+import { getReservationDisplayStatus, type ReservationDisplayStatus } from "@/lib/reservations/status";
 import { toTelHref } from "@/lib/shared/contact";
 import { cn } from "@/lib/utils";
 
@@ -15,18 +17,16 @@ interface ClassDetailPageProps {
   params: Promise<{ id: string }>;
 }
 
-type ClassStatusValue = "SCHEDULED" | "CANCELLED" | "COMPLETED";
-
-const STATUS_LABEL: Record<ClassStatusValue, string> = {
+const STATUS_LABEL: Record<ClassDisplayStatus, string> = {
   SCHEDULED: "예정",
   CANCELLED: "취소",
-  COMPLETED: "완료",
+  ENDED: "완료",
 };
 
-const STATUS_VARIANT: Record<ClassStatusValue, NonNullable<BadgeProps["variant"]>> = {
+const STATUS_VARIANT: Record<ClassDisplayStatus, NonNullable<BadgeProps["variant"]>> = {
   SCHEDULED: "default",
   CANCELLED: "secondary",
-  COMPLETED: "success",
+  ENDED: "success",
 };
 
 // REQUIREMENTS.md 9.3 취소 사유 코드
@@ -40,9 +40,21 @@ const CANCEL_REASON_LABEL: Record<ClassCancelReasonValue, string> = {
   OTHER: "기타",
 };
 
+const RESERVATION_STATUS_LABEL: Record<ReservationDisplayStatus, string> = {
+  RESERVED: "예약됨",
+  CANCELLED: "취소",
+  ENDED: "완료",
+};
+
+const RESERVATION_STATUS_VARIANT: Record<ReservationDisplayStatus, NonNullable<BadgeProps["variant"]>> = {
+  RESERVED: "default",
+  CANCELLED: "secondary",
+  ENDED: "success",
+};
+
 export default async function ClassDetailPage({ params }: ClassDetailPageProps) {
   const { id } = await params;
-  const classDetail = await getClassDetail(id);
+  const [classDetail, reservations] = await Promise.all([getClassDetail(id), listReservationsByClassSchedule(id)]);
 
   if (!classDetail) {
     notFound();
@@ -50,6 +62,9 @@ export default async function ClassDetailPage({ params }: ClassDetailPageProps) 
 
   const teacherCount = classDetail.teachers.length;
   const showTeacherWarning = isUnderStaffed(teacherCount);
+  const reservedCount = reservations.filter((reservation) => reservation.status === "RESERVED").length;
+  const classDisplayStatus = getClassDisplayStatus(classDetail);
+  const canAddReservation = classDisplayStatus === "SCHEDULED" && reservedCount < classDetail.capacity;
 
   return (
     <section className="space-y-6">
@@ -57,16 +72,24 @@ export default async function ClassDetailPage({ params }: ClassDetailPageProps) 
         ← 목록으로
       </Link>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <h1 className="text-2xl font-bold">{formatKstDateTimeRange(classDetail.startsAt, classDetail.endsAt)}</h1>
-        <div className="flex items-center gap-2">
-          {classDetail.status === "SCHEDULED" ? (
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          {canAddReservation ? (
+            <Link
+              className={cn(buttonVariants(), "w-full md:w-auto")}
+              href={`/reservations/new?classScheduleId=${classDetail.id}`}
+            >
+              예약 추가
+            </Link>
+          ) : null}
+          {classDisplayStatus === "SCHEDULED" ? (
             <>
-              <Link className={buttonVariants()} href={`/classes/${classDetail.id}/edit`}>
+              <Link className={cn(buttonVariants(), "w-full md:w-auto")} href={`/classes/${classDetail.id}/edit`}>
                 정보 수정
               </Link>
               <Link
-                className={cn(buttonVariants(), "bg-red-600 hover:bg-red-700")}
+                className={cn(buttonVariants(), "w-full bg-red-600 hover:bg-red-700 md:w-auto")}
                 href={`/classes/${classDetail.id}/cancel`}
               >
                 클래스 취소
@@ -102,9 +125,15 @@ export default async function ClassDetailPage({ params }: ClassDetailPageProps) 
             <p>{classDetail.capacity}명</p>
           </div>
           <div>
+            <p className="text-sm text-slate-500">예약 인원</p>
+            <p>
+              {reservedCount}/{classDetail.capacity}명
+            </p>
+          </div>
+          <div>
             <p className="text-sm text-slate-500">상태</p>
             <p>
-              <Badge variant={STATUS_VARIANT[classDetail.status]}>{STATUS_LABEL[classDetail.status]}</Badge>
+              <Badge variant={STATUS_VARIANT[classDisplayStatus]}>{STATUS_LABEL[classDisplayStatus]}</Badge>
             </p>
           </div>
         </CardContent>
@@ -179,7 +208,42 @@ export default async function ClassDetailPage({ params }: ClassDetailPageProps) 
         <WarningBanner>선생님이 {teacherCount}명만 배정되어 있습니다. 원칙은 2명입니다.</WarningBanner>
       ) : null}
 
-      <PlaceholderSection description="Phase 5에서 제공 예정" title="참여 아이" />
+      <Card>
+        <CardHeader>
+          <CardTitle>참여 아이</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {reservations.length === 0 ? (
+            <p className="text-sm text-slate-500">아직 예약이 없습니다.</p>
+          ) : (
+            <ul className="space-y-2">
+              {reservations.map((reservation) => {
+                const reservationDisplayStatus = getReservationDisplayStatus(reservation, classDetail);
+                return (
+                  <li className="flex items-center justify-between text-sm" key={reservation.id}>
+                    <Link className="font-medium hover:underline" href={`/children/${reservation.child.id}`}>
+                      {reservation.child.name}
+                    </Link>
+                    <span className="flex items-center gap-3">
+                      <Badge variant={RESERVATION_STATUS_VARIANT[reservationDisplayStatus]}>
+                        {RESERVATION_STATUS_LABEL[reservationDisplayStatus]}
+                      </Badge>
+                      {reservationDisplayStatus === "RESERVED" ? (
+                        <Link
+                          className="text-red-600 hover:underline"
+                          href={`/reservations/${reservation.id}/cancel`}
+                        >
+                          예약 취소
+                        </Link>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </section>
   );
 }

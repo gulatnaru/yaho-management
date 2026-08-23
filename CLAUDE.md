@@ -19,3 +19,8 @@ AGENTS.md 의 Workflow 절에 적힌 `$yaho-spec` 등은 위 커맨드로 읽는
 - 구현 전에 plan mode 또는 architect 로 설계를 먼저 확정한다.
 - qa 와 reviewer 는 도구 수준에서 파일 수정이 막혀 있다. 수정은 developer 가 한다.
 - 한 번에 한 기능만 진행한다.
+
+## Language
+사용자와의 모든 대화는 한국어로 한다.
+설명, 질문, 완료 보고, 커밋 메시지 본문 모두 한국어를 사용한다.
+코드, 변수명, 파일명, Conventional Commits 접두어(feat, fix 등)는 영어를 유지한다.

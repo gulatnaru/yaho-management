@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
+import { getClassDisplayStatus, type ClassDisplayStatus } from "@/lib/classes/status";
 
 export type ClassListStatusValue = "SCHEDULED" | "CANCELLED" | "COMPLETED";
 
@@ -17,16 +18,16 @@ export interface ClassTableProps {
   items: ClassListRow[];
 }
 
-const STATUS_LABEL: Record<ClassListStatusValue, string> = {
+const STATUS_LABEL: Record<ClassDisplayStatus, string> = {
   SCHEDULED: "예정",
   CANCELLED: "취소",
-  COMPLETED: "완료",
+  ENDED: "완료",
 };
 
-const STATUS_VARIANT: Record<ClassListStatusValue, NonNullable<BadgeProps["variant"]>> = {
+const STATUS_VARIANT: Record<ClassDisplayStatus, NonNullable<BadgeProps["variant"]>> = {
   SCHEDULED: "default",
   CANCELLED: "secondary",
-  COMPLETED: "success",
+  ENDED: "success",
 };
 
 export function ClassTable({ items }: ClassTableProps) {
@@ -48,19 +49,22 @@ export function ClassTable({ items }: ClassTableProps) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {items.map((classItem) => (
-          <TableRow key={classItem.id}>
-            <TableCell>{formatKstDateTimeRange(classItem.startsAt, classItem.endsAt)}</TableCell>
-            <TableCell>
-              <Link className="font-medium hover:underline" href={`/classes/${classItem.id}`}>
-                {classItem.program.name}
-              </Link>
-            </TableCell>
-            <TableCell>
-              <Badge variant={STATUS_VARIANT[classItem.status]}>{STATUS_LABEL[classItem.status]}</Badge>
-            </TableCell>
-          </TableRow>
-        ))}
+        {items.map((classItem) => {
+          const displayStatus = getClassDisplayStatus(classItem);
+          return (
+            <TableRow key={classItem.id}>
+              <TableCell>{formatKstDateTimeRange(classItem.startsAt, classItem.endsAt)}</TableCell>
+              <TableCell>
+                <Link className="font-medium hover:underline" href={`/classes/${classItem.id}`}>
+                  {classItem.program.name}
+                </Link>
+              </TableCell>
+              <TableCell>
+                <Badge variant={STATUS_VARIANT[displayStatus]}>{STATUS_LABEL[displayStatus]}</Badge>
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
