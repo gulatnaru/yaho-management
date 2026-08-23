@@ -81,6 +81,9 @@ $yaho-spec → $yaho-plan → $yaho-build → $yaho-qa → $yaho-review → (수
 - 설계 승인 없이 구현을 시작하지 않는다.
 - 요건에 Open Questions 가 남아 있으면 구현을 시작하지 않는다.
 - 한 번에 한 기능만 진행한다. 여러 Phase 를 동시에 열지 않는다.
+- 코드 변경(app/, lib/, tests/, prisma/)은 그 변경이 아무리 작아도 예외 없이 $yaho-build(developer 서브에이전트)를 거친다.
+  오케스트레이터/최상위 세션이 "간단한 수정"이라는 이유로 직접 편집하지 않는다 — developer 를 거쳐야
+  테스트 작성과 lint/test/build 확인이 같이 따라온다.
 
 ## Decision Rules
 - 금액, 환불 정책, 개인정보 수집 항목을 임의로 결정하지 않는다.
