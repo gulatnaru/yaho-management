@@ -296,3 +296,19 @@
 - Decision: Option A를 채택한다 — Preview 배포는 운영(Production) DB와는 분리되어 있지만 모든 PR이 공유하는 Supabase 프로젝트 1개를 사용한다. PR/브랜치별 DB Branching은 채택하지 않는다. Preview 배포 자체는 계속 켜 둔다.
 - Reason: docs/DEPLOYMENT.md의 Migration policy(ADR 이전부터 기록됨)에 따라 Preview 배포에서는 migration을 자동 실행하지 않는다 — 즉 Preview DB의 스키마는 PR마다 달라지지 않고 항상 수동으로 관리되는 하나의 스키마 상태를 공유한다. 이 때문에 PR별로 DB를 물리적으로 격리해야 할 필요성이 낮다. 또한 이 프로젝트는 동시에 여러 PR이 열려 있는 경우가 드물어 여러 PR이 같은 Preview DB의 테스트 데이터를 두고 충돌할 실익도 작다. DB Branching은 관리 복잡도(브랜치 생성/삭제 자동화, 브랜치별 마이그레이션 동기화)를 추가하는데, 위 두 이유로 그 비용을 감수할 근거가 부족하다.
 - Consequences: 여러 PR의 Preview 배포가 같은 Supabase 프로젝트의 데이터를 공유하므로, 한 PR의 Preview에서 만든 테스트 데이터가 다른 PR의 Preview 화면에도 보일 수 있다. 이는 알려진 트레이드오프로 받아들인다. 동시에 열린 PR이 많아지거나, Preview 데이터 충돌이 실제로 문제가 되면 그때 Option B(DB Branching) 도입을 재검토한다. docs/DEPLOYMENT.md의 Environment separation 절 문구를 이 결정에 맞춰 정정한다.
+
+## ADR-031: 출결 기록이 예약 상태(Reservation.status)를 실제로 전환한다 (ADR-026 후속, Phase 6)
+- Status: Accepted
+- Date: 2026-08-24
+- Context: ADR-026은 Reservation의 실제 COMPLETED/NO_SHOW 전환 메커니즘을 "Phase 6(안전 정보/출결)의 몫"으로 명시적으로 남겨두었다. Phase 6 착수를 위해 $yaho-spec 단계에서 이 결정이 필요했다.
+- Decision: 클래스 상세 화면에서 예약별 출결(참석/불참)을 기록하면, 서버 액션이 같은 트랜잭션에서 Reservation.attendance를 PRESENT/ABSENT로 채우는 동시에 Reservation.status를 PRESENT→COMPLETED, ABSENT→NO_SHOW로 전환한다. 이는 운영자가 직접 실행하는 쓰기 동작이며, ADR-026이 지양한 "확인 없는 자동 일괄 전환"(배치/크론 등)과는 다르다 — ClassSchedule.status를 COMPLETED로 전환하는 메커니즘은 이번 결정에 포함하지 않으며 ADR-026대로 계속 만들지 않는다(클래스 자체의 "완료" 판정은 여전히 endsAt 기준 조회 시점 계산).
+- Reason: 출결은 운영자가 현장에서 실제로 확인한 뒤 입력하는 행위이므로 ADR-026이 우려했던 "출결 미확인 상태에서 참여완료로 잘못 기록되는" 문제가 발생하지 않는다. attendance 필드만 채우고 status를 그대로 두면 이후 매출·통계(Phase 9)가 status와 attendance 두 값을 모두 조합해서 봐야 하므로 로직이 이중화된다. status를 함께 전환하면 "참여 아동 수" 등 기존에 status 기준으로 설계된 집계 로직을 그대로 재사용할 수 있다.
+- Consequences: 출결 기록은 RESERVED 상태의 예약에만 허용한다(CANCELLED된 예약, 이미 COMPLETED/NO_SHOW로 전환된 예약은 대상에서 제외). 오기록 정정(예: PRESENT로 잘못 기록한 것을 ABSENT로 바꾸는 절차, 혹은 그 반대)의 상세 규칙은 이번 ADR로 정하지 않았으므로 $yaho-plan 설계 단계에서 구체화해야 한다. ClassSchedule.status는 여전히 SCHEDULED로 남으므로, "예정" 목록 필터(ADR-028)는 출결 기록 여부와 무관하게 계속 endsAt 기준으로만 동작한다.
+
+## ADR-032: 클래스 보험 정보는 클래스 단위 컬럼을 유지하되, "직전 클래스 값 불러오기" 편의 기능을 추가한다
+- Status: Accepted
+- Date: 2026-08-24
+- Context: REQUIREMENTS.md 24장은 "보험을 클래스 단위로 가입하는지 연간 단위인지"를 미결정으로 남겨두었다. Phase 6 착수를 위해, 스키마(ClassSchedule의 insured/insurer/insurancePolicyNo 컬럼)를 바꾸지 않고도 연간 계약처럼 값이 매번 반복되는 실사용 패턴을 지원할지 결정이 필요했다.
+- Decision: ClassSchedule의 보험 필드 구조는 클래스 단위 컬럼으로 그대로 유지한다(스키마 변경 없음). 클래스 생성/수정 폼에 "가장 최근 클래스의 보험 정보 불러오기" 편의 기능을 추가해 반복 입력 부담을 줄인다.
+- Reason: 실제 계약이 클래스 단위인지 연간 단위인지는 여전히 알 수 없지만(24장 미결정 유지), 클래스 단위 컬럼 구조는 두 경우 모두 표현 가능하다. 스키마를 바꾸지 않고 UI 편의 기능만으로 반복 입력 문제를 완화할 수 있다.
+- Consequences: "불러오기" 기준(전체 클래스 중 가장 최근인지, 같은 프로그램 내 최근인지)은 $yaho-plan에서 구체화한다. 실제 계약 형태가 확인되면 REQUIREMENTS.md 24장 항목은 그때 별도로 해소한다 — 이번 결정은 UI 편의 기능일 뿐 그 질문 자체를 해소하지 않는다.
