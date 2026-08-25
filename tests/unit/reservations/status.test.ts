@@ -20,4 +20,9 @@ describe("getReservationDisplayStatus", () => {
   it("returns RESERVED when RESERVED and the class is still scheduled", () => {
     expect(getReservationDisplayStatus({ status: "RESERVED" }, futureClass, now)).toBe("RESERVED");
   });
+
+  it("preserves actual COMPLETED and NO_SHOW attendance states", () => {
+    expect(getReservationDisplayStatus({ status: "COMPLETED" }, futureClass, now)).toBe("COMPLETED");
+    expect(getReservationDisplayStatus({ status: "NO_SHOW" }, futureClass, now)).toBe("NO_SHOW");
+  });
 });

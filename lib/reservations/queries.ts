@@ -49,11 +49,13 @@ export async function listReservations(params: ListReservationsParams) {
   };
 }
 
-// Phase 8(결제/환불) 소유 필드인 paymentItem 과 Phase 6(출결) 소유 필드인 attendance 는
-// 목록과 마찬가지로 이번 Phase 스코프가 아니므로 select 하지 않는다.
+// 목록에는 출결/결제 필드를 노출하지 않는다. 상세 화면에서만 출결 상태와 기록 시각을 사용한다.
 const RESERVATION_DETAIL_SELECT = {
   id: true,
   status: true,
+  attendance: true,
+  attendanceRecordedAt: true,
+  attendanceRecordedBy: { select: { name: true } },
   reservedAt: true,
   memo: true,
   cancelledAt: true,
@@ -88,13 +90,33 @@ export async function getReservationDetail(id: string) {
 const CLASS_RESERVATION_LIST_SELECT = {
   id: true,
   status: true,
+  attendance: true,
+  attendanceRecordedAt: true,
+  attendanceRecordedBy: { select: { name: true } },
   child: { select: { id: true, name: true } },
 } as const;
 
 export async function listReservationsByClassSchedule(classScheduleId: string) {
   return prisma.reservation.findMany({
     where: { classScheduleId },
-    select: CLASS_RESERVATION_LIST_SELECT,
+    select: {
+      ...CLASS_RESERVATION_LIST_SELECT,
+      child: {
+        select: {
+          id: true,
+          name: true,
+          safetyInfo: {
+            select: {
+              allergies: true,
+              emergencyNotes: true,
+              emergencyContactName: true,
+              emergencyContactPhone: true,
+              emergencyContactRelation: true,
+            },
+          },
+        },
+      },
+    },
     orderBy: { reservedAt: "asc" },
   });
 }

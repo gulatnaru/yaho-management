@@ -14,7 +14,7 @@ vi.mock("@/lib/db/prisma", () => ({
   },
 }));
 
-const { listReservations, getReservationDetail } = await import("@/lib/reservations/queries");
+const { listReservations, getReservationDetail, listReservationsByClassSchedule } = await import("@/lib/reservations/queries");
 
 describe("listReservations", () => {
   beforeEach(() => {
@@ -83,14 +83,15 @@ describe("getReservationDetail", () => {
   });
 
   // 회귀 테스트: 상세 조회도 이번 Phase 스코프 밖인 paymentItem/attendance 를 select 하지 않아야 한다.
-  it("never selects paymentItem or attendance fields in the detail query (out of scope for this phase)", async () => {
+  it("selects attendance fields for the Phase 6 reservation detail", async () => {
     reservationFindUniqueMock.mockResolvedValue({ id: "reservation-1" });
 
     await getReservationDetail("reservation-1");
 
     const [[callArg]] = reservationFindUniqueMock.mock.calls;
     expect(callArg.select).not.toHaveProperty("paymentItem");
-    expect(callArg.select).not.toHaveProperty("attendance");
+    expect(callArg.select).toHaveProperty("attendance", true);
+    expect(callArg.select).toHaveProperty("attendanceRecordedAt", true);
     expect(callArg.select).toEqual(
       expect.objectContaining({
         id: true,
@@ -105,5 +106,26 @@ describe("getReservationDetail", () => {
         cancelledBy: { select: { id: true, name: true } },
       }),
     );
+  });
+});
+
+describe("listReservationsByClassSchedule", () => {
+  beforeEach(() => {
+    reservationFindManyMock.mockReset();
+    reservationFindManyMock.mockResolvedValue([]);
+  });
+
+  it("loads participant safety fields in the class-detail query", async () => {
+    await listReservationsByClassSchedule("class-1");
+
+    expect(reservationFindManyMock).toHaveBeenCalledTimes(1);
+    const [[callArg]] = reservationFindManyMock.mock.calls;
+    expect(callArg.select.child.select.safetyInfo.select).toEqual({
+      allergies: true,
+      emergencyNotes: true,
+      emergencyContactName: true,
+      emergencyContactPhone: true,
+      emergencyContactRelation: true,
+    });
   });
 });

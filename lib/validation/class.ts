@@ -43,6 +43,10 @@ export const classInputSchema = z
       .transform((ids) => Array.from(new Set(ids)))
       .pipe(z.array(z.string()).min(1, "선생님을 1명 이상 배정해주세요")),
     memo: z.string().optional(),
+    insured: z.boolean().default(false),
+    insurer: z.string().trim().max(200).optional(),
+    insurancePolicyNo: z.string().trim().max(200).optional(),
+    safetyMemo: z.string().trim().max(2000).optional(),
   })
   .transform((data) => ({
     ...data,

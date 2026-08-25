@@ -1,12 +1,11 @@
 import { getClassDisplayStatus } from "@/lib/classes/status";
 
 /**
- * 예약 "종료" 여부도 DB 에 쓰지 않는다. Reservation.status 는 계속 RESERVED 로 남아 있고,
- * 소속 클래스가 종료됐으면(getClassDisplayStatus 기준) 화면에서만 "종료"로 계산해서 보여준다.
- * 단 예약이 이미 취소된 경우(CANCELLED)는 클래스 상태와 무관하게 항상 "취소"로 표시한다.
- * (analyst 확정 결정: docs/DECISIONS.md 참고 — 이 파일에서는 로직만 구현한다.)
+ * 아직 출결이 기록되지 않은 RESERVED 예약은 소속 클래스가 종료됐을 때 화면에서만
+ * "종료"로 계산해서 보여준다. 출결이 기록된 COMPLETED/NO_SHOW는 실제 상태를 우선한다.
+ * 취소된 예약(CANCELLED)은 클래스 상태와 무관하게 항상 "취소"로 표시한다.
  */
-export type ReservationDisplayStatus = "RESERVED" | "CANCELLED" | "ENDED";
+export type ReservationDisplayStatus = "RESERVED" | "CANCELLED" | "ENDED" | "COMPLETED" | "NO_SHOW";
 
 export function getReservationDisplayStatus(
   reservation: { status: "RESERVED" | "CANCELLED" | "COMPLETED" | "NO_SHOW" },
@@ -14,6 +13,8 @@ export function getReservationDisplayStatus(
   now: Date = new Date(),
 ): ReservationDisplayStatus {
   if (reservation.status === "CANCELLED") return "CANCELLED";
+  if (reservation.status === "COMPLETED") return "COMPLETED";
+  if (reservation.status === "NO_SHOW") return "NO_SHOW";
   const classDisplay = getClassDisplayStatus(classSchedule, now);
   if (classDisplay === "ENDED") return "ENDED";
   return "RESERVED";

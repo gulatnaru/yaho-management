@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { ProgramCandidate, TeacherCandidate } from "@/lib/classes/candidates";
 import { CAPACITY_MAX, CAPACITY_MIN } from "@/lib/validation/class";
 import { createClass, updateClass, type ClassFormState } from "../actions";
+import { loadLatestInsurancePrefill } from "../insurance-actions";
 
 export type ClassFormDefaultValues = {
   programId: string;
@@ -20,6 +21,10 @@ export type ClassFormDefaultValues = {
   capacity: string;
   teacherIds: string[];
   memo: string;
+  insured?: boolean;
+  insurer?: string;
+  insurancePolicyNo?: string;
+  safetyMemo?: string;
 };
 
 export interface ClassFormProps {
@@ -39,6 +44,10 @@ const emptyDefaults: ClassFormDefaultValues = {
   capacity: String(CAPACITY_MAX),
   teacherIds: [],
   memo: "",
+  insured: false,
+  insurer: "",
+  insurancePolicyNo: "",
+  safetyMemo: "",
 };
 
 const initialState: ClassFormState = {};
@@ -52,6 +61,20 @@ export function ClassForm({
 }: ClassFormProps) {
   const action = mode === "edit" && classId ? updateClass.bind(null, classId) : createClass;
   const [state, formAction, pending] = useActionState(action, initialState);
+  const [insurance, setInsurance] = useState({
+    insured: defaultValues.insured ?? false,
+    insurer: defaultValues.insurer ?? "",
+    insurancePolicyNo: defaultValues.insurancePolicyNo ?? "",
+    safetyMemo: defaultValues.safetyMemo ?? "",
+  });
+  const [prefillPending, startPrefill] = useTransition();
+
+  function applyLatestInsurance() {
+    startPrefill(async () => {
+      const latest = await loadLatestInsurancePrefill(classId);
+      if (latest) setInsurance({ insured: latest.insured, insurer: latest.insurer ?? "", insurancePolicyNo: latest.insurancePolicyNo ?? "", safetyMemo: latest.safetyMemo ?? "" });
+    });
+  }
 
   return (
     <form action={formAction} className="max-w-xl space-y-6" noValidate>
@@ -209,6 +232,24 @@ export function ClassForm({
           </p>
         ) : null}
       </div>
+
+      <fieldset className="space-y-3 rounded-md border border-slate-200 p-4">
+        <legend className="px-1 text-sm font-semibold">보험 및 안전 메모</legend>
+        <div className="flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={insurance.insured} name="insured" onChange={(event) => setInsurance((current) => ({ ...current, insured: event.target.checked }))} />
+            보험 가입
+          </label>
+          <Button disabled={prefillPending} onClick={applyLatestInsurance} type="button">
+            {prefillPending ? "불러오는 중..." : "직전 클래스 값 불러오기"}
+          </Button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5"><Label htmlFor="insurer">보험사</Label><Input id="insurer" name="insurer" onChange={(event) => setInsurance((current) => ({ ...current, insurer: event.target.value }))} value={insurance.insurer} /></div>
+          <div className="space-y-1.5"><Label htmlFor="insurancePolicyNo">증권번호</Label><Input id="insurancePolicyNo" name="insurancePolicyNo" onChange={(event) => setInsurance((current) => ({ ...current, insurancePolicyNo: event.target.value }))} value={insurance.insurancePolicyNo} /></div>
+        </div>
+        <div className="space-y-1.5"><Label htmlFor="safetyMemo">활동 장소 안전 특이사항</Label><Textarea id="safetyMemo" name="safetyMemo" onChange={(event) => setInsurance((current) => ({ ...current, safetyMemo: event.target.value }))} rows={3} value={insurance.safetyMemo} /></div>
+      </fieldset>
 
       {state.formError ? (
         <p aria-live="polite" className="text-sm text-red-600" role="alert">

@@ -59,6 +59,10 @@ export default async function EditClassPage({ params }: EditClassPageProps) {
           capacity: String(classDetail.capacity),
           teacherIds: currentTeacherIds,
           memo: classDetail.memo ?? "",
+          insured: classDetail.insured,
+          insurer: classDetail.insurer ?? "",
+          insurancePolicyNo: classDetail.insurancePolicyNo ?? "",
+          safetyMemo: classDetail.safetyMemo ?? "",
         }}
         mode="edit"
         programCandidates={programCandidates}

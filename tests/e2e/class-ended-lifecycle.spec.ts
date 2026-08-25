@@ -144,6 +144,7 @@ test.describe("클래스 종료(endsAt 경과) 라이프사이클", () => {
     await login(page);
 
     await page.goto(`/reservations/new?classScheduleId=${pastClassId}`);
+    await page.waitForLoadState("networkidle");
 
     // 종료된 클래스는 후보 목록에 없으므로 프리필 경고가 뜬다(제출 자체를 막지는 않는다).
     await expect(page.getByText("선택한 클래스는 이미 종료되었습니다.")).toBeVisible();
@@ -160,8 +161,15 @@ test.describe("클래스 종료(endsAt 경과) 라이프사이클", () => {
       select.value = id;
     }, pastClassId);
 
+    await expect(page.locator("#classScheduleId")).toHaveValue(pastClassId);
     await page.selectOption("#childId", childId);
-    await page.getByRole("button", { name: "예약 등록" }).click();
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes("/reservations/new") && response.request().method() === "POST",
+      ),
+      page.getByRole("button", { name: "예약 등록" }).click(),
+    ]);
 
     await expect(page.getByText("취소되었거나 완료된 클래스에는 예약할 수 없습니다.")).toBeVisible();
 

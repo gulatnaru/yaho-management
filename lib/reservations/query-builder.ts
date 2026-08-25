@@ -37,9 +37,9 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * dateFrom/dateTo 는 classSchedule.startsAt 기준(KST 기준 날짜 문자열 "YYYY-MM-DD")이다.
  * childName/programName 은 각각 child.name / classSchedule.program.name 의 contains(insensitive) 관계 필터다.
  *
- * status 는 화면 표시 상태(getReservationDisplayStatus) 기준으로 해석한다 — "RESERVED"/"COMPLETED" 필터는
- * 둘 다 DB status="RESERVED" 를 전제로 소속 클래스의 endsAt 을 now 와 비교해 나눈다.
- * "CANCELLED"/"NO_SHOW"/"all" 은 시간 조건 없이 기존대로 동작한다.
+ * status 는 화면 표시 상태(getReservationDisplayStatus) 기준으로 해석한다. COMPLETED는
+ * 출결로 실제 완료된 예약과, 아직 출결을 기록하지 않은 과거 RESERVED 예약을 함께 포함한다.
+ * CANCELLED/NO_SHOW/all은 시간 조건 없이 기존대로 동작한다.
  */
 export function buildReservationListWhere(
   params: ReservationListParams,
@@ -50,7 +50,10 @@ export function buildReservationListWhere(
   if (params.status === "RESERVED") {
     where.status = "RESERVED";
   } else if (params.status === "COMPLETED") {
-    where.status = "RESERVED";
+    where.OR = [
+      { status: "COMPLETED" },
+      { status: "RESERVED", classSchedule: { endsAt: { lt: now } } },
+    ];
   } else if (params.status && params.status !== "all") {
     where.status = params.status;
   }
@@ -75,8 +78,6 @@ export function buildReservationListWhere(
   const endsAt: Prisma.DateTimeFilter = {};
   if (params.status === "RESERVED") {
     endsAt.gte = now;
-  } else if (params.status === "COMPLETED") {
-    endsAt.lt = now;
   }
   const hasEndsAtFilter = Object.keys(endsAt).length > 0;
 

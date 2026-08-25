@@ -30,7 +30,11 @@ export type ClassFormFieldKey =
   | "location"
   | "capacity"
   | "teacherIds"
-  | "memo";
+  | "memo"
+  | "insured"
+  | "insurer"
+  | "insurancePolicyNo"
+  | "safetyMemo";
 
 export type ClassFormValues = {
   programId?: string;
@@ -41,6 +45,10 @@ export type ClassFormValues = {
   capacity?: string;
   teacherIds?: string[];
   memo?: string;
+  insured?: string;
+  insurer?: string;
+  insurancePolicyNo?: string;
+  safetyMemo?: string;
 };
 
 export type ClassFormState = {
@@ -59,6 +67,10 @@ function parseClassForm(formData: FormData) {
     capacity: formData.get("capacity") || undefined,
     teacherIds: formData.getAll("teacherIds").filter((value): value is string => typeof value === "string"),
     memo: formData.get("memo") || undefined,
+    insured: formData.get("insured") === "on",
+    insurer: formData.get("insurer") || undefined,
+    insurancePolicyNo: formData.get("insurancePolicyNo") || undefined,
+    safetyMemo: formData.get("safetyMemo") || undefined,
   });
 }
 
@@ -80,6 +92,10 @@ function readClassFormValues(formData: FormData): ClassFormValues {
     capacity: toStringOrUndefined(formData.get("capacity")),
     teacherIds: formData.getAll("teacherIds").filter((value): value is string => typeof value === "string"),
     memo: toStringOrUndefined(formData.get("memo")),
+    insured: formData.get("insured") === "on" ? "on" : undefined,
+    insurer: toStringOrUndefined(formData.get("insurer")),
+    insurancePolicyNo: toStringOrUndefined(formData.get("insurancePolicyNo")),
+    safetyMemo: toStringOrUndefined(formData.get("safetyMemo")),
   };
 }
 
@@ -96,6 +112,9 @@ function toFieldErrors(error: import("zod").ZodError<unknown>): Partial<Record<C
     "capacity",
     "teacherIds",
     "memo",
+    "insurer",
+    "insurancePolicyNo",
+    "safetyMemo",
   ];
   const result: Partial<Record<ClassFormFieldKey, string[]>> = {};
   for (const key of known) {
@@ -169,6 +188,10 @@ export async function createClass(_prevState: ClassFormState, formData: FormData
           capacity: data.capacity,
           status: "SCHEDULED",
           memo: data.memo || null,
+          insured: data.insured,
+          insurer: data.insurer || null,
+          insurancePolicyNo: data.insurancePolicyNo || null,
+          safetyMemo: data.safetyMemo || null,
         },
       });
 
@@ -257,6 +280,10 @@ export async function updateClass(
           location: data.location,
           capacity: data.capacity,
           memo: data.memo || null,
+          insured: data.insured,
+          insurer: data.insurer || null,
+          insurancePolicyNo: data.insurancePolicyNo || null,
+          safetyMemo: data.safetyMemo || null,
         },
       });
 
