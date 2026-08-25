@@ -52,14 +52,12 @@ describe("listClasses", () => {
     expect(findManyMock.mock.calls[0][0].skip).toBe(0);
   });
 
-  it("never selects Phase 6 safety-info fields (insured/insurer/insurancePolicyNo/safetyMemo)", async () => {
+  it("never selects Phase 6 safety-info fields in the list query", async () => {
     await listClasses({});
 
     const callArgs = findManyMock.mock.calls[0][0];
     const keys = collectKeys(callArgs.select);
-    for (const forbidden of FORBIDDEN_SAFETY_KEYS) {
-      expect(keys.has(forbidden)).toBe(false);
-    }
+    for (const field of FORBIDDEN_SAFETY_KEYS) expect(keys.has(field)).toBe(false);
   });
 });
 
@@ -76,14 +74,12 @@ describe("getClassDetail", () => {
     expect(result).toBeNull();
   });
 
-  it("never selects Phase 6 safety-info fields (insured/insurer/insurancePolicyNo/safetyMemo)", async () => {
+  it("selects Phase 6 safety fields on the class detail", async () => {
     await getClassDetail("class-1");
 
     const callArgs = findUniqueMock.mock.calls[0][0];
     const keys = collectKeys(callArgs.select);
-    for (const forbidden of FORBIDDEN_SAFETY_KEYS) {
-      expect(keys.has(forbidden)).toBe(false);
-    }
+    for (const field of FORBIDDEN_SAFETY_KEYS) expect(keys.has(field)).toBe(true);
   });
 
   it("includes program, teachers, and cancelledBy relations", async () => {

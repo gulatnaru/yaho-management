@@ -82,9 +82,14 @@ describe("display-status-aware RESERVED/COMPLETED filtering", () => {
     expect(where).toEqual({ status: "RESERVED", classSchedule: { endsAt: { gte: now } } });
   });
 
-  it("status=COMPLETED filters to DB status RESERVED and classSchedule.endsAt < now", () => {
+  it("status=COMPLETED includes recorded completions and past unrecorded reservations", () => {
     const where = buildReservationListWhere({ status: "COMPLETED" }, now);
-    expect(where).toEqual({ status: "RESERVED", classSchedule: { endsAt: { lt: now } } });
+    expect(where).toEqual({
+      OR: [
+        { status: "COMPLETED" },
+        { status: "RESERVED", classSchedule: { endsAt: { lt: now } } },
+      ],
+    });
   });
 
   it("status=CANCELLED has no endsAt condition and no classSchedule filter", () => {
@@ -109,8 +114,11 @@ describe("display-status-aware RESERVED/COMPLETED filtering", () => {
     const where = buildReservationListWhere({ status: "COMPLETED", programName: "발레" }, now);
     expect(where.classSchedule).toEqual({
       program: { name: { contains: "발레", mode: "insensitive" } },
-      endsAt: { lt: now },
     });
+    expect(where.OR).toEqual([
+      { status: "COMPLETED" },
+      { status: "RESERVED", classSchedule: { endsAt: { lt: now } } },
+    ]);
   });
 
   it("defaults now to the current time when not provided", () => {

@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/authorization";
+
+export const dynamic = "force-dynamic";
 import { NavDrawer } from "./_components/nav-drawer";
 
 // Phase가 늘어날 때마다 이 배열에 { href, label } 을 추가한다.

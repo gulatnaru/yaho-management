@@ -7,8 +7,7 @@ export type ListClassesParams = ClassListParams & {
   page?: number;
 };
 
-// Phase 6(보험/안전정보) 소유 필드 — insured/insurer/insurancePolicyNo/safetyMemo 는
-// 절대 select 하지 않는다. 목록/상세 모두 select 를 명시적으로 나열해 스코프 누출을 막는다.
+// 목록에는 클래스 보험/안전 필드를 노출하지 않는다. 상세 화면은 별도 select로 필요한 필드만 읽는다.
 const CLASS_LIST_SELECT = {
   id: true,
   startsAt: true,
@@ -59,6 +58,10 @@ const CLASS_DETAIL_SELECT = {
   capacity: true,
   status: true,
   memo: true,
+  insured: true,
+  insurer: true,
+  insurancePolicyNo: true,
+  safetyMemo: true,
   cancelledAt: true,
   cancelReason: true,
   cancelDetail: true,

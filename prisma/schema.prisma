@@ -141,10 +141,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  cancelledClasses      ClassSchedule[] @relation("ClassCancelledBy")
-  cancelledReservations Reservation[]   @relation("ReservationCancelledBy")
-  processedRefunds      Refund[]        @relation("RefundProcessedBy")
+  cancelledClasses      ClassSchedule[]   @relation("ClassCancelledBy")
+  cancelledReservations Reservation[]     @relation("ReservationCancelledBy")
+  processedRefunds      Refund[]          @relation("RefundProcessedBy")
   safetyInfoUpdates     ChildSafetyInfo[] @relation("SafetyInfoUpdatedBy")
+  consentRecords        ChildConsent[]    @relation("ConsentRecordedBy")
+  attendanceRecords     Reservation[]     @relation("AttendanceRecordedBy")
 }
 
 // ─────────────────────────────────────────────
@@ -195,15 +197,17 @@ model ChildSafetyInfo {
 // append-only 이력. 동의/철회할 때마다 새 행을 쌓는다.
 // 현재 상태 = 해당 consentType 의 recordedAt 최신 행. 기존 행을 수정하거나 삭제하지 않는다.
 model ChildConsent {
-  id          String        @id @default(cuid())
-  childId     String
-  consentType ConsentType
-  action      ConsentAction
-  recordedAt  DateTime      @default(now())
-  memo        String?
-  createdAt   DateTime      @default(now())
+  id           String        @id @default(cuid())
+  childId      String
+  consentType  ConsentType
+  action       ConsentAction
+  recordedAt   DateTime      @default(now())
+  memo         String?
+  createdAt    DateTime      @default(now())
+  recordedById String?
 
-  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  child      Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  recordedBy User? @relation("ConsentRecordedBy", fields: [recordedById], references: [id])
 
   @@index([childId, consentType, recordedAt])
 }
@@ -310,13 +314,15 @@ model ClassTeacher {
 // ─────────────────────────────────────────────
 
 model Reservation {
-  id              String            @id @default(cuid())
-  childId         String
-  classScheduleId String
-  status          ReservationStatus @default(RESERVED)
-  attendance      AttendanceStatus?
-  reservedAt      DateTime          @default(now())
-  memo            String?
+  id                     String            @id @default(cuid())
+  childId                String
+  classScheduleId        String
+  status                 ReservationStatus @default(RESERVED)
+  attendance             AttendanceStatus?
+  attendanceRecordedById String?
+  attendanceRecordedAt   DateTime?
+  reservedAt             DateTime          @default(now())
+  memo                   String?
 
   // 개인 예약 취소 (클래스 전체 취소와 구분)
   cancelledAt   DateTime?
@@ -327,10 +333,11 @@ model Reservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  child         Child         @relation(fields: [childId], references: [id])
-  classSchedule ClassSchedule @relation(fields: [classScheduleId], references: [id])
-  cancelledBy   User?         @relation("ReservationCancelledBy", fields: [cancelledById], references: [id])
-  paymentItem   PaymentItem?
+  child                Child         @relation(fields: [childId], references: [id])
+  classSchedule        ClassSchedule @relation(fields: [classScheduleId], references: [id])
+  cancelledBy          User?         @relation("ReservationCancelledBy", fields: [cancelledById], references: [id])
+  attendanceRecordedBy User?         @relation("AttendanceRecordedBy", fields: [attendanceRecordedById], references: [id])
+  paymentItem          PaymentItem?
 
   @@unique([classScheduleId, childId])
   @@index([childId])
