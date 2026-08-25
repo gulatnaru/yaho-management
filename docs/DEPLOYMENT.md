@@ -2,6 +2,12 @@
 
 Vercel 프로젝트는 GitHub 저장소와 연결한다. `main`은 Production, pull request는 Preview 배포를 사용한다.
 
+## Region
+
+- Vercel 함수(Serverless Function) 리전은 `syd1`(시드니)로 설정한다.
+- Supabase DB가 시드니 리전에 있어, 함수를 같은 리전에 두면 함수-DB 간 요청마다 발생하는 네트워크 왕복(round trip)이 줄어든다. 실제로 이 설정 후 응답 속도가 눈에 띄게 빨라진 것을 확인했다.
+- DB 리전을 나중에 서울로 옮기면 함수 리전도 반드시 함께 옮겨야 한다. 함수와 DB가 다른 리전에 있으면 모든 DB 요청이 리전 간 왕복을 거치게 되어 이 설정의 이점이 사라지고 오히려 지연이 늘어난다.
+
 ## Environment separation
 
 - Production의 `DATABASE_URL`과 `DIRECT_URL`은 운영 Supabase DB를 사용한다.
