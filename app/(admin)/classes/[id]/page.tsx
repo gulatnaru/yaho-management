@@ -14,7 +14,7 @@ import { toTelHref } from "@/lib/shared/contact";
 import { cn } from "@/lib/utils";
 import { AttendanceForm } from "../_components/attendance-form";
 
-const CLASS_LABEL: Record<ClassDisplayStatus, string> = { SCHEDULED: "예정", CANCELLED: "취소", ENDED: "종료" };
+const CLASS_LABEL: Record<ClassDisplayStatus, string> = { SCHEDULED: "예정", CANCELLED: "취소", ENDED: "완료" };
 const CLASS_VARIANT: Record<ClassDisplayStatus, NonNullable<BadgeProps["variant"]>> = { SCHEDULED: "default", CANCELLED: "secondary", ENDED: "success" };
 const RESERVATION_LABEL: Record<ReservationDisplayStatus, string> = { RESERVED: "예약됨", CANCELLED: "취소", ENDED: "종료", COMPLETED: "참여완료", NO_SHOW: "노쇼" };
 const RESERVATION_VARIANT: Record<ReservationDisplayStatus, NonNullable<BadgeProps["variant"]>> = { RESERVED: "default", CANCELLED: "secondary", ENDED: "success", COMPLETED: "success", NO_SHOW: "warning" };
