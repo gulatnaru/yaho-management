@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
-import { AttendanceNotRecordableError, correctAttendanceCore, recordAttendanceCore } from "@/lib/reservations/attendance";
+import {
+  AttendanceNotRecordableError,
+  ClassNotEndedError,
+  correctAttendanceCore,
+  recordAttendanceCore,
+} from "@/lib/reservations/attendance";
 
 const attendanceInputSchema = z.object({
   reservationId: z.string().trim().min(1),
@@ -26,12 +31,12 @@ export async function recordAttendanceAction(
 
   const reservation = await prisma.reservation.findUnique({
     where: { id: parsed.data.reservationId },
-    select: { classScheduleId: true, status: true },
+    select: { classScheduleId: true, status: true, classSchedule: { select: { endsAt: true } } },
   });
   if (!reservation) return { error: "예약을 찾을 수 없습니다." };
 
   try {
-    const input = { ...parsed.data, recordedById: session.user.id };
+    const input = { ...parsed.data, recordedById: session.user.id, classEndsAt: reservation.classSchedule.endsAt };
     if (reservation.status === "RESERVED") {
       await recordAttendanceCore(prisma, input);
     } else if (reservation.status === "COMPLETED" || reservation.status === "NO_SHOW") {
@@ -40,6 +45,9 @@ export async function recordAttendanceAction(
       throw new AttendanceNotRecordableError();
     }
   } catch (error) {
+    if (error instanceof ClassNotEndedError) {
+      return { error: "아직 진행 중이거나 시작 전인 클래스는 출결을 기록할 수 없습니다." };
+    }
     if (error instanceof AttendanceNotRecordableError) {
       return { error: "취소된 예약의 출결은 기록할 수 없습니다." };
     }

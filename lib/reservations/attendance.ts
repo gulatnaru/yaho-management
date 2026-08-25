@@ -5,14 +5,24 @@ type ReservationStatusValue = "RESERVED" | "COMPLETED" | "NO_SHOW";
 type PrismaLike = PrismaClient | Prisma.TransactionClient;
 
 export class AttendanceNotRecordableError extends Error {}
+export class ClassNotEndedError extends Error {}
 
 export type RecordAttendanceInput = {
   reservationId: string;
   attendance: AttendanceValue;
   recordedById: string;
+  classEndsAt: Date;
 };
 
-export async function recordAttendanceCore(client: PrismaLike, input: RecordAttendanceInput) {
+export async function recordAttendanceCore(
+  client: PrismaLike,
+  input: RecordAttendanceInput,
+  now: Date = new Date(),
+) {
+  if (now < input.classEndsAt) {
+    throw new ClassNotEndedError();
+  }
+
   const nextStatus: ReservationStatusValue = input.attendance === "PRESENT" ? "COMPLETED" : "NO_SHOW";
   const result = await client.reservation.updateMany({
     where: { id: input.reservationId, status: "RESERVED" },
@@ -30,7 +40,15 @@ export async function recordAttendanceCore(client: PrismaLike, input: RecordAtte
   return { status: nextStatus };
 }
 
-export async function correctAttendanceCore(client: PrismaLike, input: RecordAttendanceInput) {
+export async function correctAttendanceCore(
+  client: PrismaLike,
+  input: RecordAttendanceInput,
+  now: Date = new Date(),
+) {
+  if (now < input.classEndsAt) {
+    throw new ClassNotEndedError();
+  }
+
   const nextStatus: ReservationStatusValue = input.attendance === "PRESENT" ? "COMPLETED" : "NO_SHOW";
   const result = await client.reservation.updateMany({
     where: { id: input.reservationId, status: { in: ["COMPLETED", "NO_SHOW"] } },
