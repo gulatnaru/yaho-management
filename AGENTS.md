@@ -81,6 +81,9 @@ $yaho-spec → $yaho-plan → $yaho-build → $yaho-qa → $yaho-review → (수
 - 설계 승인 없이 구현을 시작하지 않는다.
 - 요건에 Open Questions 가 남아 있으면 구현을 시작하지 않는다.
 - 한 번에 한 기능만 진행한다. 여러 Phase 를 동시에 열지 않는다.
+- 코드 변경(app/, lib/, tests/, prisma/)은 그 변경이 아무리 작아도 예외 없이 $yaho-build(developer 서브에이전트)를 거친다.
+  오케스트레이터/최상위 세션이 "간단한 수정"이라는 이유로 직접 편집하지 않는다 — developer 를 거쳐야
+  테스트 작성과 lint/test/build 확인이 같이 따라온다.
 
 ## Decision Rules
 - 금액, 환불 정책, 개인정보 수집 항목을 임의로 결정하지 않는다.
@@ -109,6 +112,13 @@ npm test
 npm run build
 npx prisma migrate dev
 npx prisma studio
+
+`npm run build` 는 `npm run dev` 와 `.next` 캐시를 공유한다. 역할과 무관하게(개발/QA/임시 진단 목적 포함)
+`npm run build` 를 실행하기 전에는 `pgrep -f "next dev"` 등 포트에 의존하지 않는 방법으로 로컬 dev 서버가
+떠 있는지 먼저 확인한다. 떠 있으면 build 를 생략하고 `npx tsc --noEmit` + lint + test 로 대체한 뒤 그 사실을
+보고한다. 두 명령이 충돌하면 lint/test/build 는 모두 통과한 채로 실제 브라우저에서만 CSS 붕괴, 날짜 계산
+오류 등으로 나타나 다른 버그로 오진하기 쉽다(docs/METRICS.md PR 5, Phase 4/PR 10, "공통" 행 — 동일 유형
+3회 반복, 포트 3000 고정 점검 방식이던 이전 규칙(PR #9)으로는 다른 포트에서 뜬 dev 서버를 잡지 못했다).
 
 ## Completion Report
 ### Changed
