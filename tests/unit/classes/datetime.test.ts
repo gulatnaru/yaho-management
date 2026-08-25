@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { combineKstToUtc, formatKstDate, formatKstDateTimeRange, formatKstTime } from "@/lib/classes/datetime";
+import { combineKstToUtc, formatKstDate, formatKstDateTime, formatKstDateTimeRange, formatKstTime } from "@/lib/classes/datetime";
 
 describe("combineKstToUtc", () => {
   it("converts a KST midnight-boundary time to the correct UTC instant", () => {
@@ -49,6 +49,14 @@ describe("formatKstDate / formatKstTime", () => {
       expect(formatKstDate(utc)).toBe(date);
       expect(formatKstTime(utc)).toBe(time);
     }
+  });
+});
+
+describe("formatKstDateTime", () => {
+  it("formats a UTC instant as a KST date and time", () => {
+    const d = new Date("2026-08-25T08:21:54.214Z");
+
+    expect(formatKstDateTime(d)).toBe("2026-08-25 17:21");
   });
 });
 

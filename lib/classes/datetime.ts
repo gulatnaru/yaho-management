@@ -91,6 +91,11 @@ export function formatKstTime(d: Date): string {
   return `${hour}:${minute}`;
 }
 
+/** 저장된 UTC Date 를 KST 기준 "YYYY-MM-DD HH:MM" 문자열로 변환한다. */
+export function formatKstDateTime(d: Date): string {
+  return `${formatKstDate(d)} ${formatKstTime(d)}`;
+}
+
 /**
  * 시작/종료 시각을 KST 기준으로 사람이 읽기 좋은 범위 문자열로 만든다.
  * 같은 날이면 날짜를 한 번만 표기하고, 날짜가 다르면 양쪽 다 표기한다.
