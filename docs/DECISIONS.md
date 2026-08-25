@@ -303,7 +303,7 @@
 - Context: ADR-026은 Reservation의 실제 COMPLETED/NO_SHOW 전환 메커니즘을 "Phase 6(안전 정보/출결)의 몫"으로 명시적으로 남겨두었다. Phase 6 착수를 위해 $yaho-spec 단계에서 이 결정이 필요했다.
 - Decision: 클래스 상세 화면에서 예약별 출결(참석/불참)을 기록하면, 서버 액션이 같은 트랜잭션에서 Reservation.attendance를 PRESENT/ABSENT로 채우는 동시에 Reservation.status를 PRESENT→COMPLETED, ABSENT→NO_SHOW로 전환한다. 이는 운영자가 직접 실행하는 쓰기 동작이며, ADR-026이 지양한 "확인 없는 자동 일괄 전환"(배치/크론 등)과는 다르다 — ClassSchedule.status를 COMPLETED로 전환하는 메커니즘은 이번 결정에 포함하지 않으며 ADR-026대로 계속 만들지 않는다(클래스 자체의 "완료" 판정은 여전히 endsAt 기준 조회 시점 계산).
 - Reason: 출결은 운영자가 현장에서 실제로 확인한 뒤 입력하는 행위이므로 ADR-026이 우려했던 "출결 미확인 상태에서 참여완료로 잘못 기록되는" 문제가 발생하지 않는다. attendance 필드만 채우고 status를 그대로 두면 이후 매출·통계(Phase 9)가 status와 attendance 두 값을 모두 조합해서 봐야 하므로 로직이 이중화된다. status를 함께 전환하면 "참여 아동 수" 등 기존에 status 기준으로 설계된 집계 로직을 그대로 재사용할 수 있다.
-- Consequences: 출결 기록은 RESERVED 상태의 예약에만 허용한다(CANCELLED된 예약, 이미 COMPLETED/NO_SHOW로 전환된 예약은 대상에서 제외). 오기록 정정(예: PRESENT로 잘못 기록한 것을 ABSENT로 바꾸는 절차, 혹은 그 반대)의 상세 규칙은 이번 ADR로 정하지 않았으므로 $yaho-plan 설계 단계에서 구체화해야 한다. ClassSchedule.status는 여전히 SCHEDULED로 남으므로, "예정" 목록 필터(ADR-028)는 출결 기록 여부와 무관하게 계속 endsAt 기준으로만 동작한다.
+- Consequences: 출결 기록은 RESERVED 상태의 예약에만 허용한다(CANCELLED된 예약, 이미 COMPLETED/NO_SHOW로 전환된 예약은 대상에서 제외). 오기록 정정(예: PRESENT로 잘못 기록한 것을 ABSENT로 바꾸는 절차, 혹은 그 반대)의 상세 규칙은 이번 ADR로 정하지 않았으므로 $yaho-plan 설계 단계에서 구체화해야 한다. ClassSchedule.status는 여전히 SCHEDULED로 남으므로, "예정" 목록 필터(ADR-028)는 출결 기록 여부와 무관하게 계속 endsAt 기준으로만 동작한다. 클래스가 아직 끝나지 않았으면(`now < ClassSchedule.endsAt`) 서버는 출결 기록/정정 요청도 `ClassNotEndedError`("아직 진행 중이거나 시작 전인 클래스는 출결을 기록할 수 없습니다.")로 거부한다.
 
 ## ADR-032: 클래스 보험 정보는 클래스 단위 컬럼을 유지하되, "직전 클래스 값 불러오기" 편의 기능을 추가한다
 - Status: Accepted
