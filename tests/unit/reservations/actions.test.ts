@@ -410,11 +410,11 @@ describe("cancelReservation", () => {
 
     const result = await cancelReservation("reservation-1", {}, cancelFormData());
 
-    expect(result.formError).toBe("이미 취소되었거나 종료된 예약입니다.");
+    expect(result.formError).toBe("이미 취소되었거나 취소할 수 없는 예약입니다.");
     expect(reservationUpdateManyMock).not.toHaveBeenCalled();
   });
 
-  it("rejects cancelling a reservation that is COMPLETED", async () => {
+  it("allows cancelling a COMPLETED reservation and preserves attendance fields", async () => {
     requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
     // COMPLETED 는 이미 끝난 클래스에서만 나올 수 있는 상태이므로 소속 클래스의 endsAt 도
     // 과거로 함께 준다 — getReservationDisplayStatus 는 클래스가 끝났는지로 판단한다.
@@ -423,22 +423,24 @@ describe("cancelReservation", () => {
       classSchedule: { status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") },
     });
 
-    const result = await cancelReservation("reservation-1", {}, cancelFormData());
-
-    expect(result.formError).toBe("이미 취소되었거나 종료된 예약입니다.");
-    expect(reservationUpdateManyMock).not.toHaveBeenCalled();
+    reservationUpdateManyMock.mockResolvedValue({ count: 1 });
+    await expect(cancelReservation("reservation-1", {}, cancelFormData())).rejects.toThrow("REDIRECT");
+    const [[callArg]] = reservationUpdateManyMock.mock.calls;
+    expect(callArg.where.OR[1]).toEqual({ status: { in: ["COMPLETED", "NO_SHOW"] } });
+    expect(callArg.data).not.toHaveProperty("attendance");
+    expect(callArg.data).not.toHaveProperty("attendanceRecordedById");
+    expect(callArg.data).not.toHaveProperty("attendanceRecordedAt");
   });
 
-  it("rejects cancelling a reservation that is NO_SHOW", async () => {
+  it("allows cancelling a NO_SHOW reservation", async () => {
     requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
     reservationFindUniqueMock.mockResolvedValue({
       status: "NO_SHOW",
       classSchedule: { status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") },
     });
 
-    const result = await cancelReservation("reservation-1", {}, cancelFormData());
-
-    expect(result.formError).toBe("이미 취소되었거나 종료된 예약입니다.");
+    reservationUpdateManyMock.mockResolvedValue({ count: 1 });
+    await expect(cancelReservation("reservation-1", {}, cancelFormData())).rejects.toThrow("REDIRECT");
   });
 
   it("returns not-found formError when the reservation does not exist", async () => {
@@ -485,7 +487,11 @@ describe("cancelReservation", () => {
 
     expect(reservationUpdateManyMock).toHaveBeenCalledTimes(1);
     const [[callArg]] = reservationUpdateManyMock.mock.calls;
-    expect(callArg.where).toEqual({ id: "reservation-1", status: "RESERVED" });
+    expect(callArg.where.id).toBe("reservation-1");
+    expect(callArg.where.OR[0]).toEqual({
+      status: "RESERVED",
+      classSchedule: { status: "SCHEDULED", endsAt: { gte: expect.any(Date) } },
+    });
     expect(Object.keys(callArg.data).sort()).toEqual(
       ["cancelDetail", "cancelReason", "cancelledAt", "cancelledById", "status"].sort(),
     );
@@ -524,7 +530,7 @@ describe("cancelReservation", () => {
 
     const result = await cancelReservation("reservation-1", {}, cancelFormData());
 
-    expect(result.formError).toBe("이미 취소되었거나 종료된 예약입니다.");
+    expect(result.formError).toBe("이미 취소되었거나 취소할 수 없는 예약입니다.");
   });
 
   // 회귀 테스트: Reservation.status 는 계속 RESERVED 로 남지만, 소속 클래스가 이미 끝났으면
@@ -538,7 +544,7 @@ describe("cancelReservation", () => {
 
     const result = await cancelReservation("reservation-1", {}, cancelFormData());
 
-    expect(result.formError).toBe("이미 취소되었거나 종료된 예약입니다.");
+    expect(result.formError).toBe("이미 취소되었거나 취소할 수 없는 예약입니다.");
     expect(reservationUpdateManyMock).not.toHaveBeenCalled();
   });
 

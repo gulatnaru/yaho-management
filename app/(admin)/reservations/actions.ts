@@ -6,7 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAdmin } from "@/lib/auth/authorization";
 import { hasCapacity, resolveReservationWriteMode } from "@/lib/reservations/capacity";
-import { getReservationDisplayStatus } from "@/lib/reservations/status";
+import { canCancelReservation } from "@/lib/reservations/cancellation";
 import { getClassDisplayStatus } from "@/lib/classes/status";
 import {
   cancelReservationInputSchema,
@@ -277,11 +277,9 @@ export async function cancelReservation(
     return { formError: "예약을 찾을 수 없습니다.", values: readCancelReservationFormValues(formData) };
   }
 
-  // DB status 는 계속 RESERVED 로 남지만, 소속 클래스가 종료됐으면 화면상 "종료"로 표시되므로
-  // 표시상 종료된 예약의 취소도 동일하게 막는다(getReservationDisplayStatus, lib/reservations/status.ts).
-  if (getReservationDisplayStatus(current, current.classSchedule) !== "RESERVED") {
+  if (!canCancelReservation(current, current.classSchedule)) {
     return {
-      formError: "이미 취소되었거나 종료된 예약입니다.",
+      formError: "이미 취소되었거나 취소할 수 없는 예약입니다.",
       values: readCancelReservationFormValues(formData),
     };
   }
@@ -299,14 +297,21 @@ export async function cancelReservation(
   }
 
   try {
-    // TOCTOU: 위의 findUnique 사전 체크와 실제 쓰기 사이에 다른 요청이 먼저 이 예약을 취소했을 수
-    // 있다. 최종 쓰기는 status: "RESERVED" 조건부 updateMany 로 하고 count 로 최종 판정한다
-    // (app/(admin)/classes/actions.ts cancelClass 와 동일한 패턴, ARCHITECTURE.md §7.1).
+    const cancelledAt = new Date();
     const updateResult = await prisma.reservation.updateMany({
-      where: { id, status: "RESERVED" },
+      where: {
+        id,
+        OR: [
+          {
+            status: "RESERVED",
+            classSchedule: { status: "SCHEDULED", endsAt: { gte: cancelledAt } },
+          },
+          { status: { in: ["COMPLETED", "NO_SHOW"] } },
+        ],
+      },
       data: {
         status: "CANCELLED",
-        cancelledAt: new Date(),
+        cancelledAt,
         cancelReason: result.data.cancelReason,
         cancelDetail: result.data.cancelDetail || null,
         cancelledById: session.user.id,
@@ -319,7 +324,7 @@ export async function cancelReservation(
   } catch (error) {
     if (error instanceof ReservationNotCancellableError) {
       return {
-        formError: "이미 취소되었거나 종료된 예약입니다.",
+        formError: "이미 취소되었거나 취소할 수 없는 예약입니다.",
         values: readCancelReservationFormValues(formData),
       };
     }

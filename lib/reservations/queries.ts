@@ -7,8 +7,7 @@ export type ListReservationsParams = ReservationListParams & {
   page?: number;
 };
 
-// Phase 8(결제/환불) 소유 필드 — paymentItem 은 이번 Phase 스코프가 아니므로 select 하지 않는다.
-// attendance(Phase 6 출결)도 마찬가지로 select 하지 않는다.
+// 목록에는 출결/결제 상세 필드를 노출하지 않는다. 각 도메인 상세 화면에서만 조회한다.
 const RESERVATION_LIST_SELECT = {
   id: true,
   status: true,
@@ -49,7 +48,7 @@ export async function listReservations(params: ListReservationsParams) {
   };
 }
 
-// 목록에는 출결/결제 필드를 노출하지 않는다. 상세 화면에서만 출결 상태와 기록 시각을 사용한다.
+// 목록에는 출결/결제 필드를 노출하지 않는다. 상세 화면에서만 출결 및 결제 요약을 사용한다.
 const RESERVATION_DETAIL_SELECT = {
   id: true,
   status: true,
@@ -73,6 +72,29 @@ const RESERVATION_DETAIL_SELECT = {
       location: true,
       status: true,
       program: { select: { id: true, name: true } },
+    },
+  },
+  paymentItem: {
+    select: {
+      id: true,
+      amount: true,
+      discountAmount: true,
+      paidAmount: true,
+      refundedAmount: true,
+      payment: {
+        select: { id: true, status: true, method: true, paidAt: true },
+      },
+      refunds: {
+        select: {
+          id: true,
+          amount: true,
+          reason: true,
+          reasonDetail: true,
+          status: true,
+          refundedAt: true,
+        },
+        orderBy: { refundedAt: "desc" as const },
+      },
     },
   },
   cancelledBy: { select: { id: true, name: true } },
