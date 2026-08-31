@@ -82,14 +82,20 @@ describe("getReservationDetail", () => {
     expect(result).toBeNull();
   });
 
-  // 회귀 테스트: 상세 조회도 이번 Phase 스코프 밖인 paymentItem/attendance 를 select 하지 않아야 한다.
-  it("selects attendance fields for the Phase 6 reservation detail", async () => {
+  it("selects attendance and payment fields for the reservation detail", async () => {
     reservationFindUniqueMock.mockResolvedValue({ id: "reservation-1" });
 
     await getReservationDetail("reservation-1");
 
     const [[callArg]] = reservationFindUniqueMock.mock.calls;
-    expect(callArg.select).not.toHaveProperty("paymentItem");
+    expect(callArg.select.paymentItem.select).toEqual(
+      expect.objectContaining({
+        id: true,
+        paidAmount: true,
+        refundedAmount: true,
+        payment: { select: { id: true, status: true, method: true, paidAt: true } },
+      }),
+    );
     expect(callArg.select).toHaveProperty("attendance", true);
     expect(callArg.select).toHaveProperty("attendanceRecordedAt", true);
     expect(callArg.select).toEqual(

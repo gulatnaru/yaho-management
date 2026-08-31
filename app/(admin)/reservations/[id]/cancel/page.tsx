@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { getReservationDetail } from "@/lib/reservations/queries";
-import { getReservationDisplayStatus } from "@/lib/reservations/status";
+import { canCancelReservation } from "@/lib/reservations/cancellation";
 import { ReservationCancelForm } from "../../_components/reservation-cancel-form";
 
 interface CancelReservationPageProps {
@@ -23,13 +23,13 @@ export default async function CancelReservationPage({ params }: CancelReservatio
     </Link>
   );
 
-  if (getReservationDisplayStatus(reservation, reservation.classSchedule) !== "RESERVED") {
+  if (!canCancelReservation(reservation, reservation.classSchedule)) {
     return (
       <section className="space-y-6">
         {backLink}
         <h1 className="text-2xl font-bold">예약 취소</h1>
         <p className="rounded-lg border border-dashed border-slate-200 p-6 text-sm text-slate-600">
-          이미 취소되었거나 종료된 예약입니다.
+          이미 취소되었거나 취소할 수 없는 예약입니다.
         </p>
       </section>
     );
