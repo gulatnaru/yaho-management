@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: "/classes", label: "클래스 일정" },
   { href: "/reservations", label: "예약 관리" },
   { href: "/payments", label: "결제·환불" },
+  { href: "/revenue", label: "매출 집계" },
 ];
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {
