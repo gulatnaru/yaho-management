@@ -37,7 +37,7 @@ function ClassCard({ classItem, showReservations }: { classItem: DashboardClassD
           classItem.reservations.length === 0 ? (
             <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">예약자가 없습니다.</p>
           ) : (
-            <ul className="divide-y rounded-md border" aria-label={`${classItem.program.name} 예약자 명단`}>
+            <ul className="divide-y rounded-md border" aria-label={`${classItem.program.name} 예약 현황`}>
               {classItem.reservations.map((reservation) => (
                 <li className="flex items-center justify-between gap-3 p-3 text-sm" key={reservation.id}>
                   <Link className="font-medium hover:underline" href={`/children/${reservation.child.id}`}>

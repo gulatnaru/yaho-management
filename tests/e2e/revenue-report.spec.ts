@@ -1,5 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
+import { formatKstDate } from "@/lib/classes/datetime";
+import { getKstMonthRange, getKstWeekRange } from "@/server/revenue/period";
 
 const prisma = new PrismaClient();
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
@@ -28,6 +30,13 @@ async function login(page: Page) {
 
 async function summaryValue(page: Page, label: string) {
   return page.getByTestId(`summary-${label}`).locator(".tabular-nums").innerText();
+}
+
+async function expectRevenueRange(page: Page, dateFrom: string, dateTo: string) {
+  await expect.poll(() => new URL(page.url()).searchParams.get("dateFrom")).toBe(dateFrom);
+  await expect.poll(() => new URL(page.url()).searchParams.get("dateTo")).toBe(dateTo);
+  await expect(page.locator("#dateFrom")).toHaveValue(dateFrom);
+  await expect(page.locator("#dateTo")).toHaveValue(dateTo);
 }
 
 test.beforeAll(async () => {
@@ -191,13 +200,22 @@ test.describe.serial("Phase 9 매출 집계", () => {
     await login(page);
     await page.goto(`/revenue?dateFrom=2026-07-01&dateTo=2026-07-31&programId=${programId}`);
 
-    await expect(page.getByText("결제수단·환불 여부는 금액 지표에만 적용됩니다.")).toBeVisible();
-    expect(await summaryValue(page, "예약 수")).toBe("5건");
-    expect(await summaryValue(page, "참여 인원")).toBe("1명");
-    expect(await summaryValue(page, "총 정가")).toBe("150,000원");
-    expect(await summaryValue(page, "총 할인")).toBe("10,000원");
-    expect(await summaryValue(page, "총 결제")).toBe("140,000원");
-    expect(await summaryValue(page, "총 환불")).toBe("0원");
+    await expect(page.getByText("결제수단과 환불 여부는 금액에만 반영됩니다.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "매출 현황" })).toBeVisible();
+    await expect(page.getByText("기간별 예약, 참여, 결제와 환불 현황을 확인하세요.")).toBeVisible();
+    await expect(
+      page.getByText(
+        "예약·참여는 수업 날짜, 결제는 결제한 날짜, 환불은 환불 처리한 날짜를 기준으로 집계됩니다.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "프로그램별 현황" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "수업별 현황" })).toBeVisible();
+    expect(await summaryValue(page, "예약")).toBe("5건");
+    expect(await summaryValue(page, "참여")).toBe("1명");
+    expect(await summaryValue(page, "정가")).toBe("150,000원");
+    expect(await summaryValue(page, "할인")).toBe("10,000원");
+    expect(await summaryValue(page, "결제")).toBe("140,000원");
+    expect(await summaryValue(page, "환불")).toBe("0원");
     expect(await summaryValue(page, "순매출")).toBe("140,000원");
 
     const programRow = page.getByTestId(`program-row-${programId}`);
@@ -210,8 +228,8 @@ test.describe.serial("Phase 9 매출 집계", () => {
     await login(page);
     await page.goto(`/revenue?dateFrom=2026-08-01&dateTo=2026-08-31&programId=${programId}`);
 
-    expect(await summaryValue(page, "총 결제")).toBe("0원");
-    expect(await summaryValue(page, "총 환불")).toBe("30,000원");
+    expect(await summaryValue(page, "결제")).toBe("0원");
+    expect(await summaryValue(page, "환불")).toBe("30,000원");
     expect(await summaryValue(page, "순매출")).toBe("-30,000원");
   });
 
@@ -220,24 +238,71 @@ test.describe.serial("Phase 9 매출 집계", () => {
     const base = `/revenue?dateFrom=2026-07-01&dateTo=2026-07-31&programId=${programId}`;
 
     await page.goto(`${base}&paymentMethod=CARD`);
-    expect(await summaryValue(page, "예약 수")).toBe("5건");
-    expect(await summaryValue(page, "참여 인원")).toBe("1명");
-    expect(await summaryValue(page, "총 결제")).toBe("90,000원");
+    expect(await summaryValue(page, "예약")).toBe("5건");
+    expect(await summaryValue(page, "참여")).toBe("1명");
+    expect(await summaryValue(page, "결제")).toBe("90,000원");
 
     await page.goto(`${base}&paymentMethod=TRANSFER`);
-    expect(await summaryValue(page, "예약 수")).toBe("5건");
-    expect(await summaryValue(page, "참여 인원")).toBe("1명");
-    expect(await summaryValue(page, "총 결제")).toBe("50,000원");
+    expect(await summaryValue(page, "예약")).toBe("5건");
+    expect(await summaryValue(page, "참여")).toBe("1명");
+    expect(await summaryValue(page, "결제")).toBe("50,000원");
 
     await page.goto(`${base}&refundState=NONE`);
-    expect(await summaryValue(page, "예약 수")).toBe("5건");
-    expect(await summaryValue(page, "참여 인원")).toBe("1명");
-    expect(await summaryValue(page, "총 결제")).toBe("50,000원");
+    expect(await summaryValue(page, "예약")).toBe("5건");
+    expect(await summaryValue(page, "참여")).toBe("1명");
+    expect(await summaryValue(page, "결제")).toBe("50,000원");
 
     await page.goto(`${base}&refundState=PARTIAL`);
-    expect(await summaryValue(page, "예약 수")).toBe("5건");
-    expect(await summaryValue(page, "참여 인원")).toBe("1명");
-    expect(await summaryValue(page, "총 결제")).toBe("90,000원");
+    expect(await summaryValue(page, "예약")).toBe("5건");
+    expect(await summaryValue(page, "참여")).toBe("1명");
+    expect(await summaryValue(page, "결제")).toBe("90,000원");
+  });
+
+  test("기간 프리셋과 URL·날짜 입력·active 상태를 동기화한다", async ({ page }) => {
+    await login(page);
+    const now = new Date();
+    const today = formatKstDate(now);
+    const week = getKstWeekRange(now);
+    const month = getKstMonthRange(now);
+    const presetLinks = {
+      today: page.getByRole("link", { name: "오늘", exact: true }),
+      week: page.getByRole("link", { name: "이번 주", exact: true }),
+      month: page.getByRole("link", { name: "이번 달", exact: true }),
+    };
+
+    await page.goto(`/revenue?dateFrom=2026-07-02&dateTo=2026-07-03&programId=${programId}`);
+    await expectRevenueRange(page, "2026-07-02", "2026-07-03");
+    await expect(presetLinks.today).not.toHaveAttribute("aria-current", "page");
+    await expect(presetLinks.week).not.toHaveAttribute("aria-current", "page");
+    await expect(presetLinks.month).not.toHaveAttribute("aria-current", "page");
+
+    await presetLinks.today.click();
+    await expectRevenueRange(page, today, today);
+    await expect(presetLinks.today).toHaveAttribute("aria-current", "page");
+
+    await presetLinks.week.click();
+    await expectRevenueRange(page, week.dateFrom, week.dateTo);
+    await expect(presetLinks.week).toHaveAttribute("aria-current", "page");
+
+    await page.goBack();
+    await expectRevenueRange(page, today, today);
+    await expect(presetLinks.today).toHaveAttribute("aria-current", "page");
+
+    await page.goForward();
+    await expectRevenueRange(page, week.dateFrom, week.dateTo);
+    await expect(presetLinks.week).toHaveAttribute("aria-current", "page");
+
+    await presetLinks.month.click();
+    await expectRevenueRange(page, month.dateFrom, month.dateTo);
+    await expect(presetLinks.month).toHaveAttribute("aria-current", "page");
+
+    await page.locator("#dateFrom").fill("2026-07-02");
+    await page.locator("#dateTo").fill("2026-07-03");
+    await page.getByRole("button", { name: "조회" }).click();
+    await expectRevenueRange(page, "2026-07-02", "2026-07-03");
+    await expect(presetLinks.today).not.toHaveAttribute("aria-current", "page");
+    await expect(presetLinks.week).not.toHaveAttribute("aria-current", "page");
+    await expect(presetLinks.month).not.toHaveAttribute("aria-current", "page");
   });
 
   test("모바일은 3열, 데스크톱은 5열을 표시한다", async ({ page }) => {
@@ -245,7 +310,7 @@ test.describe.serial("Phase 9 매출 집계", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`/revenue?dateFrom=2026-07-01&dateTo=2026-07-31&programId=${programId}`);
 
-    const programSection = page.getByRole("heading", { name: "프로그램별 집계" }).locator("..", { hasText: "프로그램별 집계" });
+    const programSection = page.getByRole("heading", { name: "프로그램별 현황" }).locator("..", { hasText: "프로그램별 현황" });
     const headers = page.getByRole("columnheader");
     await expect(headers.filter({ hasText: "결제" }).first()).toBeHidden();
     await expect(headers.filter({ hasText: "환불" }).first()).toBeHidden();

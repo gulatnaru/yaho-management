@@ -12,19 +12,40 @@ interface RevenueFilterFormProps {
   };
   programs: Array<{ id: string; name: string }>;
   presetHrefs: { today: string; week: string; month: string };
+  activePreset?: "today" | "week" | "month";
 }
 
-export function RevenueFilterForm({ values, programs, presetHrefs }: RevenueFilterFormProps) {
+function presetClassName(active: boolean) {
+  return cn(
+    buttonVariants(),
+    "h-9 px-3",
+    !active && "bg-slate-100 text-slate-700 hover:bg-slate-200",
+  );
+}
+
+export function RevenueFilterForm({ values, programs, presetHrefs, activePreset }: RevenueFilterFormProps) {
   return (
     <section className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap gap-2">
-        <Link className={cn(buttonVariants(), "h-9 bg-slate-100 px-3 text-slate-700 hover:bg-slate-200")} href={presetHrefs.today}>
+        <Link
+          aria-current={activePreset === "today" ? "page" : undefined}
+          className={presetClassName(activePreset === "today")}
+          href={presetHrefs.today}
+        >
           오늘
         </Link>
-        <Link className={cn(buttonVariants(), "h-9 bg-slate-100 px-3 text-slate-700 hover:bg-slate-200")} href={presetHrefs.week}>
+        <Link
+          aria-current={activePreset === "week" ? "page" : undefined}
+          className={presetClassName(activePreset === "week")}
+          href={presetHrefs.week}
+        >
           이번 주
         </Link>
-        <Link className={cn(buttonVariants(), "h-9 bg-slate-100 px-3 text-slate-700 hover:bg-slate-200")} href={presetHrefs.month}>
+        <Link
+          aria-current={activePreset === "month" ? "page" : undefined}
+          className={presetClassName(activePreset === "month")}
+          href={presetHrefs.month}
+        >
           이번 달
         </Link>
       </div>
@@ -76,7 +97,7 @@ export function RevenueFilterForm({ values, programs, presetHrefs }: RevenueFilt
       </form>
 
       <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
-        결제수단·환불 여부는 금액 지표에만 적용됩니다. 예약 수와 참여 인원은 기간·프로그램 조건만 적용합니다.
+        결제수단과 환불 여부는 금액에만 반영됩니다. 예약·참여 인원은 선택한 기간과 프로그램을 기준으로 집계됩니다.
       </p>
     </section>
   );
