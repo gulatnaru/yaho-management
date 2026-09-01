@@ -20,7 +20,7 @@ export const EMPTY_REVENUE_METRICS: RevenueMetrics = {
   netRevenue: 0,
 };
 
-function toNumber(value: number | bigint | string | null): number {
+export function toSafeInteger(value: number | bigint | string | null): number {
   if (value === null) return 0;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error("집계값이 안전한 정수 범위를 벗어났습니다.");
@@ -58,21 +58,21 @@ export function mergeRevenueFacts(input: {
 
   for (const fact of input.operations) {
     const row = ensureClassRow(classRows, fact);
-    row.reservationCount += toNumber(fact.reservationCount);
-    row.cancellationCount += toNumber(fact.cancellationCount);
-    row.participantCount += toNumber(fact.participantCount);
+    row.reservationCount += toSafeInteger(fact.reservationCount);
+    row.cancellationCount += toSafeInteger(fact.cancellationCount);
+    row.participantCount += toSafeInteger(fact.participantCount);
   }
 
   for (const fact of input.payments) {
     const row = ensureClassRow(classRows, fact);
-    row.amount += toNumber(fact.amount);
-    row.discountAmount += toNumber(fact.discountAmount);
-    row.paidAmount += toNumber(fact.paidAmount);
+    row.amount += toSafeInteger(fact.amount);
+    row.discountAmount += toSafeInteger(fact.discountAmount);
+    row.paidAmount += toSafeInteger(fact.paidAmount);
   }
 
   for (const fact of input.refunds) {
     const row = ensureClassRow(classRows, fact);
-    row.refundedAmount += toNumber(fact.refundedAmount);
+    row.refundedAmount += toSafeInteger(fact.refundedAmount);
   }
 
   const classes = [...classRows.values()]
