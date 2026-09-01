@@ -20,7 +20,7 @@ export function ProgramRevenueList({ rows }: { rows: RevenueProgramRow[] }) {
       <TableHeader>
         <TableRow>
           <TableHead>프로그램</TableHead>
-          <TableHead>운영</TableHead>
+          <TableHead>예약·참여</TableHead>
           <TableHead className="hidden md:table-cell">결제</TableHead>
           <TableHead className="hidden md:table-cell">환불</TableHead>
           <TableHead>순매출</TableHead>

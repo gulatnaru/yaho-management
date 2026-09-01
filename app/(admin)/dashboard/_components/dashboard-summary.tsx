@@ -1,47 +1,75 @@
+import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatKrw } from "@/lib/payments/format";
 import type { DashboardTodayMetrics } from "@/server/dashboard/types";
 
-function SummaryCard({ label, value, testId }: { label: string; value: string; testId: string }) {
+function SummaryCard({
+  label,
+  value,
+  testId,
+  href,
+  children,
+}: {
+  label: string;
+  value: string;
+  testId: string;
+  href: string;
+  children?: React.ReactNode;
+}) {
   return (
-    <Card data-testid={testId}>
-      <CardContent className="space-y-1 p-4">
-        <p className="text-xs font-medium text-slate-500">{label}</p>
-        <p className="text-xl font-bold tabular-nums">{value}</p>
-      </CardContent>
-    </Card>
+    <Link
+      className="block min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2"
+      data-testid={testId}
+      href={href}
+    >
+      <Card className="h-full min-h-24 transition-colors hover:bg-slate-50">
+        <CardContent className="flex h-full min-w-0 flex-col justify-between gap-2 p-4">
+          <p className="text-xs font-medium text-slate-500">{label}</p>
+          <div className="min-w-0">
+            <p className="break-words text-lg font-bold leading-tight tabular-nums sm:text-xl">{value}</p>
+            {children}
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 
-export function DashboardSummary({ metrics }: { metrics: DashboardTodayMetrics }) {
+export function DashboardSummary({ metrics, today }: { metrics: DashboardTodayMetrics; today: string }) {
   return (
     <section aria-labelledby="today-summary-heading" className="space-y-3">
-      <div>
-        <h2 className="text-lg font-semibold" id="today-summary-heading">오늘 운영 요약</h2>
-        <p className="text-sm text-slate-500">한국 시간(KST) 기준입니다.</p>
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <SummaryCard label="오늘 클래스" testId="summary-class-count" value={`${metrics.classCount}개`} />
+      <h2 className="text-lg font-semibold" id="today-summary-heading">오늘 운영 요약</h2>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <SummaryCard
-          label="오늘 운영 예약 인원"
+          href={`/classes?dateFrom=${today}&dateTo=${today}&status=all`}
+          label="오늘 수업"
+          testId="summary-class-count"
+          value={`${metrics.classCount}개`}
+        />
+        <SummaryCard
+          href="/reservations"
+          label="오늘 예약 현황"
           testId="summary-operation-reservations"
           value={`${metrics.operationReservationCount}명`}
         />
-        <SummaryCard label="오늘 취소 처리" testId="summary-cancellations" value={`${metrics.cancellationCount}건`} />
-        <div className="col-span-2 lg:col-span-2">
-          <Card data-testid="summary-net-revenue">
-            <CardContent className="space-y-2 p-4">
-              <div className="flex items-baseline justify-between gap-3">
-                <p className="text-xs font-medium text-slate-500">오늘 순매출</p>
-                <p className="text-xl font-bold tabular-nums">{formatKrw(metrics.netRevenue)}</p>
-              </div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-                <span data-testid="summary-paid-amount">오늘 결제 {formatKrw(metrics.paidAmount)}</span>
-                <span data-testid="summary-refunded-amount">오늘 완료 환불 {formatKrw(metrics.refundedAmount)}</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <SummaryCard
+          href="/reservations?status=CANCELLED"
+          label="오늘 취소"
+          testId="summary-cancellations"
+          value={`${metrics.cancellationCount}건`}
+        />
+        <SummaryCard
+          href={`/revenue?dateFrom=${today}&dateTo=${today}`}
+          label="오늘 순매출"
+          testId="summary-net-revenue"
+          value={formatKrw(metrics.netRevenue)}
+        >
+          <p className="mt-1 break-words text-[11px] leading-tight text-slate-500 sm:text-xs">
+            <span data-testid="summary-paid-amount">결제 {formatKrw(metrics.paidAmount)}</span>
+            {" · "}
+            <span data-testid="summary-refunded-amount">환불 {formatKrw(metrics.refundedAmount)}</span>
+          </p>
+        </SummaryCard>
       </div>
     </section>
   );

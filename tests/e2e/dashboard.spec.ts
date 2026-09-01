@@ -33,6 +33,7 @@ let selectedClassId: string;
 let cancelledClassId: string;
 let todayClassId: string;
 let childNames: Record<string, string>;
+let emptyDate: string;
 
 async function login(page: Page) {
   await page.goto("/login");
@@ -147,6 +148,22 @@ test.beforeAll(async () => {
   ]);
   ids.classes.push(...classes.map((item) => item.id));
   [selectedClassId, , cancelledClassId, todayClassId] = classes.map((item) => item.id);
+
+  for (let day = 1; day <= 31; day += 1) {
+    const candidate = `${selectedMonth}-${String(day).padStart(2, "0")}`;
+    const range = getKstDayPeriod(candidate);
+    const classCount = await prisma.classSchedule.count({
+      where: {
+        startsAt: { gte: range.startUtc, lt: range.endExclusiveUtc },
+        status: { not: "CANCELLED" },
+      },
+    });
+    if (classCount === 0) {
+      emptyDate = candidate;
+      break;
+    }
+  }
+  if (!emptyDate) throw new Error("빈 캘린더 날짜를 찾지 못했습니다.");
 
   const assignments = await Promise.all([
     prisma.classTeacher.create({ data: { classScheduleId: selectedClassId, teacherId } }),
@@ -343,10 +360,10 @@ test.afterAll(async () => {
   await prisma.program.deleteMany({ where: { id: programId } });
 
   const leftovers = await Promise.all([
-    prisma.program.count({ where: { name: `E2E_TEST_DASHBOARD_PROGRAM_${suffix}` } }),
-    prisma.teacher.count({ where: { name: `E2E_TEST_DASHBOARD_TEACHER_${suffix}` } }),
-    prisma.child.count({ where: { name: { endsWith: suffix } } }),
-    prisma.classSchedule.count({ where: { location: { endsWith: suffix } } }),
+    prisma.program.count({ where: { id: programId } }),
+    prisma.teacher.count({ where: { id: teacherId } }),
+    prisma.child.count({ where: { id: { in: ids.children } } }),
+    prisma.classSchedule.count({ where: { id: { in: ids.classes } } }),
   ]);
   expect(leftovers).toEqual([0, 0, 0, 0]);
   await prisma.$disconnect();
@@ -363,9 +380,15 @@ test.describe.serial("Phase 10 관리자 홈", () => {
     await page.goto(`/dashboard?month=${selectedMonth}&date=${selectedDate}`);
 
     await expect(page).toHaveURL(new RegExp(`month=${selectedMonth}.*date=${selectedDate}`));
-    await expect(page.getByRole("heading", { name: `${selectedDate} 예약자 명단` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "8월 10일 예약 현황" })).toBeVisible();
     const dateCell = page.locator(`[data-date="${selectedDate}"]`);
-    await expect(dateCell).toHaveAttribute("aria-label", `${selectedDate}, 클래스 2개, 운영 예약 5명`);
+    await expect(dateCell).toHaveAttribute("aria-label", `${selectedDate}, 수업 2개, 예약 5명`);
+    await expect(dateCell).toContainText("2수업");
+    await expect(dateCell).toContainText("5명");
+    const emptyDateCell = page.locator(`[data-date="${emptyDate}"]`);
+    await expect(emptyDateCell).toHaveAttribute("aria-label", emptyDate);
+    await expect(emptyDateCell).not.toContainText("수업");
+    await expect(emptyDateCell).not.toContainText("명");
     await expect(page.getByTestId(`dashboard-class-${cancelledClassId}`)).toHaveCount(0);
     await expect(page.getByText(childNames.reserved)).toBeVisible();
     await expect(page.getByText(childNames.completed)).toBeVisible();
@@ -391,11 +414,13 @@ test.describe.serial("Phase 10 관리자 홈", () => {
     await page.goto(selectedUrl);
     await page.getByRole("link", { name: "다음 달" }).click();
     await expect(page).toHaveURL(/month=2026-09$/);
-    await expect(page.getByText("날짜를 선택하면 클래스별 예약자 명단이 표시됩니다.")).toBeVisible();
+    await expect(
+      page.locator("section").filter({ hasText: /^날짜를 누르면 해당 날의 수업과 예약자를 볼 수 있습니다\.$/ }),
+    ).toBeVisible();
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`month=${selectedMonth}.*date=${selectedDate}`));
     await page.reload();
-    await expect(page.getByRole("heading", { name: `${selectedDate} 예약자 명단` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "8월 10일 예약 현황" })).toBeVisible();
   });
 
   test("오늘 운영·취소·ADR-040 순매출을 서로 독립된 시간축으로 표시한다", async ({ page }) => {
@@ -411,6 +436,24 @@ test.describe.serial("Phase 10 관리자 홈", () => {
     await expect(page.getByTestId("summary-paid-amount")).toContainText(krw(expected.paidAmount));
     await expect(page.getByTestId("summary-refunded-amount")).toContainText(krw(expected.refundedAmount));
     await expect(page.getByTestId("summary-net-revenue")).toContainText(krw(expected.netRevenue));
+    await expect(page.getByTestId("summary-class-count")).toHaveAttribute(
+      "href",
+      `/classes?dateFrom=${today}&dateTo=${today}&status=all`,
+    );
+    await expect(page.getByTestId("summary-operation-reservations")).toHaveAttribute("href", "/reservations");
+    await expect(page.getByTestId("summary-cancellations")).toHaveAttribute(
+      "href",
+      "/reservations?status=CANCELLED",
+    );
+    await expect(page.getByTestId("summary-net-revenue")).toHaveAttribute(
+      "href",
+      `/revenue?dateFrom=${today}&dateTo=${today}`,
+    );
+    await expect(page.getByText("오늘 운영 현황과 이번 달 수업 일정을 한눈에 확인하세요.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "이번 달 수업 일정" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "오늘 수업" })).toBeVisible();
+    await expect(page.getByText("오늘 예정된 수업과 예약 현황입니다.")).toBeVisible();
+    await expect(page.getByText("한국 시간(KST) 기준입니다.")).toHaveCount(0);
     await expect(page.getByTestId(`dashboard-class-${todayClassId}`).first()).toContainText(
       "운영 3명 · 예약 1/8명 · 남은 자리 7명",
     );
@@ -491,6 +534,21 @@ test.describe.serial("Phase 10 관리자 홈", () => {
     expect(layout.calendarScrollWidth).toBeLessThanOrEqual(layout.calendarClientWidth);
     expect(layout.calendarLeft).toBeGreaterThanOrEqual(0);
     expect(layout.calendarRight).toBeLessThanOrEqual(layout.viewportWidth);
+
+    const summaryCards = [
+      page.getByTestId("summary-class-count"),
+      page.getByTestId("summary-operation-reservations"),
+      page.getByTestId("summary-cancellations"),
+      page.getByTestId("summary-net-revenue"),
+    ];
+    const summaryBoxes = await Promise.all(summaryCards.map((card) => card.boundingBox()));
+    if (summaryBoxes.some((box) => box === null)) throw new Error("요약 카드 레이아웃을 측정하지 못했습니다.");
+    const [first, second, third, fourth] = summaryBoxes as NonNullable<(typeof summaryBoxes)[number]>[];
+    expect(first.y).toBeCloseTo(second.y, 1);
+    expect(third.y).toBeCloseTo(fourth.y, 1);
+    expect(third.y).toBeGreaterThan(first.y);
+    expect(first.width).toBeCloseTo(second.width, 1);
+    expect(third.width).toBeCloseTo(fourth.width, 1);
     await expect(page.getByText("예약 추가")).toHaveCount(0);
     await expect(page.getByText(/환불 처리 필요/)).toHaveCount(0);
     await expect(page.getByText(/인기 프로그램|재참여율/)).toHaveCount(0);

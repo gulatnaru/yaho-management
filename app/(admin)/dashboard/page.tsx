@@ -22,6 +22,11 @@ function firstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function formatSelectedDateTitle(value: string) {
+  const [, month, day] = value.split("-").map(Number);
+  return `${month}월 ${day}일 예약 현황`;
+}
+
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   await requireAdmin();
   const raw = await searchParams;
@@ -59,18 +64,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     <section className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold">관리자 홈</h1>
-        <p className="mt-1 text-sm text-slate-500">오늘의 운영 현황과 월간 예약 일정을 확인합니다.</p>
+        <p className="mt-1 text-sm text-slate-500">오늘 운영 현황과 이번 달 수업 일정을 한눈에 확인하세요.</p>
       </div>
-
-      <DashboardSummary metrics={todayMetrics} />
-
-      <DashboardClassList
-        classes={todayClasses}
-        description="오늘 KST에 시작하는 취소되지 않은 클래스입니다."
-        emptyMessage="오늘 예정된 클래스가 없습니다."
-        showReservations={false}
-        title="오늘 클래스"
-      />
 
       <MonthlyCalendar
         cells={buildMonthlyCalendar(period.month)}
@@ -86,15 +81,25 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <DashboardClassList
           classes={selectedClasses ?? []}
           description="출결 없는 사전 취소는 제외하고 운영 이력이 있는 예약만 표시합니다."
-          emptyMessage="선택한 날짜에 운영할 클래스가 없습니다."
+          emptyMessage="이날 예정된 수업이 없습니다."
           showReservations
-          title={`${period.selectedDate} 예약자 명단`}
+          title={formatSelectedDateTitle(period.selectedDate)}
         />
       ) : (
         <section className="rounded-lg border border-dashed bg-white p-8 text-center text-sm text-slate-500">
-          날짜를 선택하면 클래스별 예약자 명단이 표시됩니다.
+          날짜를 누르면 해당 날의 수업과 예약자를 볼 수 있습니다.
         </section>
       )}
+
+      <DashboardSummary metrics={todayMetrics} today={period.today} />
+
+      <DashboardClassList
+        classes={todayClasses}
+        description="오늘 예정된 수업과 예약 현황입니다."
+        emptyMessage="오늘 예정된 수업이 없습니다."
+        showReservations={false}
+        title="오늘 수업"
+      />
     </section>
   );
 }

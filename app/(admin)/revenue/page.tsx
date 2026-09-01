@@ -53,6 +53,17 @@ export default async function RevenuePage({ searchParams }: RevenuePageProps) {
   };
   const [report, programs] = await Promise.all([getRevenueReport(filters), listRevenueProgramOptions()]);
   const today = formatKstDate(now);
+  const todayRange = { dateFrom: today, dateTo: today };
+  const weekRange = getKstWeekRange(now);
+  const monthRange = getKstMonthRange(now);
+  const activePreset =
+    period.dateFrom === todayRange.dateFrom && period.dateTo === todayRange.dateTo
+      ? "today"
+      : period.dateFrom === weekRange.dateFrom && period.dateTo === weekRange.dateTo
+        ? "week"
+        : period.dateFrom === monthRange.dateFrom && period.dateTo === monthRange.dateTo
+          ? "month"
+          : undefined;
   const sharedPresetFilters = {
     programId: values.programId,
     paymentMethod: values.paymentMethod,
@@ -62,17 +73,20 @@ export default async function RevenuePage({ searchParams }: RevenuePageProps) {
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">매출 집계</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {period.dateFrom} ~ {period.dateTo} · 예약·참여는 클래스일, 결제는 결제일, 환불은 환불 처리일 기준입니다.
+        <h1 className="text-2xl font-bold">매출 현황</h1>
+        <p className="mt-1 text-sm text-slate-500">기간별 예약, 참여, 결제와 환불 현황을 확인하세요.</p>
+        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+          예약·참여는 수업 날짜, 결제는 결제한 날짜, 환불은 환불 처리한 날짜를 기준으로 집계됩니다.
         </p>
       </div>
 
       <RevenueFilterForm
+        activePreset={activePreset}
+        key={`${period.dateFrom}:${period.dateTo}`}
         presetHrefs={{
-          today: buildPresetHref({ dateFrom: today, dateTo: today }, sharedPresetFilters),
-          week: buildPresetHref(getKstWeekRange(now), sharedPresetFilters),
-          month: buildPresetHref(getKstMonthRange(now), sharedPresetFilters),
+          today: buildPresetHref(todayRange, sharedPresetFilters),
+          week: buildPresetHref(weekRange, sharedPresetFilters),
+          month: buildPresetHref(monthRange, sharedPresetFilters),
         }}
         programs={programs}
         values={{
@@ -88,16 +102,16 @@ export default async function RevenuePage({ searchParams }: RevenuePageProps) {
 
       <section className="space-y-3">
         <div>
-          <h2 className="text-lg font-semibold">프로그램별 집계</h2>
-          <p className="text-sm text-slate-500">프로그램 단위로 운영 지표와 금액을 비교합니다.</p>
+          <h2 className="text-lg font-semibold">프로그램별 현황</h2>
+          <p className="text-sm text-slate-500">프로그램별 예약·참여와 매출을 확인하세요.</p>
         </div>
         <ProgramRevenueList rows={report.programs} />
       </section>
 
       <section className="space-y-3">
         <div>
-          <h2 className="text-lg font-semibold">클래스별 집계</h2>
-          <p className="text-sm text-slate-500">세 시간축 중 하나라도 조회 기간에 포함된 클래스입니다.</p>
+          <h2 className="text-lg font-semibold">수업별 현황</h2>
+          <p className="text-sm text-slate-500">선택한 기간의 수업별 예약·참여와 매출을 확인하세요.</p>
         </div>
         <ClassRevenueList rows={report.classes} />
       </section>

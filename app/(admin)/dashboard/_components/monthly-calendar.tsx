@@ -34,8 +34,8 @@ export function MonthlyCalendar({
     <section aria-labelledby="calendar-heading" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold" id="calendar-heading">월간 예약 캘린더</h2>
-          <p className="text-sm text-slate-500">날짜를 선택하면 클래스별 예약자 명단을 확인할 수 있습니다.</p>
+          <h2 className="text-lg font-semibold" id="calendar-heading">이번 달 수업 일정</h2>
+          <p className="text-sm text-slate-500">날짜를 누르면 해당 날의 수업과 예약자를 볼 수 있습니다.</p>
         </div>
         <nav aria-label="캘린더 월 이동" className="flex items-center gap-2 text-sm">
           <Link className="rounded-md border bg-white px-3 py-2 hover:bg-slate-50" href={dashboardHref(previousMonth)}>
@@ -81,11 +81,9 @@ export function MonthlyCalendar({
             const content = (
               <>
                 <span className="text-xs font-semibold tabular-nums sm:text-sm">{cell.day}</span>
-                {cell.inCurrentMonth ? (
+                {cell.inCurrentMonth && metric.classCount > 0 ? (
                   <span className="mt-1 space-y-0.5 text-[10px] leading-tight text-slate-600 sm:text-xs">
-                    <span className="block tabular-nums">
-                      {metric.classCount}<span className="hidden sm:inline">클래스</span><span className="sm:hidden">클</span>
-                    </span>
+                    <span className="block tabular-nums">{metric.classCount}수업</span>
                     <span className="block tabular-nums">{metric.operationReservationCount}명</span>
                   </span>
                 ) : null}
@@ -95,7 +93,11 @@ export function MonthlyCalendar({
             return cell.inCurrentMonth ? (
               <Link
                 aria-current={isSelected ? "date" : undefined}
-                aria-label={`${cell.date}, 클래스 ${metric.classCount}개, 운영 예약 ${metric.operationReservationCount}명`}
+                aria-label={
+                  metric.classCount > 0
+                    ? `${cell.date}, 수업 ${metric.classCount}개, 예약 ${metric.operationReservationCount}명`
+                    : cell.date
+                }
                 className={cn(
                   "min-h-20 border-b border-r p-1.5 outline-none hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-900 sm:min-h-28 sm:p-2",
                   isToday && "bg-amber-50 ring-1 ring-inset ring-amber-400",

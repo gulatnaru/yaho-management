@@ -4,12 +4,12 @@ import type { RevenueMetrics } from "@/server/revenue/types";
 
 export function RevenueSummary({ metrics }: { metrics: RevenueMetrics }) {
   const items = [
-    { label: "예약 수", value: `${metrics.reservationCount}건` },
-    { label: "참여 인원", value: `${metrics.participantCount}명` },
-    { label: "총 정가", value: formatKrw(metrics.amount) },
-    { label: "총 할인", value: formatKrw(metrics.discountAmount) },
-    { label: "총 결제", value: formatKrw(metrics.paidAmount) },
-    { label: "총 환불", value: formatKrw(metrics.refundedAmount) },
+    { label: "예약", value: `${metrics.reservationCount}건` },
+    { label: "참여", value: `${metrics.participantCount}명` },
+    { label: "정가", value: formatKrw(metrics.amount) },
+    { label: "할인", value: formatKrw(metrics.discountAmount) },
+    { label: "결제", value: formatKrw(metrics.paidAmount) },
+    { label: "환불", value: formatKrw(metrics.refundedAmount) },
     { label: "순매출", value: formatKrw(metrics.netRevenue) },
   ];
 
