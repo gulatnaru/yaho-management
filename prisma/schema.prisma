@@ -342,6 +342,7 @@ model Reservation {
   @@unique([classScheduleId, childId])
   @@index([childId])
   @@index([status])
+  @@index([cancelledAt])
 }
 
 // ─────────────────────────────────────────────
