@@ -22,6 +22,7 @@ Retrospective 에이전트의 입력이 되는 기록이다.
 | 18 | - | Phase 8 결제/환불 관리 | 0 | 0 | 1 | 1 | 1 | TEST |
 | 20 | - | Phase 9 매출 집계 | 0 | 0 | 0 | 0 | 1 | OTHER |
 | 22 | - | Phase 10 관리자 홈/월간 예약 캘린더 | 0 | 0 | 0 | 1 | 2 | TEST |
+| 24 | - | Dashboard/Revenue UX 개선 | 0 | 0 | 1 | 1 | 1 | REQUIREMENT |
 
 ## 원인 분류 코드
 반복 유형을 세기 위해 아래 코드 중 하나로 적는다.
