@@ -36,6 +36,8 @@ describe("listActiveChildCandidates", () => {
 });
 
 describe("listScheduledClassCandidatesWithCapacity", () => {
+  const now = new Date("2026-09-01T00:00:00.000Z");
+
   beforeEach(() => {
     classScheduleFindManyMock.mockReset();
   });
@@ -64,7 +66,7 @@ describe("listScheduledClassCandidatesWithCapacity", () => {
       },
     ]);
 
-    const result = await listScheduledClassCandidatesWithCapacity();
+    const result = await listScheduledClassCandidatesWithCapacity(now);
 
     expect(classScheduleFindManyMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { status: "SCHEDULED" }, orderBy: { startsAt: "asc" } }),
@@ -97,7 +99,7 @@ describe("listScheduledClassCandidatesWithCapacity", () => {
       },
     ]);
 
-    const result = await listScheduledClassCandidatesWithCapacity();
+    const result = await listScheduledClassCandidatesWithCapacity(now);
 
     expect(result).toEqual([]);
   });
@@ -118,7 +120,7 @@ describe("listScheduledClassCandidatesWithCapacity", () => {
       },
     ]);
 
-    const result = await listScheduledClassCandidatesWithCapacity();
+    const result = await listScheduledClassCandidatesWithCapacity(now);
 
     expect(result).toEqual([]);
   });

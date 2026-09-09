@@ -149,6 +149,9 @@ test.describe("클래스 종료(endsAt 경과) 라이프사이클", () => {
     // 종료된 클래스는 후보 목록에 없으므로 프리필 경고가 뜬다(제출 자체를 막지는 않는다).
     await expect(page.getByText("선택한 클래스는 이미 종료되었습니다.")).toBeVisible();
 
+    // 사용자 선택으로 form 상태가 먼저 안정된 다음, 개발자도구 우회 상황을 재현한다.
+    await page.selectOption("#childId", childId);
+
     // 브라우저 개발자도구 등으로 select 를 강제 조작해 제출하는 상황을 재현한다 —
     // 버튼 숨김/후보 목록 제외를 우회해도 서버가 실제로 막는지 확인하기 위함이다.
     await page.evaluate((id) => {
@@ -159,10 +162,11 @@ test.describe("클래스 종료(endsAt 경과) 라이프사이클", () => {
       option.textContent = "FORCED_ENDED_CLASS_OPTION";
       select.appendChild(option);
       select.value = id;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
     }, pastClassId);
 
     await expect(page.locator("#classScheduleId")).toHaveValue(pastClassId);
-    await page.selectOption("#childId", childId);
     await Promise.all([
       page.waitForResponse(
         (response) =>

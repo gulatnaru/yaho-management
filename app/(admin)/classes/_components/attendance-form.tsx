@@ -9,7 +9,7 @@ export function AttendanceForm({ reservationId, current }: { reservationId: stri
   return (
     <form action={action} className="flex flex-wrap items-center gap-2">
       <input name="reservationId" type="hidden" value={reservationId} />
-      <select className="rounded-md border bg-white px-2 py-1 text-xs" defaultValue={current ?? "PRESENT"} name="attendance">
+      <select className="rounded-md border bg-white px-2 py-1 text-xs" defaultValue={current ?? "PRESENT"} key={current ?? "unrecorded"} name="attendance">
         <option value="PRESENT">참석</option>
         <option value="ABSENT">불참</option>
       </select>
