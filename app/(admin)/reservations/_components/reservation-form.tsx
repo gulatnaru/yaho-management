@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { WarningBanner } from "@/components/ui/warning-banner";
+import { formatCapacityState } from "@/lib/classes/capacity";
 import { formatKstDate, formatKstTime } from "@/lib/classes/datetime";
 import type { ChildCandidate, ScheduledClassCandidate } from "@/lib/reservations/candidates";
 import { createReservation, type ReservationFormState } from "../actions";
@@ -34,11 +35,11 @@ const emptyDefaults: ReservationFormDefaultValues = {
 
 const initialState: ReservationFormState = {};
 
-/** 예) "발레 A반 9/5 10:00 (3/8명)" */
+/** 예) "발레 A반 9/5 10:00 · 잔여 5석" */
 function formatClassCandidateLabel(item: ScheduledClassCandidate): string {
   const [, month, day] = formatKstDate(item.startsAt).split("-");
   const time = formatKstTime(item.startsAt);
-  return `${item.program.name} ${Number(month)}/${Number(day)} ${time} (${item.reservedCount}/${item.capacity}명)`;
+  return `${item.program.name} ${Number(month)}/${Number(day)} ${time} · ${formatCapacityState(item.capacity, item.reservedCount)}`;
 }
 
 export function ReservationForm({
@@ -49,9 +50,10 @@ export function ReservationForm({
   childPrefillWarning,
 }: ReservationFormProps) {
   const [state, formAction, pending] = useActionState(createReservation, initialState);
+  const formKey = state.values ? JSON.stringify(state.values) : "initial";
 
   return (
-    <form action={formAction} className="max-w-xl space-y-6" noValidate>
+    <form action={formAction} className="max-w-xl space-y-6" key={formKey} noValidate>
       <div className="space-y-1.5">
         <Label htmlFor="classScheduleId">
           클래스 <span className="text-red-600">*</span>
@@ -117,9 +119,34 @@ export function ReservationForm({
         </p>
       ) : null}
 
-      <Button disabled={pending} type="submit">
-        {pending ? "저장 중..." : "예약 등록"}
-      </Button>
+      {state.overbookingConfirmation ? (
+        <WarningBanner>
+          현재 예약 {state.overbookingConfirmation.reservedCount}명 / 정원 {state.overbookingConfirmation.capacity}명입니다.
+          추가하면 정원 초과 {state.overbookingConfirmation.overByAfterCreate}명이 됩니다.
+        </WarningBanner>
+      ) : null}
+
+      {state.overbookingConfirmation ? (
+        <>
+          <input
+            name="confirmedClassScheduleId"
+            type="hidden"
+            value={state.overbookingConfirmation.classScheduleId}
+          />
+          <input name="confirmedChildId" type="hidden" value={state.overbookingConfirmation.childId} />
+        </>
+      ) : null}
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button disabled={pending} type="submit">
+          {pending ? "저장 중..." : "예약 등록"}
+        </Button>
+        {state.overbookingConfirmation ? (
+          <Button disabled={pending} name="confirmOverbooking" type="submit" value="true">
+            {pending ? "저장 중..." : "초과 예약 확인 후 등록"}
+          </Button>
+        ) : null}
+      </div>
     </form>
   );
 }

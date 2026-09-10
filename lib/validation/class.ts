@@ -1,10 +1,10 @@
 import { z } from "zod";
+import {
+  CLASS_CAPACITY_DEFAULT,
+  CLASS_CAPACITY_MAX,
+  CLASS_CAPACITY_MIN,
+} from "@/lib/classes/capacity";
 import { combineKstToUtc } from "@/lib/classes/datetime";
-
-// ADR-004: 정원 상한 8명. 서버 규칙으로만 강제하는 값이라 한 곳에서만 정의하고 export 한다
-// (class-form.tsx 의 <Input max/min> 이 이 값을 그대로 import 해서 쓴다).
-export const CAPACITY_MIN = 1;
-export const CAPACITY_MAX = 8;
 
 const dateStringSchema = z
   .string()
@@ -35,9 +35,9 @@ export const classInputSchema = z
     capacity: z.coerce
       .number()
       .int("정수를 입력해주세요")
-      .min(CAPACITY_MIN, `정원은 ${CAPACITY_MIN}명 이상이어야 합니다`)
-      .max(CAPACITY_MAX, `정원은 ${CAPACITY_MAX}명을 초과할 수 없습니다`)
-      .default(CAPACITY_MAX),
+      .min(CLASS_CAPACITY_MIN, `정원은 ${CLASS_CAPACITY_MIN}명 이상이어야 합니다`)
+      .max(CLASS_CAPACITY_MAX, `정원은 ${CLASS_CAPACITY_MAX}명을 초과할 수 없습니다`)
+      .default(CLASS_CAPACITY_DEFAULT),
     teacherIds: z
       .array(z.string().trim().min(1))
       .transform((ids) => Array.from(new Set(ids)))

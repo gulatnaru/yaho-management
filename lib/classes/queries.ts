@@ -13,6 +13,7 @@ const CLASS_LIST_SELECT = {
   startsAt: true,
   endsAt: true,
   status: true,
+  capacity: true,
   program: {
     select: { id: true, name: true },
   },
@@ -22,6 +23,9 @@ const CLASS_LIST_SELECT = {
         select: { id: true, name: true },
       },
     },
+  },
+  _count: {
+    select: { reservations: { where: { status: "RESERVED" } } },
   },
 } as const;
 

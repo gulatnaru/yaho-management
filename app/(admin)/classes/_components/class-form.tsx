@@ -7,8 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  CLASS_CAPACITY_DEFAULT,
+  CLASS_CAPACITY_MAX,
+  CLASS_CAPACITY_MIN,
+} from "@/lib/classes/capacity";
 import type { ProgramCandidate, TeacherCandidate } from "@/lib/classes/candidates";
-import { CAPACITY_MAX, CAPACITY_MIN } from "@/lib/validation/class";
 import { createClass, updateClass, type ClassFormState } from "../actions";
 import { loadLatestInsurancePrefill } from "../insurance-actions";
 
@@ -41,7 +45,7 @@ const emptyDefaults: ClassFormDefaultValues = {
   startTime: "",
   endTime: "",
   location: "",
-  capacity: String(CAPACITY_MAX),
+  capacity: String(CLASS_CAPACITY_DEFAULT),
   teacherIds: [],
   memo: "",
   insured: false,
@@ -182,8 +186,8 @@ export function ClassForm({
         <Input
           defaultValue={state.values?.capacity ?? defaultValues.capacity}
           id="capacity"
-          max={CAPACITY_MAX}
-          min={CAPACITY_MIN}
+          max={CLASS_CAPACITY_MAX}
+          min={CLASS_CAPACITY_MIN}
           name="capacity"
           step={1}
           type="number"

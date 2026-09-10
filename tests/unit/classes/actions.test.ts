@@ -127,8 +127,8 @@ describe("createClass validation", () => {
     classTeacherCreateManyMock.mockReset();
   });
 
-  it("rejects capacity of 9 or more even if a client bypasses the browser's max attribute", async () => {
-    const result = await createClass({}, validFormData({ capacity: "9" }));
+  it("rejects capacity over 99 even if a client bypasses the browser's max attribute", async () => {
+    const result = await createClass({}, validFormData({ capacity: "100" }));
 
     expect(result.errors?.capacity).toBeDefined();
     expect(transactionMock).not.toHaveBeenCalled();

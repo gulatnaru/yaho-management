@@ -268,7 +268,7 @@ model ClassSchedule {
   startsAt  DateTime // UTC 저장, KST 표시
   endsAt    DateTime
   location  String
-  capacity  Int         @default(8) // ADR-004: 상한 8 검증은 서버 규칙. DB 는 1 이상만 보장
+  capacity  Int         @default(8) // ADR-044: 앱은 1~99 검증, DB 는 1 이상만 보장
   status    ClassStatus @default(SCHEDULED)
   memo      String?
 
@@ -442,8 +442,8 @@ model Refund {
 //   ADD CONSTRAINT "program_default_price_nonneg" CHECK ("defaultPrice" >= 0);
 //
 // 서버에서만 검증하는 규칙 (QA 필수 항목)
-// - capacity <= 8
-// - 클래스별 RESERVED 예약 수 <= capacity
+// - capacity 는 1~99 정수
+// - 클래스별 RESERVED 예약 수가 capacity 이상이면 관리자 초과 예약 확인 필수
 // - CANCELLED 클래스에는 신규 예약 불가
 // - 비활성 Child 신규 예약 제외
 // - PaymentItem.refundedAmount 와 Refund 행 합계의 일치 (DB 는 상한만 보장한다)

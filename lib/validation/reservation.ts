@@ -8,6 +8,14 @@ export const reservationInputSchema = z.object({
 
 export type ReservationInput = z.infer<typeof reservationInputSchema>;
 
+export const reservationSubmissionSchema = reservationInputSchema.extend({
+  confirmOverbooking: z.enum(["true"]).optional(),
+  confirmedClassScheduleId: z.string().trim().min(1).optional(),
+  confirmedChildId: z.string().trim().min(1).optional(),
+});
+
+export type ReservationSubmission = z.infer<typeof reservationSubmissionSchema>;
+
 // prisma/schema.prisma ReservationCancelReason enum 과 정확히 맞춘다.
 export const cancelReservationInputSchema = z.object({
   cancelReason: z.enum(

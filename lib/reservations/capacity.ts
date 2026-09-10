@@ -4,11 +4,6 @@
  * ADR-024: 취소된 예약에 대한 재예약은 새 행이 아니라 기존 행을 RESERVED 로 되돌린다.
  */
 
-/** reservedCount(현재 RESERVED 예약 수)가 capacity 미만이면 자리가 있다. */
-export function hasCapacity(reservedCount: number, capacity: number): boolean {
-  return reservedCount < capacity;
-}
-
 export type ReservationWriteMode = "CREATE" | "REACTIVATE" | "BLOCKED_DUPLICATE" | "BLOCKED_TERMINAL";
 
 export type ExistingReservationStatus = "RESERVED" | "CANCELLED" | "COMPLETED" | "NO_SHOW" | null;

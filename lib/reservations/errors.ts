@@ -13,4 +13,16 @@ export class ChildNotFoundError extends Error {}
 export class ChildNotActiveError extends Error {}
 export class DuplicateReservationError extends Error {}
 export class TerminalReservationError extends Error {}
-export class CapacityFullError extends Error {}
+export class OverbookingConfirmationRequiredError extends Error {
+  constructor(
+    public readonly capacity: number,
+    public readonly reservedCount: number,
+  ) {
+    super("Overbooking confirmation is required");
+    this.name = "OverbookingConfirmationRequiredError";
+  }
+
+  get overByAfterCreate(): number {
+    return this.reservedCount + 1 - this.capacity;
+  }
+}

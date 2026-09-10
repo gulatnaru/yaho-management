@@ -134,4 +134,14 @@ describe("listReservationsByClassSchedule", () => {
       emergencyContactRelation: true,
     });
   });
+
+  it("loads only payment status for each participant without refund or amount fields", async () => {
+    await listReservationsByClassSchedule("class-1");
+
+    const [[callArg]] = reservationFindManyMock.mock.calls;
+    expect(callArg.select.paymentItem).toEqual({
+      select: { payment: { select: { status: true } } },
+    });
+    expect(reservationFindManyMock).toHaveBeenCalledTimes(1);
+  });
 });

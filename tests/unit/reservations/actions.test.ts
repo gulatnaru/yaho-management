@@ -45,16 +45,17 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
-const { cancelReservation, createReservation, createReservationCore } = await import(
+const { cancelReservation, createReservation } = await import(
   "@/app/(admin)/reservations/actions"
 );
+const { createReservationCore } = await import("@/server/reservations/create");
 const {
-  CapacityFullError,
   ChildNotActiveError,
   ChildNotFoundError,
   ClassNotFoundError,
   ClassNotScheduledError,
   DuplicateReservationError,
+  OverbookingConfirmationRequiredError,
   TerminalReservationError,
 } = await import("@/lib/reservations/errors");
 
@@ -156,15 +157,82 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     $transaction: (...args: unknown[]) => transactionMock(...args),
   } as unknown as Parameters<typeof createReservationCore>[0];
 
-  it("정원 8명 초과 예약을 차단한다 (reservedCount === capacity)", async () => {
-    queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
+  it("submit 직전 최신 count가 만석이면 쓰기 없이 초과 예약 확인을 요구한다", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
+    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    reservationFindUniqueTxMock.mockResolvedValue(null);
+    reservationCountMock.mockResolvedValue(8);
+
+    const error = await createReservationCore(prismaLike, {
+      classScheduleId: "class-1",
+      childId: "child-1",
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(OverbookingConfirmationRequiredError);
+    expect(error).toMatchObject({ capacity: 8, reservedCount: 8, overByAfterCreate: 1 });
+    expect(reservationCreateMock).not.toHaveBeenCalled();
+    expect(reservationUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("만석이어도 같은 클래스와 아이에 대한 유효한 확인이면 생성한다", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
+    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    reservationFindUniqueTxMock.mockResolvedValue(null);
+    reservationCountMock.mockResolvedValue(8);
+    reservationCreateMock.mockResolvedValue({ id: "reservation-overbooked" });
+
+    await expect(
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
+    ).resolves.toEqual({ id: "reservation-overbooked" });
+  });
+
+  it("이미 정원을 초과한 경우에도 최신 count로 유효한 확인을 다시 검증해 생성한다", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
+    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    reservationFindUniqueTxMock.mockResolvedValue(null);
+    reservationCountMock.mockResolvedValue(9);
+    reservationCreateMock.mockResolvedValue({ id: "reservation-overbooked" });
+
+    await expect(
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
+    ).resolves.toEqual({ id: "reservation-overbooked" });
+  });
+
+  it("확인한 클래스나 아이가 현재 제출값과 다르면 초과 예약 확인을 재사용하지 않는다", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
     childFindUniqueMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(8);
 
     await expect(
-      createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-1" }),
-    ).rejects.toBeInstanceOf(CapacityFullError);
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-2",
+        childId: "child-2",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
+    ).rejects.toBeInstanceOf(OverbookingConfirmationRequiredError);
     expect(reservationCreateMock).not.toHaveBeenCalled();
   });
 
@@ -184,11 +252,17 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     expect(reservationCreateMock).toHaveBeenCalledTimes(1);
   });
 
-  it("취소된 클래스에 신규 예약을 차단한다", async () => {
+  it("유효한 초과 확인이 있어도 취소된 클래스에 신규 예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "CANCELLED", capacity: 8 }]);
 
     await expect(
-      createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-1" }),
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
     ).rejects.toBeInstanceOf(ClassNotScheduledError);
     expect(childFindUniqueMock).not.toHaveBeenCalled();
     expect(reservationCreateMock).not.toHaveBeenCalled();
@@ -241,12 +315,18 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     ).rejects.toBeInstanceOf(ClassNotFoundError);
   });
 
-  it("비활성 아이의 신규 예약을 차단한다", async () => {
+  it("유효한 초과 확인이 있어도 비활성 아이의 신규 예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
     childFindUniqueMock.mockResolvedValue({ isActive: false });
 
     await expect(
-      createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-1" }),
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
     ).rejects.toBeInstanceOf(ChildNotActiveError);
     expect(reservationFindUniqueTxMock).not.toHaveBeenCalled();
     expect(reservationCreateMock).not.toHaveBeenCalled();
@@ -261,13 +341,19 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     ).rejects.toBeInstanceOf(ChildNotFoundError);
   });
 
-  it("동일 아이의 동일 클래스 중복 예약(기존 RESERVED)을 차단한다", async () => {
+  it("유효한 초과 확인이 있어도 동일 아이의 동일 클래스 중복 예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
     childFindUniqueMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "RESERVED" });
 
     await expect(
-      createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-1" }),
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
     ).rejects.toBeInstanceOf(DuplicateReservationError);
     expect(reservationCountMock).not.toHaveBeenCalled();
     expect(reservationCreateMock).not.toHaveBeenCalled();
@@ -314,6 +400,51 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
       cancelDetail: null,
       cancelledById: null,
     });
+  });
+
+  it("만석인 클래스의 CANCELLED 예약은 확인 전에는 그대로 두고 확인 후 같은 행을 재활성화한다", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 1, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
+    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "CANCELLED" });
+    reservationCountMock.mockResolvedValueOnce(1).mockResolvedValueOnce(2);
+    reservationUpdateMock.mockResolvedValue({ id: "reservation-existing" });
+
+    const error = await createReservationCore(prismaLike, {
+      classScheduleId: "class-1",
+      childId: "child-1",
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(OverbookingConfirmationRequiredError);
+    expect(error).toMatchObject({ capacity: 1, reservedCount: 1, overByAfterCreate: 1 });
+    expect(reservationCreateMock).not.toHaveBeenCalled();
+    expect(reservationUpdateMock).not.toHaveBeenCalled();
+
+    await expect(
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
+    ).resolves.toEqual({ id: "reservation-existing" });
+
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    expect(queryRawMock).toHaveBeenCalledTimes(2);
+    expect(reservationCountMock).toHaveBeenCalledTimes(2);
+    expect(reservationCountMock).toHaveBeenNthCalledWith(1, {
+      where: { classScheduleId: "class-1", status: "RESERVED" },
+    });
+    expect(reservationCountMock).toHaveBeenNthCalledWith(2, {
+      where: { classScheduleId: "class-1", status: "RESERVED" },
+    });
+    expect(reservationCreateMock).not.toHaveBeenCalled();
+    expect(reservationUpdateMock).toHaveBeenCalledTimes(1);
+    const [[callArg]] = reservationUpdateMock.mock.calls;
+    expect(callArg.where).toEqual({ id: "reservation-existing" });
+    expect(callArg.data).toMatchObject({ status: "RESERVED" });
   });
 });
 
@@ -367,15 +498,54 @@ describe("createReservation (Server Action) maps core errors to user-facing form
     expect(result.formError).toBe("이미 종료된 예약입니다. 관리자에게 문의해주세요.");
   });
 
-  it("maps CapacityFullError", async () => {
-    queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 1 }]);
+  it("maps overbooking confirmation data separately and preserves form values", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 1, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
     childFindUniqueMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(1);
 
-    const result = await createReservation({}, validFormData());
+    const result = await createReservation({}, validFormData({ memo: "친구와 함께" }));
 
-    expect(result.formError).toBe("정원이 가득 찼습니다.");
+    expect(result.formError).toBeUndefined();
+    expect(result.values).toEqual({ classScheduleId: "class-1", childId: "child-1", memo: "친구와 함께" });
+    expect(result.overbookingConfirmation).toEqual({
+      classScheduleId: "class-1",
+      childId: "child-1",
+      capacity: 1,
+      reservedCount: 1,
+      overByAfterCreate: 1,
+    });
+    expect(reservationCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a Zod-parsed matching confirmation and redirects after creation", async () => {
+    queryRawMock.mockResolvedValue([
+      { status: "SCHEDULED", capacity: 1, endsAt: new Date("2099-01-01T00:00:00Z") },
+    ]);
+    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    reservationFindUniqueTxMock.mockResolvedValue(null);
+    reservationCountMock.mockResolvedValue(1);
+    reservationCreateMock.mockResolvedValue({ id: "reservation-overbooked" });
+
+    await expect(
+      createReservation(
+        {},
+        validFormData({
+          confirmOverbooking: "true",
+          confirmedClassScheduleId: "class-1",
+          confirmedChildId: "child-1",
+        }),
+      ),
+    ).rejects.toThrow("REDIRECT");
+  });
+
+  it("rejects a forged confirmation value before starting a transaction", async () => {
+    const result = await createReservation({}, validFormData({ confirmOverbooking: "yes" }));
+
+    expect(result.errors).toBeDefined();
+    expect(transactionMock).not.toHaveBeenCalled();
   });
 
   it("maps ClassNotFoundError/ChildNotFoundError to a shared not-found message", async () => {

@@ -14,7 +14,7 @@ vi.mock("@/lib/db/prisma", () => ({
   },
 }));
 
-const { listActiveChildCandidates, listScheduledClassCandidatesWithCapacity } = await import(
+const { listActiveChildCandidates, listScheduledClassCandidates } = await import(
   "@/lib/reservations/candidates"
 );
 
@@ -35,14 +35,14 @@ describe("listActiveChildCandidates", () => {
   });
 });
 
-describe("listScheduledClassCandidatesWithCapacity", () => {
+describe("listScheduledClassCandidates", () => {
   const now = new Date("2026-09-01T00:00:00.000Z");
 
   beforeEach(() => {
     classScheduleFindManyMock.mockReset();
   });
 
-  it("queries only SCHEDULED classes and excludes classes that are already at capacity", async () => {
+  it("queries future SCHEDULED classes and includes available, full, and over-capacity candidates", async () => {
     classScheduleFindManyMock.mockResolvedValue([
       {
         id: "class-open",
@@ -64,28 +64,36 @@ describe("listScheduledClassCandidatesWithCapacity", () => {
         program: { id: "program-1", name: "발레 A반" },
         _count: { reservations: 2 },
       },
+      {
+        id: "class-over",
+        status: "SCHEDULED",
+        startsAt: new Date("2026-09-07T01:00:00.000Z"),
+        endsAt: new Date("2026-09-07T02:00:00.000Z"),
+        location: "실외 운동장",
+        capacity: 2,
+        program: { id: "program-1", name: "발레 A반" },
+        _count: { reservations: 3 },
+      },
     ]);
 
-    const result = await listScheduledClassCandidatesWithCapacity(now);
+    const result = await listScheduledClassCandidates(now);
 
-    expect(classScheduleFindManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: "SCHEDULED" }, orderBy: { startsAt: "asc" } }),
-    );
-    expect(result).toEqual([
-      {
-        id: "class-open",
-        startsAt: new Date("2026-09-05T01:00:00.000Z"),
-        location: "실외 운동장",
-        capacity: 8,
-        reservedCount: 3,
-        program: { id: "program-1", name: "발레 A반" },
-      },
+    const [[callArg]] = classScheduleFindManyMock.mock.calls;
+    expect(callArg.where).toEqual({ status: "SCHEDULED", endsAt: { gte: now } });
+    expect(callArg.orderBy).toEqual({ startsAt: "asc" });
+    expect(callArg.select._count).toEqual({
+      select: { reservations: { where: { status: "RESERVED" } } },
+    });
+    expect(result.map((item) => [item.id, item.reservedCount])).toEqual([
+      ["class-open", 3],
+      ["class-full", 2],
+      ["class-over", 3],
     ]);
   });
 
   // 취소되었거나 완료된 클래스는 where: { status: "SCHEDULED" } 로 이미 DB 쿼리에서 제외된다.
   // 여기서는 결과에 그런 상태값이 섞여 있어도(방어적으로) 정원 기준으로만 필터링되는지 확인한다.
-  it("excludes classes with zero remaining capacity even when reservedCount equals capacity exactly", async () => {
+  it("keeps a class with zero remaining capacity in the candidate list", async () => {
     classScheduleFindManyMock.mockResolvedValue([
       {
         id: "class-exact",
@@ -99,9 +107,10 @@ describe("listScheduledClassCandidatesWithCapacity", () => {
       },
     ]);
 
-    const result = await listScheduledClassCandidatesWithCapacity(now);
+    const result = await listScheduledClassCandidates(now);
 
-    expect(result).toEqual([]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: "class-exact", capacity: 1, reservedCount: 1 });
   });
 
   // ADR-026: DB status는 클래스가 끝나도 SCHEDULED로 남으므로, endsAt이 과거인(표시상 ENDED)
@@ -120,7 +129,7 @@ describe("listScheduledClassCandidatesWithCapacity", () => {
       },
     ]);
 
-    const result = await listScheduledClassCandidatesWithCapacity(now);
+    const result = await listScheduledClassCandidates(now);
 
     expect(result).toEqual([]);
   });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { cancelReservationInputSchema, reservationInputSchema } from "@/lib/validation/reservation";
+import {
+  cancelReservationInputSchema,
+  reservationInputSchema,
+  reservationSubmissionSchema,
+} from "@/lib/validation/reservation";
 
 describe("reservationInputSchema", () => {
   it("accepts a valid input with memo", () => {
@@ -32,6 +36,30 @@ describe("reservationInputSchema", () => {
   it("rejects a whitespace-only classScheduleId", () => {
     const result = reservationInputSchema.safeParse({ classScheduleId: "   ", childId: "child-1" });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("reservationSubmissionSchema", () => {
+  it("parses the three overbooking confirmation fields", () => {
+    const result = reservationSubmissionSchema.safeParse({
+      classScheduleId: "class-1",
+      childId: "child-1",
+      confirmOverbooking: "true",
+      confirmedClassScheduleId: "class-1",
+      confirmedChildId: "child-1",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an arbitrary confirmation flag", () => {
+    expect(
+      reservationSubmissionSchema.safeParse({
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "yes",
+      }).success,
+    ).toBe(false);
   });
 });
 

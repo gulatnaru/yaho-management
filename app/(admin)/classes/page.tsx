@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { listClasses } from "@/lib/classes/queries";
-import { parseClassListStatus, type ClassListStatus } from "@/lib/classes/query-builder";
+import { parseClassListStatus } from "@/lib/classes/query-builder";
+import {
+  buildClassListHref,
+  getActiveClassDatePreset,
+  getClassDatePresets,
+} from "@/server/classes/filter-presets";
 import { ClassSearchForm } from "./_components/class-search-form";
 import { ClassTable } from "./_components/class-table";
 
@@ -11,24 +16,16 @@ interface ClassesPageProps {
   searchParams: Promise<{ dateFrom?: string; dateTo?: string; status?: string; page?: string }>;
 }
 
-function buildPageHref(params: {
-  dateFrom?: string;
-  dateTo?: string;
-  status: ClassListStatus;
-  page: number;
-}) {
-  const query = new URLSearchParams();
-  if (params.dateFrom) query.set("dateFrom", params.dateFrom);
-  if (params.dateTo) query.set("dateTo", params.dateTo);
-  if (params.status !== "SCHEDULED") query.set("status", params.status);
-  query.set("page", String(params.page));
-  return `/classes?${query.toString()}`;
-}
-
 export default async function ClassesPage({ searchParams }: ClassesPageProps) {
   const resolvedParams = await searchParams;
   const status = parseClassListStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;
+  const presets = getClassDatePresets();
+  const activePreset = getActiveClassDatePreset(
+    resolvedParams.dateFrom,
+    resolvedParams.dateTo,
+    presets,
+  );
 
   const {
     classes,
@@ -51,7 +48,18 @@ export default async function ClassesPage({ searchParams }: ClassesPageProps) {
         </Link>
       </div>
 
-      <ClassSearchForm dateFrom={resolvedParams.dateFrom} dateTo={resolvedParams.dateTo} status={status} />
+      <ClassSearchForm
+        activePreset={activePreset}
+        dateFrom={resolvedParams.dateFrom}
+        dateTo={resolvedParams.dateTo}
+        key={`${resolvedParams.dateFrom ?? ""}:${resolvedParams.dateTo ?? ""}:${status}`}
+        presetHrefs={{
+          today: buildClassListHref({ ...presets.today, status }),
+          week: buildClassListHref({ ...presets.week, status }),
+          month: buildClassListHref({ ...presets.month, status }),
+        }}
+        status={status}
+      />
 
       <p className="text-sm text-slate-500">총 {total}건</p>
 
@@ -61,6 +69,8 @@ export default async function ClassesPage({ searchParams }: ClassesPageProps) {
           startsAt: classItem.startsAt,
           endsAt: classItem.endsAt,
           status: classItem.status,
+          capacity: classItem.capacity,
+          reservedCount: classItem._count.reservations,
           program: classItem.program,
         }))}
       />
@@ -70,7 +80,7 @@ export default async function ClassesPage({ searchParams }: ClassesPageProps) {
           {currentPage > 1 ? (
             <Link
               className="text-slate-600 hover:underline"
-              href={buildPageHref({
+              href={buildClassListHref({
                 dateFrom: resolvedParams.dateFrom,
                 dateTo: resolvedParams.dateTo,
                 status,
@@ -88,7 +98,7 @@ export default async function ClassesPage({ searchParams }: ClassesPageProps) {
           {currentPage < totalPages ? (
             <Link
               className="text-slate-600 hover:underline"
-              href={buildPageHref({
+              href={buildClassListHref({
                 dateFrom: resolvedParams.dateFrom,
                 dateTo: resolvedParams.dateTo,
                 status,
