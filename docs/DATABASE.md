@@ -57,7 +57,7 @@ DB 레벨에서 강제한다.
 - ClassTeacher: `unique(classScheduleId, teacherId)`
 - Reservation: `unique(classScheduleId, childId)`
 - PaymentItem: `unique(reservationId)` — 한 예약은 한 번만 청구된다
-- ClassSchedule.capacity: 1 이상. 기본값 8, 상한 8 검증은 서버 규칙으로 처리하고 DB에 8을 하드코딩하지 않는다
+- ClassSchedule.capacity: DB는 1 이상만 보장한다. 애플리케이션은 1~99 정수로 검증하고 기본값은 8이며, 정원 이상 예약은 관리자 명시 확인 후 허용한다
 - 금액 컬럼: 0 이상 정수(KRW)
 - PaymentItem: `CHECK (refundedAmount >= 0 AND refundedAmount <= paidAmount)` — 환불 상한을 DB가 보장한다
 - ChildSafetyInfo: `unique(childId)`

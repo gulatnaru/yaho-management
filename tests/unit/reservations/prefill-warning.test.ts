@@ -25,10 +25,8 @@ describe("resolveClassPrefillWarning", () => {
     );
   });
 
-  it("returns a capacity-full message when SCHEDULED, not yet ended, but absent from candidates", () => {
-    expect(resolveClassPrefillWarning({ status: "SCHEDULED", endsAt: future }, now)).toBe(
-      "선택한 클래스는 정원이 가득 찼습니다.",
-    );
+  it("does not warn for a future SCHEDULED class because every capacity state is selectable", () => {
+    expect(resolveClassPrefillWarning({ status: "SCHEDULED", endsAt: future }, now)).toBeNull();
   });
 
   it("defaults now to the current time when not provided", () => {

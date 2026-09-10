@@ -59,6 +59,17 @@ describe("listClasses", () => {
     const keys = collectKeys(callArgs.select);
     for (const field of FORBIDDEN_SAFETY_KEYS) expect(keys.has(field)).toBe(false);
   });
+
+  it("selects capacity and counts RESERVED reservations only without an N+1 query", async () => {
+    await listClasses({});
+
+    const callArgs = findManyMock.mock.calls[0][0];
+    expect(callArgs.select.capacity).toBe(true);
+    expect(callArgs.select._count).toEqual({
+      select: { reservations: { where: { status: "RESERVED" } } },
+    });
+    expect(findManyMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("getClassDetail", () => {

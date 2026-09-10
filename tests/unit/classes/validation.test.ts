@@ -26,9 +26,12 @@ describe("classInputSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects capacity of 9 or more", () => {
-    const result = classInputSchema.safeParse({ ...baseInput, capacity: 9 });
-    expect(result.success).toBe(false);
+  it.each([1, 8, 99])("accepts capacity %i", (capacity) => {
+    expect(classInputSchema.safeParse({ ...baseInput, capacity }).success).toBe(true);
+  });
+
+  it.each([0, -1, 100, 8.5, "not-a-number"])("rejects invalid capacity %s", (capacity) => {
+    expect(classInputSchema.safeParse({ ...baseInput, capacity }).success).toBe(false);
   });
 
   it("defaults capacity to 8 when omitted", () => {
