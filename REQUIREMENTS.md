@@ -99,11 +99,42 @@ YAHO 운영자가 아이, 친구/형제관계, 프로그램, 클래스 일정, �
 - 기본 정보
 - 친구관계
 - 형제/자매관계
-- 예약 이력
-- 결제 이력
-- 환불 이력
+- 예약·출결·결제 상태 통합 이력
 - 운영 메모
 - 안전 정보 및 동의 현황
+
+## 3.5 아이 통합 이력
+아이 상세는 기존 기본 정보·보호자 연락처·안전/주의정보·동의 현황·운영 메모·수정/운영 액션을 유지하면서, 해당 아이의 예약·클래스·출결·결제 상태를 아이 단위의 통합 운영 이력으로 제공한다. 보호자 연락처를 별도 요약 카드로 중복 강조하지 않는다.
+
+### 상단 요약
+- 총 예약: 해당 Child에 연결된 모든 Reservation 행의 수다. RESERVED, COMPLETED, NO_SHOW, CANCELLED를 모두 포함한다.
+- 참석: `attendance=PRESENT`인 예약 수다. 이후 Reservation.status가 CANCELLED로 바뀌어도 보존된 attendance가 PRESENT이면 포함한다.
+- 불참: `attendance=ABSENT`인 예약 수다. 이후 Reservation.status가 CANCELLED로 바뀌어도 보존된 attendance가 ABSENT이면 포함한다.
+- 취소: 현재 `Reservation.status=CANCELLED`인 예약 수다. attendance 값과 무관하게 센다.
+- 예정: `Reservation.status=RESERVED`이고 `ClassSchedule.status=SCHEDULED`이며 `ClassSchedule.endsAt>=now`인 예약 수다. 과거인데 RESERVED로 남은 예약은 예정에서 제외한다(8.5, 10.3, ADR-026/ADR-028 참고).
+- 이 지표들은 서로 다른 원본 상태축을 집계하므로 상호 배타적이지 않으며, 총 예약이 참석+불참+취소+예정과 반드시 같을 필요는 없다.
+
+### 예정된 클래스와 지난 이력
+- 예정된 클래스에는 위 "예정" 조건을 만족하는 정상 예약만 표시하고, 가까운 클래스부터 확인할 수 있어야 한다.
+- 지난 이력에는 COMPLETED, NO_SHOW, 표시상 종료된 RESERVED, Reservation.status=CANCELLED인 예약, 그리고 ClassSchedule.status=CANCELLED이면서 Reservation.status=RESERVED인 예약을 표시한다. Reservation이 CANCELLED이거나 ClassSchedule이 CANCELLED이면 클래스 날짜가 미래여도 예정 영역에 두지 않고 즉시 지난 이력에 포함한다.
+- 출결 후 CANCELLED된 예약은 취소 상태와 보존된 attendance를 함께 표시한다. CANCELLED+PRESENT는 "취소됨 · 참석", CANCELLED+ABSENT는 "취소됨 · 불참", CANCELLED+attendance null은 "취소 · 출결 미처리" 의미로 확인할 수 있어야 한다.
+- ClassSchedule.status=CANCELLED, Reservation.status=RESERVED인 이력은 "수업 취소"와 원본 예약 상태를 구분해 표시한다. 수업 취소를 예약 취소로 간주하거나 Reservation.status를 변경하지 않으며 별도 "취소된 수업" 영역은 만들지 않는다(docs/DECISIONS.md ADR-046 참고).
+- 예정 예약은 가까운 클래스부터, 지난 이력은 최근 클래스부터 정렬한다. 동일 클래스 시각의 결정적 tie-breaker는 기존 데이터로 구현 가능한 기술 세부사항이므로 PLAN에서 정한다.
+
+### 이력별 표시와 이동
+- 각 항목에서 클래스 날짜/시간, 프로그램/클래스, Reservation 상태, attendance 상태, Payment 상태를 서로 독립적으로 확인한다.
+- Payment.status=PAID는 "결제완료", PARTIAL_REFUNDED는 "부분환불", REFUNDED는 "전액환불", CANCELLED 또는 Payment가 없으면 "미결제"로 표시한다. 이 매핑은 아이 통합 이력 전용 상세 표시이며 Phase 12 참가자 화면의 빠른 확인용 이진 요약(ADR-044)을 변경하지 않는다.
+- Reservation 취소 상태로 Payment를 추론하거나, Payment 상태로 attendance를 추론하거나, 조회 과정에서 원본 상태를 변경하지 않는다.
+- 아이 통합 이력에는 결제금액, 환불금액, 환불 가능 금액을 표시하지 않는다. 기존 Payment/Refund 정책과 상세 관리 화면은 그대로 유지한다.
+- 각 항목에서 기존 클래스 상세와 기존 예약 상세(`/reservations/[id]`)로 이동할 수 있어야 한다.
+- 새 예약은 기존 `/reservations/new?childId=<id>` 진입, ReservationForm, Zod, Server Action 및 예약 생성 검증을 그대로 재사용한다.
+
+### 노출 수·모바일·조회 원칙
+- 지난 이력은 최신 10건만 먼저 표시하고, "더보기"를 통해 중복·누락 없이 이전 이력을 계속 확인할 수 있어야 한다. 추가 조회의 기술 방식과 한 번에 가져올 양은 PLAN에서 기존 구조에 맞춰 정한다.
+- 모바일에서 상단 5개 지표와 예정/지난 이력, 예약·출결·결제·취소 상태 및 이동 액션을 가로 스크롤 없이 확인할 수 있어야 한다. 대형 데스크톱 표를 모바일에 강제하지 않는다.
+- 아이 상세의 관리자 접근 및 기존 안전정보 경계를 유지한다. 통합 이력 조회는 safetyInfo, Refund 상세·금액, 불필요한 보호자 개인정보를 가져오지 않으며 일반 아이/예약/클래스/결제 목록에 민감정보를 새로 노출하지 않는다.
+- Reservation→ClassSchedule→Program→PaymentItem→Payment 관계를 아이 단위로 조회할 때 N+1을 만들지 않는다. 상단 요약은 정확해야 하고, 지난 이력의 초기 조회는 10건으로 제한한다.
+- 기존 Child, Reservation, ClassSchedule, attendance, PaymentItem, Payment 필드만 사용한다. 신규 model/field/enum, migration, backfill은 요구하지 않는다(docs/DECISIONS.md ADR-045 참고).
 
 ---
 
@@ -1114,6 +1145,93 @@ Now — Phase 1~10 기능이 모두 병합된 뒤 로드맵에 남은 첫 번째
 ### Priority
 Now — 실제 관리자 사용에서 모바일 클래스 운영과 참가자·결제 확인의 불편이 확인되었고, Phase 12 Open Questions가 모두 해소되어 설계 단계로 진행할 수 있다.
 
+## Phase 13 — 아이 통합 이력
+
+### Problem
+- 아이 상세에는 기본·안전·동의 정보와 별도의 예약 이력, 결제·환불 이력이 함께 있지만 예약별 클래스·출결·취소·결제 상태를 한 흐름에서 비교하기 어렵다.
+- 현재 아이 예약 이력은 전체 행을 제한 없이 가져오고 attendance와 Payment 상태를 함께 조회하지 않으며, 결제·환불 이력은 별도 쿼리와 금액 중심 섹션으로 분리되어 있다.
+- 관리자는 한 아이의 예정 수업과 지난 운영 결과를 모바일에서 빠르게 파악하기 위해 여러 화면을 오가야 한다.
+
+### Current Process
+- 아이 상세 route는 `/children/[id]`이며 기본 정보, 보호자 연락처, 운영 메모, 안전정보, 동의 현황, 예약 이력, 결제·환불 이력과 기존 운영 액션을 제공한다.
+- `listReservationsByChild`는 클래스 시작일 내림차순으로 해당 아이의 모든 예약을 한 번에 조회하지만 attendance와 Payment 상태는 포함하지 않고 pagination도 없다.
+- `listPaymentItemsByChild`는 같은 아이의 결제 항목과 Refund 상세·금액을 별도 조회한다. 예약별 통합 상태를 만들기 위한 조회가 아니다.
+- 기존 예약 상세 `/reservations/[id]`, 클래스 상세 `/classes/[id]`, 아이 기준 예약 진입 `/reservations/new?childId=<id>`가 모두 존재한다.
+- Reservation에는 attendance가 직접 저장되고, 예약당 선택적 PaymentItem 1건이 Payment에 연결된다. 요구한 통합 이력은 현재 schema의 관계만으로 구성할 수 있다.
+- 목록 pagination은 `page` 기반 20건 패턴이 있으나 상세 화면 안의 "더보기" 패턴은 아직 없다.
+
+### User Story
+- 관리자로서 아이 상세 상단에서 총 예약·참석·불참·취소·예정 규모를 한눈에 확인하고 싶다.
+- 관리자로서 앞으로 갈 클래스와 최근 참여·노쇼·취소 이력을 분리해 보면서 예약·출결·결제 상태를 함께 확인하고 싶다.
+- 관리자로서 모바일에서도 필요한 이력을 빠르게 훑고 기존 클래스/예약 상세와 새 예약 화면으로 이동하고 싶다.
+
+### Scope
+- 아이 상세 상단의 총 예약/참석/불참/취소/예정 5개 요약 지표
+- 예정된 클래스와 지난 이력의 분리 표시
+- Reservation, attendance, ClassSchedule, Payment 상태의 독립 표시
+- CANCELLED + PRESENT/ABSENT/null 이력 보존 표현
+- 아이 이력용 결제 상태 상세 표시: 결제완료/부분환불/전액환불/미결제
+- 지난 이력 최근 10건 초기 표시와 중복·누락 없는 더보기
+- 기존 클래스 상세·예약 상세 이동
+- 기존 `childId` prefill을 이용한 새 예약 진입
+- 모바일 우선 배치, N+1 금지, 최소 개인정보 조회
+
+### Out of Scope
+- Customer/Guardian 도메인 또는 보호자 CRM 신설
+- 가구·가족 단위 통합 화면, 고객 등급·태그·CRM 메모
+- 고객별 총매출, LTV, 재방문율, 세그먼트 등 분석
+- 결제금액·환불금액·환불 가능 금액의 아이 통합 이력 표시
+- Payment/Refund 상태 머신, 환불 eligibility, 예약 취소·환불 독립 정책 변경
+- 쿠폰·포인트·프로모션, 문자/SMS·카카오톡·자동 알림
+- 고객용 화면, self-service 예약, 데이터 export
+- Dashboard/Revenue 확장 또는 새로운 출결 정책
+- 신규 model/field/enum, migration, backfill
+
+### Business Rules
+- 총 예약은 Child에 연결된 Reservation 전체 행 수이며 RESERVED/COMPLETED/NO_SHOW/CANCELLED를 모두 포함한다.
+- 참석과 불참은 최종 Reservation.status가 아니라 보존된 attendance 원본을 기준으로 각각 PRESENT와 ABSENT를 센다. 출결 후 CANCELLED된 예약도 포함한다.
+- 취소는 attendance와 무관하게 현재 Reservation.status=CANCELLED인 행을 센다.
+- 예정은 Reservation.status=RESERVED, ClassSchedule.status=SCHEDULED, ClassSchedule.endsAt>=now를 모두 만족하는 예약이다. 기존 endsAt 기반 조회 시점 판정(ADR-026/ADR-028)을 사용하며 과거 RESERVED stale 행은 예정에서 제외한다.
+- 요약 지표는 서로 다른 상태축의 집계이므로 상호 배타적이지 않다.
+- 예정 영역은 가까운 클래스부터 표시한다. 지난 이력은 최근 클래스부터 표시하고 CANCELLED 예약은 클래스 날짜와 무관하게 예정 영역에서 제외한다.
+- ClassSchedule.status=CANCELLED이면서 Reservation.status=RESERVED인 예약은 클래스 날짜가 미래여도 예정 영역에서 제외하고 즉시 지난 이력에 포함한다. 별도 취소 수업 영역을 만들지 않으며, "수업 취소"와 Reservation의 원본 RESERVED 상태를 독립적으로 표시한다(ADR-046).
+- Reservation, attendance, ClassSchedule, Payment는 독립적인 원본 상태축으로 표시하며 조회를 위해 새 DB status를 만들거나 원본 상태를 변경하지 않는다.
+- CANCELLED+attendance null/PRESENT/ABSENT는 각각 취소·출결 미처리, 취소됨·참석, 취소됨·불참 이력을 확인할 수 있어야 한다(ADR-033/ADR-044).
+- 아이 통합 이력의 Payment 표시는 PAID=결제완료, PARTIAL_REFUNDED=부분환불, REFUNDED=전액환불, CANCELLED 또는 Payment 없음=미결제다. Phase 12 클래스 참가자 화면의 "결제완료/미결제" 이진 요약은 그대로 유지한다.
+- 지난 이력은 최근 10건만 처음 표시하고 더보기로 이전 이력을 중복·누락 없이 이어서 조회한다. pagination 방식과 추가 batch 크기, 동률 정렬 기준은 PLAN의 기술 설계로 정한다.
+- 기존 아이 상세의 기본 정보, 보호자 연락처, 운영 메모, 안전정보, 동의 및 운영 액션을 유지하되 보호자 연락처를 별도 요약으로 중복 강조하지 않는다.
+- 새 예약은 `/reservations/new?childId=<id>`와 기존 폼·검증·Server Action을 재사용한다. 클래스/예약 이동도 기존 상세 route를 사용한다.
+- 통합 이력 조회는 safetyInfo, Refund 상세·금액, 불필요한 개인정보를 포함하지 않고 N+1을 만들지 않는다.
+- 클래스 정원·초과 예약·중복/비활성/종료 차단, 출결 전환, 취소 후 attendance 보존, 취소·환불 독립, Payment/Refund lifecycle, Dashboard/Revenue 집계, KST, 권한과 안전정보 경계는 변경하지 않는다.
+
+### Acceptance Criteria
+- 아이 상세에서 총 예약/참석/불참/취소/예정 5개 지표를 확인할 수 있고 각 값이 위 Business Rules와 일치한다.
+- 총 예약에는 CANCELLED가 포함되며, 참석/불참은 CANCELLED 여부와 무관하게 attendance 원본으로 계산된다.
+- 예정된 클래스와 지난 이력이 분리되고, 예정은 가까운 순서, 지난 이력은 최근 클래스 순서로 표시된다.
+- 미래 ClassSchedule이 CANCELLED이고 Reservation은 RESERVED로 남아 있어도 예정에서는 제외되고 지난 이력에 포함되며, 수업 취소와 예약 취소가 구분되어 표시된다.
+- CANCELLED+PRESENT/ABSENT/null에서 취소 상태와 보존된 출결 상태를 함께 확인할 수 있다.
+- 각 이력에서 예약 상태, attendance, 클래스/프로그램과 Payment 상태를 서로 독립적으로 확인한다.
+- PAID/PARTIAL_REFUNDED/REFUNDED/CANCELLED/Payment 없음이 각각 결제완료/부분환불/전액환불/미결제로 표시된다.
+- 아이 통합 이력에는 결제금액, 환불금액, 환불 가능 금액이 표시되지 않는다.
+- 지난 이력은 최근 10건만 먼저 표시되고, 더보기 후 이전 이력이 중복·누락 없이 이어진다.
+- 각 이력에서 기존 클래스 상세와 예약 상세로 이동할 수 있다.
+- 아이 상세의 예약 추가는 기존 `childId` prefill 흐름과 동일한 서버 검증을 사용한다.
+- 모바일에서 요약과 예정/지난 이력의 핵심 상태·이동을 가로 스크롤 없이 사용할 수 있다.
+- 통합 이력 조회에 N+1이 없고, safetyInfo·Refund 상세/금액·불필요한 개인정보를 조회하거나 일반 목록에 노출하지 않는다.
+- 기존 예약·출결·취소·결제·환불·Dashboard·Revenue 정책과 상태 전환에 회귀가 없다.
+- 신규 Prisma model/field/enum, migration, backfill이 없다.
+
+### Conflicts
+- Phase 12 참가자 화면은 PAID/PARTIAL_REFUNDED/REFUNDED를 모두 "결제완료"로 축약하지만, Phase 13 아이 이력은 부분/전액 환불 여부까지 구분한다. 이는 같은 원본 Payment.status를 목적별로 다르게 표시하는 것이며 ADR-044의 클래스 운영용 이진 요약을 대체하지 않는다(ADR-045).
+- 클래스 취소는 연결된 Reservation을 자동 취소하지 않는다(9.4). 미래 CANCELLED 클래스에 `Reservation.status=RESERVED`가 남는 경우도 예약 상태를 바꾸지 않고 지난 이력에 포함하며 "수업 취소"로 구분하기로 해 충돌을 해소했다(ADR-046).
+- 현재 아이 상세의 별도 예약 이력과 결제·환불 금액 중심 이력은 Phase 13의 상태 중심 통합 이력으로 재구성하며, 아이 상세 이력에서는 금액을 제거한다. 기존 결제·환불 관리 route와 정책은 제거하지 않는다.
+
+### Open Questions
+없음. 미래 ClassSchedule이 CANCELLED이고 Reservation이 RESERVED로 남은 경우도 즉시 지난 이력에 포함하기로 확정해 마지막 분류 질문을 해소했다(ADR-046).
+
+### Priority
+Now — Phase 12까지 운영 데이터와 상태축이 갖춰졌고, 관리자가 아이 한 명의 예정 수업과 과거 운영 이력을 모바일에서 통합 확인해야 하는 실사용 요구가 다음 우선순위다. Open Questions가 모두 해소되어 PLAN으로 진행할 수 있다.
+
 ---
 
 # 23. Acceptance Criteria
@@ -1122,6 +1240,13 @@ Now — 실제 관리자 사용에서 모바일 클래스 운영과 참가자·�
 - [ ] 아이를 등록할 수 있다.
 - [ ] 아이를 검색할 수 있다.
 - [ ] 아이 상세에서 관계/예약/결제/환불을 볼 수 있다.
+- [ ] 아이 상세에서 총 예약/참석/불참/취소/예정 5개 요약과 예정 클래스·지난 이력을 확인할 수 있다.
+- [ ] 총 예약에는 CANCELLED가 포함되고 참석/불참은 출결 후 취소 여부와 무관하게 보존된 attendance로 집계된다.
+- [ ] ClassSchedule이 CANCELLED이고 Reservation이 RESERVED인 미래 예약도 예정에서 제외해 지난 이력에 포함하며, 수업 취소와 예약 취소를 구분한다.
+- [ ] 이력에서 예약·출결·결제 상태를 독립적으로 확인하고, 부분환불/전액환불을 구분하되 금액은 표시하지 않는다.
+- [ ] 지난 이력은 최근 10건부터 표시되고 더보기 후 중복·누락 없이 이어진다.
+- [ ] 이력에서 기존 클래스/예약 상세 및 기존 childId prefill 예약 화면으로 이동할 수 있다.
+- [ ] 모바일에서 가로 스크롤 없이 통합 이력을 확인하며, 일반 목록에 안전정보나 불필요한 개인정보가 추가되지 않는다.
 
 ### 관계
 - [ ] 친구를 연결할 수 있다.
