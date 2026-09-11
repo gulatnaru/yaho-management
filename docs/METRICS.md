@@ -25,6 +25,7 @@ Retrospective 에이전트의 입력이 되는 기록이다.
 | 24 | - | Dashboard/Revenue UX 개선 | 0 | 0 | 1 | 1 | 1 | REQUIREMENT |
 | 26 | - | Phase 11 안정화 | 0 | 0 | 1 | 1 | 1 | TEST |
 | 28 | - | Phase 12 클래스·예약 운영 고도화 | 0 | 0 | 1 | 0 | 1 | TEST |
+| 30 | - | Phase 13 아이 통합 이력 | 0 | 0 | 0 | 0 | 0 | OTHER |
 
 ## 원인 분류 코드
 반복 유형을 세기 위해 아래 코드 중 하나로 적는다.
