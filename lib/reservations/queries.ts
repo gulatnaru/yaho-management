@@ -149,26 +149,3 @@ export async function listReservationsByClassSchedule(classScheduleId: string) {
 export type ClassReservationParticipant = Awaited<
   ReturnType<typeof listReservationsByClassSchedule>
 >[number];
-
-// 아이 상세 화면(예약 이력 섹션)에서 쓰는 예약 목록. 최신 클래스가 위로 오도록 정렬한다.
-const CHILD_RESERVATION_LIST_SELECT = {
-  id: true,
-  status: true,
-  classSchedule: {
-    select: {
-      id: true,
-      startsAt: true,
-      endsAt: true,
-      status: true,
-      program: { select: { id: true, name: true } },
-    },
-  },
-} as const;
-
-export async function listReservationsByChild(childId: string) {
-  return prisma.reservation.findMany({
-    where: { childId },
-    select: CHILD_RESERVATION_LIST_SELECT,
-    orderBy: { classSchedule: { startsAt: "desc" } },
-  });
-}
