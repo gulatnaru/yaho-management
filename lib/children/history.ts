@@ -2,7 +2,7 @@ import type { ClassStatus, ReservationStatus } from "@prisma/client";
 import { getClassDisplayStatus } from "@/lib/classes/status";
 
 export const CHILD_HISTORY_PAGE_SIZE = 10;
-export const MAX_CHILD_HISTORY_PAGE = Math.floor(2_147_483_647 / CHILD_HISTORY_PAGE_SIZE);
+export const MAX_CHILD_HISTORY_PAGE = 100;
 
 const RESERVATION_LABELS = {
   RESERVED: "예약됨",
