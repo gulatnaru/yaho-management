@@ -119,7 +119,7 @@ export async function listChildPastHistory(
   page: number,
 ) {
   const safePage =
-    Number.isInteger(page) && page > 0 && page <= MAX_CHILD_HISTORY_PAGE ? page : 1;
+    Number.isInteger(page) && page > 0 ? Math.min(page, MAX_CHILD_HISTORY_PAGE) : 1;
   const where = buildChildPastHistoryWhere(childId, now);
   const take = safePage * CHILD_HISTORY_PAGE_SIZE;
   const [items, total] = await Promise.all([
@@ -140,6 +140,6 @@ export async function listChildPastHistory(
     total,
     page: safePage,
     pageSize: CHILD_HISTORY_PAGE_SIZE,
-    hasMore: items.length < total,
+    hasMore: safePage < MAX_CHILD_HISTORY_PAGE && items.length < total,
   };
 }

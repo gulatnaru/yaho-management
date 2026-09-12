@@ -119,6 +119,7 @@ YAHO 운영자가 아이, 친구/형제관계, 프로그램, 클래스 일정, �
 - 지난 이력에는 COMPLETED, NO_SHOW, 표시상 종료된 RESERVED, Reservation.status=CANCELLED인 예약, 그리고 ClassSchedule.status=CANCELLED이면서 Reservation.status=RESERVED인 예약을 표시한다. Reservation이 CANCELLED이거나 ClassSchedule이 CANCELLED이면 클래스 날짜가 미래여도 예정 영역에 두지 않고 즉시 지난 이력에 포함한다.
 - 출결 후 CANCELLED된 예약은 취소 상태와 보존된 attendance를 함께 표시한다. CANCELLED+PRESENT는 "취소됨 · 참석", CANCELLED+ABSENT는 "취소됨 · 불참", CANCELLED+attendance null은 "취소 · 출결 미처리" 의미로 확인할 수 있어야 한다.
 - ClassSchedule.status=CANCELLED, Reservation.status=RESERVED인 이력은 "수업 취소"와 원본 예약 상태를 구분해 표시한다. 수업 취소를 예약 취소로 간주하거나 Reservation.status를 변경하지 않으며 별도 "취소된 수업" 영역은 만들지 않는다(docs/DECISIONS.md ADR-046 참고).
+- ClassSchedule.status=CANCELLED, Reservation.status=RESERVED인 이력에는 "예약 취소" 액션을 노출하지 않는다. 예약 상세와 예약 취소 직접 URL도 같은 취소 가능 조건을 사용하며, 직접 URL에서는 취소 가능한 form을 제공하지 않는다.
 - 예정 예약은 가까운 클래스부터, 지난 이력은 최근 클래스부터 정렬한다. 동일 클래스 시각의 결정적 tie-breaker는 기존 데이터로 구현 가능한 기술 세부사항이므로 PLAN에서 정한다.
 
 ### 이력별 표시와 이동
@@ -377,6 +378,10 @@ Phase 5 시점 기준으로, COMPLETED와 NO_SHOW는 실제로 DB에 기록되�
 클래스가 정상 진행되어도 특정 아이만 예약을 취소할 수 있다.
 
 소속 클래스가 완료로 표시되는 예약(10.3 참고)은 취소할 수 없다(docs/DECISIONS.md ADR-027 참고).
+
+`Reservation.status=RESERVED`인 예약은 소속 클래스가 `status=SCHEDULED`이고 취소 시점에 `endsAt>=now`일 때만 취소할 수 있다. ClassSchedule이 CANCELLED이면 수업 취소 이력과 Reservation의 원본 RESERVED 상태를 유지하고, 아이 이력·클래스 참가자·예약 상세에서 예약 취소 액션을 노출하지 않으며 `/reservations/[id]/cancel` 직접 접근에서도 취소 가능한 form을 제공하지 않는다. 서버의 최종 조건부 쓰기 검증은 동일 조건을 독립적으로 재확인해 직접 제출을 fail-close해야 한다.
+
+이 조건은 출결 후 COMPLETED/NO_SHOW 예약의 사후 취소를 허용하고 attendance 이력을 보존하는 ADR-033을 변경하지 않는다. 이미 CANCELLED인 예약과 출결 없이 종료된 클래스의 RESERVED 예약을 차단하는 기존 규칙도 유지한다.
 
 예:
 ```text
@@ -1232,6 +1237,75 @@ Now — 실제 관리자 사용에서 모바일 클래스 운영과 참가자·�
 ### Priority
 Now — Phase 12까지 운영 데이터와 상태축이 갖춰졌고, 관리자가 아이 한 명의 예정 수업과 과거 운영 이력을 모바일에서 통합 확인해야 하는 실사용 요구가 다음 우선순위다. Open Questions가 모두 해소되어 PLAN으로 진행할 수 있다.
 
+## Phase 14 — 운영 안정화 2차
+
+### Problem
+- Phase 13 아이 통합 이력에서 `ClassSchedule.status=CANCELLED`, `Reservation.status=RESERVED`인 예약에 "예약 취소" 액션이 표시되지만, 최종 Server Action은 RESERVED 예약의 소속 클래스가 SCHEDULED이고 종료되지 않은 경우에만 쓰기를 허용하므로 이 액션은 항상 실패한다.
+- 아이 상세의 `historyPage`는 정수 overflow만 피하는 매우 큰 상한을 사용한다. URL을 직접 조작하면 아이 한 명의 이력 범위라도 비정상적으로 큰 누적 조회량이 Prisma `take`로 전달될 수 있다.
+
+### Current Process
+- 공통 `canCancelReservation()`은 아이 통합 이력, 클래스 참가자 화면, 예약 상세, 예약 취소 직접 URL, Server Action 사전검증에서 재사용된다. 현재 RESERVED 예약은 클래스의 시간상 종료 여부만 반영하고 ClassSchedule의 CANCELLED 상태를 취소 불가로 판정하지 못한다.
+- 예약 취소 Server Action의 최종 조건부 갱신은 RESERVED 예약에 `ClassSchedule.status=SCHEDULED`와 `ClassSchedule.endsAt>=취소 시각`을 요구한다. 따라서 잘못 노출된 UI와 직접 URL form을 거쳐 제출해도 DB 쓰기는 fail-close되지만, 사용자에게 실행 불가능한 액션이 제공된다.
+- 아이 지난 이력은 `CHILD_HISTORY_PAGE_SIZE=10`이고 `take=effective page*10`으로 누적 조회한다. 현재 `MAX_CHILD_HISTORY_PAGE`는 32비트 정수 overflow 방지 수준이어서 실질적인 요청량 제한 역할을 하지 못한다.
+
+### User Story
+- 관리자로서 화면에 표시된 예약 취소 액션이 실제 서버에서 허용되는 조건과 일치하여, 항상 실패하는 취소 흐름에 진입하지 않고 싶다.
+- 관리자로서 잘못되거나 과도한 `historyPage` URL이 들어와도 아이 이력 조회량이 안전한 범위로 정규화되기를 원한다.
+
+### Scope
+- RESERVED 예약의 UI 취소 가능 조건을 실제 Server Action의 쓰기 조건과 일치시킨다.
+- 취소된 클래스의 RESERVED 예약에서 아이 이력·클래스 참가자·예약 상세의 예약 취소 액션을 숨긴다.
+- 같은 예약의 `/reservations/[id]/cancel` 직접 접근에서 취소 가능한 form을 제공하지 않는다.
+- Server Action의 기존 fail-close 검증을 유지하고 관련 직접 제출 회귀를 검증한다.
+- 아이 이력의 페이지 크기 10을 유지하면서 `MAX_CHILD_HISTORY_PAGE=100`과 최대 누적 `take=1000`을 적용한다.
+- `historyPage`의 기본값·잘못된 입력·상한 초과 입력을 정규화하고 기존 더보기 동작을 유지한다.
+- Phase 13 및 기존 예약 취소 흐름의 unit/E2E 회귀 검증을 보강한다.
+
+### Out of Scope
+- 새로운 Reservation/ClassSchedule status, 자동 예약 취소, 자동 환불 또는 Refund 생성
+- Payment/Refund/Attendance 정책이나 Phase 13 summary·upcoming·past predicate 변경
+- 아이 통합 이력 재설계, cursor pagination 전환, pagination redesign
+- DB index, Prisma schema/migration, 새로운 model/field/enum
+- Dashboard/Revenue, CRM, 알림, 고객 화면 및 unrelated UI polish
+
+### Business Rules
+- `Reservation.status=RESERVED`인 예약은 `ClassSchedule.status=SCHEDULED`이고 `ClassSchedule.endsAt>=now`일 때만 취소 가능한 것으로 UI와 직접 취소 URL에서 판단한다.
+- `ClassSchedule.status=CANCELLED`, `Reservation.status=RESERVED`인 경우 "수업 취소"와 원본 "예약됨" 이력을 그대로 표시하되 예약 취소 버튼/링크를 노출하지 않고 직접 취소 URL에서도 취소 form을 제공하지 않는다.
+- 클래스 취소를 이유로 Reservation을 자동 CANCELLED로 바꾸거나 attendance/Payment를 변경하거나 Refund를 만들지 않는다. 자동 환불도 하지 않는다.
+- 정상 SCHEDULED+RESERVED 예약의 기존 취소 흐름, COMPLETED/NO_SHOW의 사후 취소 및 attendance 보존(ADR-033), 출결 없이 종료된 RESERVED 예약의 취소 차단(ADR-027)은 그대로 유지한다.
+- Server Action은 UI 판정을 신뢰하지 않고 기존 조건부 갱신으로 클래스 상태·종료 시각·예약 상태를 다시 확인한다. UI에서 액션을 숨겨도 직접 제출에 대한 fail-close 검증을 제거하거나 약화하지 않는다.
+- `CHILD_HISTORY_PAGE_SIZE`는 10, `MAX_CHILD_HISTORY_PAGE`는 100이며 한 요청의 누적 history query `take`는 1000을 초과할 수 없다.
+- `historyPage`가 없거나 빈 값, 정수 형식이 아닌 문자열, 0 또는 음수이면 effective page는 1이다. 1~100 정수는 그대로 사용하고 100을 초과하는 정수는 100으로 clamp한다.
+- 기존 누적 더보기는 page 1→10건, page 2→20건, page 3→30건 방식으로 유지하며 page 100에서 최대 1000건까지 조회한다.
+- 최신 이력 우선 정렬, 결정적 tie-break, count/hasMore, URL source of truth, 새로고침·뒤로가기, `#past-history` anchor의 의미를 변경하지 않는다.
+- Phase 13의 예정/지난 이력 분류와 ADR-046은 변경하지 않는다. 취소된 클래스의 RESERVED 예약은 계속 예정에서 제외되고 지난 이력에 포함된다.
+
+### Acceptance Criteria
+- ClassSchedule=SCHEDULED, Reservation=RESERVED이고 `endsAt>=now`인 예약에는 기존 예약 취소 액션이 표시되고 정상 취소할 수 있다.
+- ClassSchedule=CANCELLED, Reservation=RESERVED인 아이 이력에는 "수업 취소"와 "예약됨"이 표시되지만 예약 취소 액션은 표시되지 않는다.
+- 위 예약의 `/reservations/[id]/cancel` 직접 URL에는 취소 가능한 form이 표시되지 않는다.
+- 위 예약의 Server Action을 직접 제출해도 기존 fail-close 검증이 요청을 거부하고 Reservation, attendance, Payment, Refund 데이터가 변경되지 않는다.
+- COMPLETED/NO_SHOW의 기존 사후 취소, attendance 보존, 정상 RESERVED 취소 및 출결 없는 종료 클래스 RESERVED 취소 차단이 그대로 동작한다.
+- 수업 취소와 예약 취소의 의미가 독립적으로 유지되고 ADR-046의 예정 제외·지난 이력 포함·취소 summary 미증가 규칙에 회귀가 없다.
+- `historyPage` 없음, 빈 값, invalid string, 0, 음수는 1로 정규화된다.
+- `historyPage` 1, 2, 99, 100은 각각 같은 effective page가 된다.
+- `historyPage` 101과 매우 큰 정수는 100으로 clamp된다.
+- history query의 누적 `take`는 어떤 URL 입력에서도 1000을 초과하지 않는다.
+- 기존 10→20→30 누적 더보기, 중복·누락 없는 정렬, URL·reload·back·anchor 동작이 유지된다.
+- 취소 가능 여부와 `historyPage` 경계값을 unit test로 검증하고, 취소된 클래스 RESERVED 예약의 액션 미노출·직접 URL·Server Action fail-close 및 Phase 13 이력 분류를 E2E/관련 회귀 테스트로 검증한다.
+- 기존 Phase 13 unit/E2E, 예약 취소 흐름, 전체 unit/lint/typecheck/build가 통과한다.
+- Prisma schema/migration과 기존 결제·환불·출결·Dashboard·Revenue 정책에 변경이 없다.
+
+### Conflicts
+- 없음. Issue A는 ADR-027의 서버 차단, ADR-033의 출결 후 취소 예외, ADR-046의 수업 취소/예약 취소 독립 표시를 바꾸지 않고 공통 UI eligibility를 최종 쓰기 조건과 맞추는 보강이다.
+- Issue B는 비정상 URL 입력을 제한하는 technical safety cap이며 기존 Phase 13의 10건 단위 누적 더보기 정책과 충돌하지 않는다.
+
+### Open Questions
+없음. 공통 취소 eligibility 사용처와 직접 취소 페이지가 확인되었고, 최대 page 100 clamp는 기존 pagination 비즈니스 정책과 충돌하지 않는다.
+
+### Priority
+Now — Phase 13 QA/Review에서 확인된 두 non-blocking MINOR를 다음 기능 확장 전에 제거해 UI와 서버 규칙의 정합성 및 조회 입력 안전성을 높이는 작은 안정화 작업이다.
+
 ---
 
 # 23. Acceptance Criteria
@@ -1245,6 +1319,8 @@ Now — Phase 12까지 운영 데이터와 상태축이 갖춰졌고, 관리자�
 - [ ] ClassSchedule이 CANCELLED이고 Reservation이 RESERVED인 미래 예약도 예정에서 제외해 지난 이력에 포함하며, 수업 취소와 예약 취소를 구분한다.
 - [ ] 이력에서 예약·출결·결제 상태를 독립적으로 확인하고, 부분환불/전액환불을 구분하되 금액은 표시하지 않는다.
 - [ ] 지난 이력은 최근 10건부터 표시되고 더보기 후 중복·누락 없이 이어진다.
+- [ ] 아이 이력의 `historyPage`는 잘못된 값이면 1, 100 초과이면 100으로 정규화되고 누적 조회량은 최대 1000건이다.
+- [ ] 취소된 ClassSchedule의 RESERVED 예약은 수업 취소·예약됨 이력을 유지하되 예약 취소 액션이 없고, 직접 취소 URL에서도 취소 form이 제공되지 않는다.
 - [ ] 이력에서 기존 클래스/예약 상세 및 기존 childId prefill 예약 화면으로 이동할 수 있다.
 - [ ] 모바일에서 가로 스크롤 없이 통합 이력을 확인하며, 일반 목록에 안전정보나 불필요한 개인정보가 추가되지 않는다.
 
@@ -1269,6 +1345,8 @@ Now — Phase 12까지 운영 데이터와 상태축이 갖춰졌고, 관리자�
 - [ ] 관리자는 만석 클래스에 경고를 확인한 뒤 명시적으로 초과 예약할 수 있고, 서버는 행 잠금 후 최신 RESERVED 인원과 기존 예약 검증을 다시 적용한다.
 - [ ] 개인 예약을 취소할 수 있다.
 - [ ] 개인 취소 사유가 저장된다.
+- [ ] RESERVED 예약의 취소 가능 UI와 직접 URL은 `ClassSchedule.status=SCHEDULED AND endsAt>=now` 조건을 따르고, Server Action도 같은 조건을 독립적으로 fail-close한다.
+- [ ] COMPLETED/NO_SHOW의 사후 취소와 attendance 이력 보존, 출결 없는 종료 클래스 RESERVED 취소 차단은 기존 정책대로 유지된다.
 - [ ] 클래스 상세와 아이 상세 양쪽에서 동일한 예약 생성 흐름으로 진입할 수 있다.
 - [ ] 출결 후 취소된 예약은 취소 상태와 보존된 참석/불참 이력을 함께 표시한다.
 - [ ] 참가자 통합 화면은 PAID/PARTIAL_REFUNDED/REFUNDED를 결제완료로, CANCELLED/Payment 없음을 미결제로 요약하되 출결이나 환불 정책을 변경하지 않는다.

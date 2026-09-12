@@ -704,12 +704,25 @@ describe("cancelReservation", () => {
   });
 
   // 회귀 테스트: Reservation.status 는 계속 RESERVED 로 남지만, 소속 클래스가 이미 끝났으면
-  // (endsAt 과거) getReservationDisplayStatus 기준 ENDED 로 계산되어 취소도 막아야 한다.
+  // 공통 취소 eligibility의 endsAt 판정에 따라 취소를 막아야 한다.
   it("rejects cancelling a reservation whose class already ended, even though reservation.status is still RESERVED", async () => {
     requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
     reservationFindUniqueMock.mockResolvedValue({
       status: "RESERVED",
       classSchedule: { status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") },
+    });
+
+    const result = await cancelReservation("reservation-1", {}, cancelFormData());
+
+    expect(result.formError).toBe("이미 취소되었거나 취소할 수 없는 예약입니다.");
+    expect(reservationUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects cancelling a RESERVED reservation whose class is CANCELLED without writing", async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+    reservationFindUniqueMock.mockResolvedValue({
+      status: "RESERVED",
+      classSchedule: { status: "CANCELLED", endsAt: new Date("2099-01-01T00:00:00Z") },
     });
 
     const result = await cancelReservation("reservation-1", {}, cancelFormData());

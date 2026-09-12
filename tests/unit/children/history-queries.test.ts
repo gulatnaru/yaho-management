@@ -133,15 +133,56 @@ describe("child history queries", () => {
     );
   });
 
-  it("hides more when every past row is visible and defensively normalizes an invalid page", async () => {
-    countMock.mockResolvedValue(1);
-    findManyMock.mockResolvedValue([{ id: "r-1" }]);
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "defensively normalizes invalid direct page %s to page 1",
+    async (page) => {
+      countMock.mockResolvedValue(1);
+      findManyMock.mockResolvedValue([{ id: "r-1" }]);
 
-    const result = await listChildPastHistory("child-1", NOW, 0);
+      const result = await listChildPastHistory("child-1", NOW, page);
 
-    expect(findManyMock.mock.calls[0][0].take).toBe(10);
-    expect(result).toEqual(
-      expect.objectContaining({ page: 1, total: 1, hasMore: false }),
+      expect(findManyMock.mock.calls[0][0].take).toBe(10);
+      expect(result).toEqual(
+        expect.objectContaining({ page: 1, total: 1, hasMore: false }),
+      );
+    },
+  );
+
+  it.each([
+    [100, 100, 1000],
+    [101, 100, 1000],
+    [Number.MAX_SAFE_INTEGER, 100, 1000],
+  ])(
+    "clamps direct page %s to effective page %s and take %s",
+    async (page, expectedPage, expectedTake) => {
+      countMock.mockResolvedValue(1_001);
+      findManyMock.mockResolvedValue(
+        Array.from({ length: expectedTake }, (_, index) => ({ id: `r-${index}` })),
+      );
+
+      const result = await listChildPastHistory("child-1", NOW, page);
+
+      expect(findManyMock.mock.calls[0][0].take).toBe(expectedTake);
+      expect(result).toEqual(
+        expect.objectContaining({
+          page: expectedPage,
+          pageSize: 10,
+          total: 1_001,
+          hasMore: false,
+        }),
+      );
+    },
+  );
+
+  it("keeps hasMore true below the maximum page when additional rows exist", async () => {
+    countMock.mockResolvedValue(1_001);
+    findManyMock.mockResolvedValue(
+      Array.from({ length: 990 }, (_, index) => ({ id: `r-${index}` })),
     );
+
+    const result = await listChildPastHistory("child-1", NOW, 99);
+
+    expect(findManyMock.mock.calls[0][0].take).toBe(990);
+    expect(result.hasMore).toBe(true);
   });
 });

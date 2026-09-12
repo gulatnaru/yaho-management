@@ -5,8 +5,7 @@ const childHistoryPageSchema = z
   .string()
   .trim()
   .regex(/^[1-9]\d*$/)
-  .transform(Number)
-  .refine((page) => page <= MAX_CHILD_HISTORY_PAGE)
+  .transform((value) => Math.min(Number(value), MAX_CHILD_HISTORY_PAGE))
   .catch(1);
 
 export function parseChildHistoryPage(value: string | string[] | undefined): number {

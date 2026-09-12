@@ -250,9 +250,14 @@ test("아이 통합 이력은 네 상태축과 요약·이동을 모바일에서
     const upcomingSection = page.getByRole("region", { name: "예정된 클래스" });
     const pastSection = page.getByRole("region", { name: "지난 이력" });
     await expect(upcomingSection.getByRole("article")).toHaveCount(1);
-    await expect(
-      upcomingSection.getByRole("article", { name: `${upcoming.program.name} 예약 이력` }),
-    ).toContainText("결제완료");
+    const upcomingCard = upcomingSection.getByRole("article", {
+      name: `${upcoming.program.name} 예약 이력`,
+    });
+    await expect(upcomingCard).toContainText("결제완료");
+    await expect(upcomingCard.getByRole("link", { name: "예약 취소" })).toHaveAttribute(
+      "href",
+      `/reservations/${upcoming.reservation.id}/cancel`,
+    );
     await expect(pastSection.getByRole("article")).toHaveCount(6);
 
     const classCancelledCard = pastSection.getByRole("article", {
@@ -268,6 +273,7 @@ test("아이 통합 이력은 네 상태축과 요약·이동을 모바일에서
     await expect(
       classCancelledReservationState.getByText("예약 취소", { exact: true }),
     ).toHaveCount(0);
+    await expect(classCancelledCard.getByRole("link", { name: "예약 취소" })).toHaveCount(0);
 
     const reservationCancelledCard = pastSection.getByRole("article", {
       name: `${reservationCancelled.program.name} 예약 이력`,
@@ -293,6 +299,18 @@ test("아이 통합 이력은 네 상태축과 요약·이동을 모바일에서
     await expect(
       pastSection.getByRole("article", { name: `${noShow.program.name} 예약 이력` }),
     ).toContainText("미결제");
+
+    await page.goto(`/reservations/${classCancelled.reservation.id}`);
+    await expect(page.getByRole("link", { name: "예약 취소" })).toHaveCount(0);
+
+    await page.goto(`/classes/${classCancelled.classSchedule.id}`);
+    await expect(page.getByRole("link", { name: "예약 취소" })).toHaveCount(0);
+
+    await page.goto(`/reservations/${classCancelled.reservation.id}/cancel`);
+    await expect(page.getByText("이미 취소되었거나 취소할 수 없는 예약입니다.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "예약 취소" })).toHaveCount(0);
+
+    await page.goto(`/children/${child.id}`);
 
     const endedCard = pastSection.getByRole("article", {
       name: `${endedReserved.program.name} 예약 이력`,
