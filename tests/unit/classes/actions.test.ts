@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const requireAdminMock = vi.fn();
 const classCreateMock = vi.fn();
+const classCreateManyAndReturnMock = vi.fn();
+const classFindManyMock = vi.fn();
 const classUpdateManyMock = vi.fn();
 const classFindUniqueMock = vi.fn();
 const classScheduleUpdateManyMock = vi.fn();
@@ -10,11 +12,15 @@ const classTeacherFindManyMock = vi.fn();
 const classTeacherDeleteManyMock = vi.fn();
 const programFindUniqueMock = vi.fn();
 const teacherCountMock = vi.fn();
+const queryRawMock = vi.fn();
 const transactionMock = vi.fn();
 
 const txMock = {
+  $queryRaw: (...args: unknown[]) => queryRawMock(...args),
   classSchedule: {
     create: (...args: unknown[]) => classCreateMock(...args),
+    createManyAndReturn: (...args: unknown[]) => classCreateManyAndReturnMock(...args),
+    findMany: (...args: unknown[]) => classFindManyMock(...args),
     updateMany: (...args: unknown[]) => classUpdateManyMock(...args),
   },
   classTeacher: {
@@ -82,6 +88,17 @@ function validFormData(overrides: Record<string, string | string[]> = {}) {
   return formData;
 }
 
+function validRecurringFormData(overrides: Record<string, string | string[]> = {}) {
+  return validFormData({
+    registrationMode: "recurring",
+    date: "",
+    repeatStartDate: "2099-10-01",
+    repeatEndDate: "2099-10-10",
+    weekdays: ["6"],
+    ...overrides,
+  });
+}
+
 describe("classes server actions require admin", () => {
   beforeEach(() => {
     requireAdminMock.mockReset();
@@ -124,7 +141,10 @@ describe("createClass validation", () => {
     // await 하고 그 결과(또는 throw)를 그대로 반환/전파하는 것과 동일하게 동작한다.
     transactionMock.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
     classCreateMock.mockReset();
+    classCreateManyAndReturnMock.mockReset();
+    classFindManyMock.mockReset();
     classTeacherCreateManyMock.mockReset();
+    queryRawMock.mockReset();
   });
 
   it("rejects capacity over 99 even if a client bypasses the browser's max attribute", async () => {
@@ -195,6 +215,140 @@ describe("createClass validation", () => {
       memo: undefined,
     });
     expect(transactionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("createClass recurring registration", () => {
+  beforeEach(() => {
+    requireAdminMock.mockReset();
+    requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
+    programFindUniqueMock.mockReset();
+    classCreateMock.mockReset();
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
+    queryRawMock.mockReset();
+    queryRawMock.mockResolvedValue([{ id: "program-1", status: "ACTIVE" }]);
+    teacherCountMock.mockReset();
+    teacherCountMock.mockResolvedValue(1);
+    classFindManyMock.mockReset();
+    classFindManyMock.mockResolvedValue([]);
+    classCreateManyAndReturnMock.mockReset();
+    classCreateManyAndReturnMock.mockResolvedValue([{ id: "class-1" }, { id: "class-2" }]);
+    classTeacherCreateManyMock.mockReset();
+    classTeacherCreateManyMock.mockResolvedValue({ count: 2 });
+  });
+
+  it("recomputes dates from recurrence conditions and creates every class and teacher assignment atomically", async () => {
+    const formData = validRecurringFormData({
+      teacherIds: ["teacher-1", "teacher-2"],
+      generatedDates: ["2099-01-01"],
+      location: "  반복 운동장  ",
+      memo: "반복 메모",
+      insured: "on",
+      insurer: "테스트 보험",
+      insurancePolicyNo: "POLICY-TEST",
+      safetyMemo: "합성 안전 메모",
+    });
+    teacherCountMock.mockResolvedValue(2);
+    classCreateManyAndReturnMock.mockResolvedValue([{ id: "class-1" }, { id: "class-2" }]);
+
+    await expect(createClass({}, formData)).rejects.toThrow("REDIRECT");
+
+    expect(queryRawMock).toHaveBeenCalledTimes(1);
+    expect(classCreateManyAndReturnMock).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          startsAt: new Date("2099-10-03T00:00:00.000Z"),
+          endsAt: new Date("2099-10-03T02:00:00.000Z"),
+          location: "반복 운동장",
+          memo: "반복 메모",
+          insured: true,
+        }),
+        expect.objectContaining({
+          startsAt: new Date("2099-10-10T00:00:00.000Z"),
+          endsAt: new Date("2099-10-10T02:00:00.000Z"),
+          location: "반복 운동장",
+          memo: "반복 메모",
+          insured: true,
+        }),
+      ],
+      select: { id: true },
+    });
+    expect(classTeacherCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { classScheduleId: "class-1", teacherId: "teacher-1" },
+        { classScheduleId: "class-1", teacherId: "teacher-2" },
+        { classScheduleId: "class-2", teacherId: "teacher-1" },
+        { classScheduleId: "class-2", teacherId: "teacher-2" },
+      ],
+    });
+  });
+
+  it("rejects an inactive program before duplicate lookup or writes", async () => {
+    queryRawMock.mockResolvedValue([{ id: "program-1", status: "INACTIVE" }]);
+
+    const result = await createClass({}, validRecurringFormData());
+
+    expect(result.formError).toContain("프로그램");
+    expect(classFindManyMock).not.toHaveBeenCalled();
+    expect(classCreateManyAndReturnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an inactive teacher before duplicate lookup or writes", async () => {
+    teacherCountMock.mockResolvedValue(0);
+
+    const result = await createClass({}, validRecurringFormData());
+
+    expect(result.formError).toContain("선생님");
+    expect(classFindManyMock).not.toHaveBeenCalled();
+    expect(classCreateManyAndReturnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects the entire request before starting a transaction when any target date is in the past", async () => {
+    const result = await createClass(
+      {},
+      validRecurringFormData({
+        repeatStartDate: "2020-01-01",
+        repeatEndDate: "2020-01-31",
+        weekdays: ["3"],
+      }),
+    );
+
+    expect(result.formError).toContain("이전인 날짜");
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(classCreateManyAndReturnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects the whole batch on one duplicate and preserves recurring values", async () => {
+    classFindManyMock.mockResolvedValue([{ startsAt: new Date("2099-10-03T00:00:00.000Z") }]);
+
+    const result = await createClass({}, validRecurringFormData());
+
+    expect(result.formError).toContain("2099-10-03");
+    expect(result.values).toMatchObject({
+      registrationMode: "recurring",
+      repeatStartDate: "2099-10-01",
+      repeatEndDate: "2099-10-10",
+      weekdays: ["6"],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(classCreateManyAndReturnMock).not.toHaveBeenCalled();
+    expect(classTeacherCreateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing single create path and detail redirect", async () => {
+    programFindUniqueMock.mockResolvedValue({ status: "ACTIVE" });
+    teacherCountMock.mockResolvedValue(1);
+    classCreateMock.mockResolvedValue({ id: "single-class" });
+    classTeacherCreateManyMock.mockResolvedValue({ count: 1 });
+
+    await expect(createClass({}, validFormData({ registrationMode: "single" }))).rejects.toThrow(
+      "REDIRECT",
+    );
+
+    expect(classCreateMock).toHaveBeenCalledTimes(1);
+    expect(classCreateManyAndReturnMock).not.toHaveBeenCalled();
   });
 });
 
