@@ -706,48 +706,63 @@ Phase 10에서는 "환불 처리 필요 건"을 제공하지 않는다. ADR-035/
 # 17. 계정 및 권한
 
 ## 17.1 역할과 계정 연결
-- 역할은 기존 `ADMIN`, `TEACHER` 두 개만 사용한다. `OWNER`, `MANAGER`, 사용자별 custom permission은 도입하지 않는다.
+- 역할은 `ADMIN`, `MANAGER`, `TEACHER` 세 개만 사용한다. UI에는 각각 "관리자", "준관리자", "선생님"으로 표시한다.
+- ADMIN은 전체 권한, MANAGER는 재무정보와 계정·권한 관리를 제외한 비재무 운영 전체 권한, TEACHER는 본인 배정 클래스 중심의 최소 권한을 가진다.
 - `User`는 로그인 계정이고 `Teacher`는 수업 배정용 운영 데이터다.
 - `TEACHER` 역할의 User는 기존 활성 Teacher 한 명과 반드시 1:1로 연결한다.
 - 한 Teacher를 여러 User에 연결하거나 한 TEACHER User를 여러 Teacher에 연결할 수 없다.
-- ADMIN은 Teacher 연결 없이 존재할 수 있다.
+- ADMIN과 MANAGER는 Teacher 연결 없이 존재하며, Teacher 연결 필수 조건은 role이 TEACHER일 때만 적용한다.
+- ADMIN과 MANAGER는 `User.isActive=true`일 때 접근할 수 있다. Teacher.isActive는 MANAGER 접근 여부에 영향을 주지 않는다.
 - TEACHER는 `User.isActive=true`이고 연결된 `Teacher.isActive=true`일 때만 접근할 수 있다. 둘 중 하나라도 비활성이면 변경 완료 후 다음 보호된 서버 요청부터 접근을 차단한다.
 
 ## 17.2 ADMIN 권한
 - ADMIN은 기존과 동일하게 전체 운영 기능에 접근할 수 있다.
 - ADMIN만 내부 계정을 만들고 계정의 이름, 이메일, 역할, 활성 상태를 변경하며 비밀번호를 재설정할 수 있다.
 - User 물리 삭제는 허용하지 않는다.
-- 본인 계정 비활성화와 본인의 ADMIN→TEACHER 강등은 허용하지 않는다.
-- 마지막 활성 ADMIN의 비활성화와 강등은 허용하지 않으며, 항상 최소 한 명의 활성 ADMIN을 유지한다.
+- 본인 계정 비활성화와 본인의 ADMIN 역할을 MANAGER 또는 TEACHER로 변경하는 것은 허용하지 않는다.
+- 마지막 활성 ADMIN의 비활성화와 MANAGER/TEACHER 강등은 허용하지 않으며, MANAGER는 활성 ADMIN 수에 포함하지 않는다. 항상 최소 한 명의 활성 ADMIN을 유지한다.
 
-## 17.3 TEACHER 권한 매트릭스
+## 17.3 MANAGER 권한
+- MANAGER는 운영 Dashboard, 아이·안전정보·동의·프로그램·선생님·클래스·예약·출결의 비재무 운영 기능을 ADMIN과 동일하게 조회·생성·수정·취소 또는 기록할 수 있다.
+- MANAGER는 결제 여부·상태·수단, 정가, 할인금액, 실결제금액, 환불 여부·상태·금액, 매출, 순매출 등 모든 재무정보를 조회하거나 처리할 수 없다.
+- MANAGER는 결제·환불·Revenue route뿐 아니라 허용된 Dashboard, 아이 상세·통합 이력, 클래스 상세·참가자 목록, 예약 상세와 기타 summary/card/table에서도 재무정보를 볼 수 없다.
+- MANAGER는 계정 목록·생성·수정, 역할 변경, 계정 활성/비활성, 다른 사용자 비밀번호 재설정과 계정 변경 이력 관리에 접근할 수 없다.
+- MANAGER는 본인 비밀번호만 변경할 수 있다.
 
-| 기능 | ADMIN | TEACHER |
-|---|---|---|
-| Dashboard | 전체 운영·재무 지표 조회 | 본인 배정 클래스에 필요한 운영 정보만 조회. 재무·Revenue 지표 금지 |
-| 아이 목록·전체 아이 상세 | 조회 | 금지 |
-| 아이 등록·수정 | 가능 | 금지 |
-| 배정 클래스 참가자 | 모든 클래스의 아이 이름·보호자 연락처·안전정보 조회 | 본인 배정 클래스 참가자의 아이 이름·보호자 연락처·ChildSafetyInfo 조회 |
-| ChildSafetyInfo 수정 | 가능 | 금지 |
-| 동의 조회·변경 관리 | 가능 | 금지 |
-| 프로그램 관리 | 조회·생성·수정 | 관리 화면 접근 금지. 본인 배정 클래스에 필요한 프로그램 정보만 조회 |
-| 선생님 관리 | 조회·생성·수정 | 전체 관리 화면 금지. 본인 Teacher 정보와 같은 배정 클래스의 다른 Teacher 이름만 조회 |
-| 클래스 조회 | 전체 클래스 | `ClassTeacher`로 본인에게 배정된 클래스만 |
-| 클래스 생성·반복 생성·수정·취소 | 가능 | 금지 |
-| 예약 조회 | 전체 예약 | 본인 배정 클래스 운영에 필요한 참가자 예약 상태만 조회 |
-| 예약 생성·취소 | 가능 | 금지 |
-| 출결 기록 | 모든 클래스 | 본인 배정 클래스만 |
-| 결제·결제 금액·환불 | 조회·처리 | 금지 |
-| Revenue·재무 화면 | 조회 | 금지 |
-| 계정 관리 | 조회·생성·수정·활성 변경·비밀번호 재설정 | 금지 |
-| 본인 비밀번호 변경 | 가능 | 가능 |
+## 17.4 TEACHER 권한
+- TEACHER는 `ClassTeacher`로 본인에게 배정된 ClassSchedule과 해당 운영 정보만 조회한다.
+- 본인 배정 클래스 참가자의 아이 이름, 보호자 연락처와 ChildSafetyInfo를 조회하고 출결을 기록할 수 있다.
+- 전체 아이·프로그램·선생님·클래스·예약 관리, ChildSafetyInfo 수정, 동의 관리, 클래스·예약 쓰기, 재무·계정 관리는 허용하지 않는다.
 
-## 17.4 권한 강제
+## 17.5 권한 매트릭스
+
+| 영역 | ADMIN | MANAGER | TEACHER |
+|---|---|---|---|
+| Dashboard | 전체 운영·재무 | 운영 정보 전체, 재무정보 제외 | 본인 배정 클래스 운영 정보만 |
+| 아이 관리 | 전체 | 전체 | 전체 목록·상세·등록·수정 금지 |
+| 배정 참가자 정보 | 전체 | 전체 | 아이 이름·보호자 연락처·안전정보 조회 |
+| ChildSafetyInfo | 조회·수정 | 조회·수정 | 배정 참가자 조회만 |
+| 동의 | 조회·관리 | 조회·관리 | 금지 |
+| 프로그램 | 조회·생성·수정 | 조회·생성·수정 | 배정 클래스 문맥 조회 |
+| 선생님 | 조회·생성·수정 | 조회·생성·수정 | 본인 정보·배정 클래스 문맥 조회 |
+| 클래스 | 조회·생성·반복 생성·수정·취소 | 조회·생성·반복 생성·수정·취소 | 본인 배정 클래스 조회 |
+| 예약 | 조회·생성·취소 | 조회·생성·취소 | 배정 클래스 예약 상태 조회 |
+| 출결 | 기록 | 기록 | 본인 배정 클래스 기록 |
+| 결제 | 조회·등록·관리 | 금지 | 금지 |
+| 환불 | 조회·처리 | 금지 | 금지 |
+| Revenue·재무정보 | 조회 | 금지 | 금지 |
+| 계정·권한 | 관리 | 금지 | 금지 |
+| 본인 비밀번호 | 변경 | 변경 | 변경 |
+
+## 17.6 권한 및 재무 경계 강제
 - Navigation과 UI는 권한 없는 메뉴와 액션을 숨기지만, 메뉴 숨김을 인가로 간주하지 않는다.
 - 직접 URL, server query, Server Action에서 서버가 현재 로그인 계정의 최신 역할과 활성 상태를 최종 검증한다.
+- MANAGER의 결제·환불·Revenue·계정 route와 관련 Server Action 직접 호출을 서버에서 차단한다.
+- MANAGER가 접근 가능한 화면은 재무정보를 DB에서 조회하거나 server payload로 반환하거나 HTML에 렌더링하지 않는다. 기존 공용 화면에 재무정보가 섞여 있으면 역할에 맞는 비재무 조회·표시 경계를 적용한다.
+- 예약 존재 여부, 예약 상태, 출결, 클래스 취소 여부와 운영 인원은 재무정보가 아니므로 MANAGER가 운영 범위에서 조회할 수 있다.
 - TEACHER의 권한은 서버가 현재 User와 연결된 Teacher 및 `ClassTeacher` 배정을 해석해 판정한다. 클라이언트가 제출한 userId, teacherId, role은 권한 근거로 신뢰하지 않는다.
 - TEACHER는 본인 배정 ClassSchedule을 통해서만 참가자의 연락처와 ChildSafetyInfo 접근 권한을 얻는다. 무관한 아이는 직접 URL이나 query 호출도 차단한다.
-- 계정·Teacher 비활성화, 역할 변경, 비밀번호 재설정은 이미 처리 중인 요청을 중단하지 않지만 변경 완료 후 다음 보호된 서버 요청부터 기존 세션에도 즉시 적용한다. JWT에 저장된 과거 role/isActive만으로 인가를 계속하지 않는다.
+- 계정·Teacher 비활성화, ADMIN/MANAGER/TEACHER 사이의 모든 역할 변경과 비밀번호 재설정은 이미 처리 중인 요청을 중단하지 않지만 변경 완료 후 다음 보호된 서버 요청부터 기존 세션에도 즉시 적용한다. JWT에 저장된 과거 role/isActive만으로 인가를 계속하지 않는다.
 - 최초 로그인 또는 ADMIN 비밀번호 재설정 후 비밀번호 변경이 필요한 계정은 비밀번호 변경 화면 외 운영 기능에 접근할 수 없다.
 
 ---
@@ -1463,31 +1478,37 @@ Now — 월 단위 반복 클래스의 동일 정보 재입력과 날짜 누락 
 ## Phase 16 — 계정·권한 관리
 
 ### Problem
-- 현재 `User`에는 ADMIN과 TEACHER 역할이 존재하지만 운영 화면과 Server Action은 사실상 ADMIN만 사용할 수 있다.
+- 현재 `User`에는 ADMIN과 TEACHER 역할만 존재하고 운영 화면과 Server Action은 사실상 ADMIN만 사용할 수 있다. 재무·계정 권한 없이 비재무 운영 전반을 맡길 준관리자 역할이 없다.
 - 로그인 계정인 User와 수업 배정 데이터인 Teacher가 연결되어 있지 않아 로그인한 선생님이 어떤 클래스의 운영자인지 안전하게 판정할 수 없다.
 - 계정 비활성화나 역할 변경 후에도 기존 JWT의 과거 권한이 남을 수 있고, 계정 생성·비밀번호 재설정·관리자 보호·계정 변경 이력 기능이 없다.
+- Dashboard, 아이 상세·통합 이력, 클래스 참가자와 예약 상세에는 결제·환불 상태 또는 금액이 운영정보와 함께 조회·표시되어 있어 route만 숨기면 MANAGER에게 재무정보가 노출된다.
 - 현재 seed는 기존 ADMIN의 password, role, isActive를 덮어쓸 수 있어 계정 관리 도입 후 운영 계정을 손상시킬 위험이 있다.
 
 ### Current Process
 - 내부 운영자는 이메일과 비밀번호의 credentials 방식으로 로그인한다. 로그인 시 활성 User와 비밀번호 hash를 확인하고 역할을 JWT session에 담는다.
-- 보호된 관리자 layout과 주요 server mutation은 `requireAdmin()`을 사용하므로 TEACHER 역할 User는 로그인하더라도 운영 기능을 사용할 수 없다.
+- 보호된 관리자 layout과 주요 server mutation은 `requireAdmin()`을 사용하므로 ADMIN 외 역할은 운영 기능을 사용할 수 없다.
 - 대부분의 server query는 역할별 데이터 범위를 직접 판정하지 않고 ADMIN 전용 화면 경계에 의존한다.
 - User와 Teacher는 별도 entity이며 FK나 1:1 관계가 없다.
 - 계정 목록·생성·수정·비활성화·비밀번호 변경/재설정 UI와 최소 계정 변경 이력이 없다.
+- Dashboard는 운영 지표와 오늘 순매출을 함께 조회·표시하고, 아이 상세·통합 이력, 클래스 참가자, 예약 상세도 Payment/Refund 상태 또는 금액을 같은 query와 UI에 포함한다.
 
 ### User Story
 - 관리자로서 내부 운영 계정을 만들고 역할과 활성 상태를 안전하게 관리하며, 최소 한 명의 활성 관리자를 항상 유지하고 싶다.
+- 준관리자로서 아이·프로그램·선생님·클래스·예약·출결의 운영 업무를 처리하되 재무정보와 계정·권한 관리에는 접근하지 않고 싶다.
 - 선생님으로서 내 계정으로 로그인해 내가 배정된 클래스의 운영 정보와 현장 안전정보를 확인하고 출결을 기록하고 싶다.
 - 관리자로서 계정이나 선생님 상태와 역할을 변경하면 기존 로그인 세션에도 다음 보호된 요청부터 최신 권한이 적용되기를 원한다.
 - 운영 책임자로서 계정 생성과 주요 변경의 처리자·시각을 추적하되 비밀번호나 session 같은 비밀정보는 기록하지 않기를 원한다.
 
 ### Scope
-- ADMIN/TEACHER 두 역할을 이용한 내부 운영자 계정 관리
+- ADMIN/MANAGER/TEACHER 세 역할을 이용한 내부 운영자 계정 관리
 - ADMIN 전용 계정 목록, 생성, 이름·이메일·역할·활성 상태 변경, 비밀번호 재설정
 - TEACHER User와 기존 활성 Teacher의 필수 1:1 연결
 - 최초 로그인 및 비밀번호 재설정 후 강제 비밀번호 변경
 - 변경 완료 후 다음 보호된 서버 요청부터 최신 계정·역할·Teacher 활성 상태 적용
 - ADMIN 전체 운영 권한 유지
+- MANAGER의 Dashboard, 아이·안전정보·동의·프로그램·선생님·클래스·예약·출결 비재무 운영 권한
+- MANAGER가 접근하는 화면·query·payload에서 결제·환불·금액·Revenue 정보 제외
+- MANAGER의 결제·환불·Revenue와 계정·권한 관리 직접 URL·query·action 차단
 - TEACHER의 본인 배정 클래스 운영 Dashboard·클래스·참가자 조회와 출결 기록
 - 배정 클래스 참가자에 한정한 아이 이름, 보호자 연락처, ChildSafetyInfo 조회
 - TEACHER 본인 Teacher 정보와 같은 클래스 공동 배정 Teacher 이름 조회
@@ -1502,8 +1523,9 @@ Now — 월 단위 반복 클래스의 동일 정보 재입력과 날짜 누락 
 - 이메일 초대·메일 발송·이메일 인증
 - Google/Kakao 등 소셜 로그인과 OAuth
 - MFA, SSO, 조직/tenant
-- OWNER/MANAGER/STAFF 등 추가 역할
+- OWNER/STAFF 등 추가 역할
 - 사용자별 custom permission과 role permission editor
+- MANAGER별 개별 권한 설정
 - 선생님용 별도 모바일 앱
 - TEACHER의 전체 아이 목록·전체 아이 상세, 아이 등록·수정
 - TEACHER의 ChildSafetyInfo 수정과 동의 조회·변경 관리
@@ -1514,57 +1536,71 @@ Now — 월 단위 반복 클래스의 동일 정보 재입력과 날짜 누락 
 - 기존 예약·출결·결제·환불·Revenue 정책 변경
 
 ### Business Rules
-- 역할은 `ADMIN`, `TEACHER` 두 개만 유지한다.
-- TEACHER User는 기존 활성 Teacher 한 명과 필수 1:1로 연결한다. 한 Teacher에 여러 User를 연결하거나 한 TEACHER User를 여러 Teacher에 연결할 수 없으며 비활성 Teacher와 신규 TEACHER 계정을 연결할 수 없다. ADMIN은 Teacher 연결 없이 존재할 수 있다.
+- 역할은 `ADMIN`, `MANAGER`, `TEACHER` 세 개만 사용하며 UI 표시명은 관리자, 준관리자, 선생님이다.
+- TEACHER User는 기존 활성 Teacher 한 명과 필수 1:1로 연결한다. 한 Teacher에 여러 User를 연결하거나 한 TEACHER User를 여러 Teacher에 연결할 수 없으며 비활성 Teacher와 신규 TEACHER 계정을 연결할 수 없다. ADMIN과 MANAGER는 Teacher 연결 없이 존재한다.
+- ADMIN과 MANAGER는 User가 활성일 때 접근할 수 있다. Teacher 활성 상태는 MANAGER 접근에 영향을 주지 않는다.
 - TEACHER 접근은 User와 연결 Teacher가 모두 활성일 때만 허용한다. 어느 한쪽이 비활성화되면 변경 완료 후 다음 보호된 서버 요청부터 기존 session도 운영 기능에 접근할 수 없다.
-- ADMIN은 기존 전체 운영 권한을 유지한다. TEACHER는 `ClassTeacher` 기준 본인 배정 ClassSchedule만 조회하고 해당 클래스 운영에 필요한 Dashboard만 볼 수 있다.
+- ADMIN은 기존 전체 운영 권한을 유지한다.
+- MANAGER는 운영 Dashboard, 아이 목록·상세·등록·수정, 보호자 연락처와 ChildSafetyInfo 조회·수정, 동의 관리, 프로그램·선생님·클래스 관리, 반복 클래스 생성, 예약 관리와 출결 기록을 ADMIN과 동일하게 수행할 수 있다. 기존 클래스·예약·출결 business rule은 변경하지 않는다.
+- MANAGER는 결제 목록·상세·등록·수정·취소, 환불 목록·상세·처리, Revenue·매출 집계와 결제 여부·상태·수단, 정가·할인·실결제·환불·순매출 등 모든 재무정보에 접근할 수 없다.
+- MANAGER는 계정 목록·생성·수정, 역할 변경, 계정 활성/비활성, 다른 사용자 비밀번호 재설정과 계정 변경 이력 관리에 접근할 수 없다. 본인 비밀번호 변경만 허용한다.
+- MANAGER Dashboard에는 오늘 클래스·예약·참여·일정·운영 상태 등 운영 정보만 표시하고 매출·결제·환불·순매출과 금액 기반 KPI를 조회하거나 표시하지 않는다.
+- MANAGER가 접근 가능한 아이 상세·통합 이력, 클래스 상세·참가자 목록, 예약 상세와 기타 summary/card/table는 결제 여부·상태·수단, 환불 여부·상태와 금액 정보를 DB query, server payload, HTML에 포함하지 않는다. 예약·출결·취소와 클래스 운영 상태는 비재무 정보로 유지한다.
+- TEACHER는 `ClassTeacher` 기준 본인 배정 ClassSchedule만 조회하고 해당 클래스 운영에 필요한 Dashboard만 볼 수 있다.
 - TEACHER는 본인 배정 클래스 참가자의 아이 이름, 보호자 연락처와 ChildSafetyInfo만 조회할 수 있다. 전체 아이 목록·전체 아이 상세·아이 등록/수정·ChildSafetyInfo 수정·동의 관리에는 접근할 수 없다.
 - TEACHER가 수행할 수 있는 운영 쓰기는 본인 배정 클래스의 출결 기록뿐이다. 클래스 생성·반복 생성·수정·취소와 예약 생성·취소는 허용하지 않는다.
 - 출결을 포함한 모든 TEACHER 권한은 서버가 현재 User→Teacher 연결과 `ClassTeacher` 배정을 검증한다. 클라이언트의 userId, teacherId, role은 신뢰하지 않는다.
 - TEACHER는 결제·결제 금액·환불·Revenue·재무 Dashboard·전체 Teacher 관리 화면을 볼 수 없다. 본인 Teacher 정보와 같은 배정 클래스의 공동 Teacher 이름은 볼 수 있다.
-- ADMIN만 계정을 생성한다. 생성 시 ADMIN이 기존 비밀번호 validation을 만족하는 임시 비밀번호를 지정하며, 비밀번호는 hash만 저장하고 기존 비밀번호는 조회할 수 없다.
+- ADMIN만 ADMIN/MANAGER/TEACHER 계정을 생성한다. 생성 시 ADMIN이 기존 비밀번호 validation을 만족하는 임시 비밀번호를 지정하며, 비밀번호는 hash만 저장하고 기존 비밀번호는 조회할 수 없다.
 - 신규 계정은 최초 로그인 후 비밀번호를 변경하기 전까지 비밀번호 변경 화면 외 운영 기능에 접근할 수 없다.
 - ADMIN의 비밀번호 재설정은 새 임시 비밀번호를 발급하며 기존 session도 다음 보호된 요청부터 운영 화면 접근이 차단된다. 사용자는 새 비밀번호를 변경한 뒤에만 운영 기능에 다시 접근할 수 있다.
 - ADMIN은 계정 이름, 이메일, 역할과 활성 상태를 관리할 수 있지만 User를 물리 삭제할 수 없다.
-- 본인 계정 비활성화, 본인의 ADMIN→TEACHER 강등, 마지막 활성 ADMIN의 비활성화와 강등을 금지한다. 항상 최소 한 명의 활성 ADMIN을 유지한다.
-- User 비활성화, Teacher 비활성화, 역할 변경과 비밀번호 재설정은 변경 완료 후 다음 보호된 서버 요청부터 기존 로그인 session에도 즉시 적용한다. JWT의 과거 role/isActive 값만으로 권한을 허용하지 않는다.
+- 본인 계정 비활성화, 본인의 ADMIN→MANAGER/TEACHER 강등, 마지막 활성 ADMIN의 비활성화와 MANAGER/TEACHER 강등을 금지한다. MANAGER는 활성 ADMIN 수에 포함하지 않으며 항상 최소 한 명의 활성 ADMIN을 유지한다.
+- User 비활성화, Teacher 비활성화, ADMIN/MANAGER/TEACHER 사이의 모든 역할 변경과 비밀번호 재설정은 변경 완료 후 다음 보호된 서버 요청부터 기존 로그인 session에도 즉시 적용한다. JWT의 과거 role/isActive 값만으로 권한을 허용하지 않는다.
 - 계정 생성, 이메일 변경, 역할 변경, 활성/비활성 변경과 비밀번호 재설정은 append-only 이력으로 남긴다. 대상 User, 변경 종류, 처리 ADMIN, 처리 시각과 필요한 최소 비민감 이전/이후 값만 기록하며 평문 비밀번호, password hash, token, session 값은 기록하지 않는다.
 - 기존 ADMIN의 이메일, password hash, role, isActive와 로그인 가능 상태를 migration과 seed 이후에도 보존한다. seed는 존재하는 운영 ADMIN의 password, role, isActive를 덮어쓰지 않는다.
-- 권한 없는 Navigation과 UI는 숨기되 서버 권한 검증을 대체하지 않는다. 직접 URL, server query, Server Action을 모두 같은 권한 경계로 차단한다.
+- 권한 없는 Navigation과 UI는 숨기되 서버 권한 검증을 대체하지 않는다. 직접 URL, server query, Server Action을 모두 같은 권한 경계로 차단한다. 특히 MANAGER가 계정 action으로 자신을 ADMIN으로 승격하거나 재무 action을 직접 호출할 수 없어야 한다.
 
 ### Permission Matrix
 
-| 영역 | ADMIN | TEACHER |
-|---|---|---|
-| 운영 Dashboard | 전체 운영·재무 | 본인 배정 클래스 운영 정보만 |
-| 아이 | 전체 조회·등록·수정 | 전체 목록·상세·등록·수정 금지 |
-| 배정 클래스 참가자 개인정보 | 전체 조회 | 아이 이름·보호자 연락처·안전정보 조회 |
-| 안전정보·동의 | 조회·수정·관리 | 안전정보 읽기만 허용, 수정·동의 관리 금지 |
-| 프로그램 | 관리 | 배정 클래스 문맥의 정보만 조회 |
-| 선생님 | 전체 관리 | 본인 정보와 같은 클래스 공동 Teacher 이름만 조회 |
-| 클래스 | 전체 조회·생성·반복 생성·수정·취소 | 본인 배정 클래스 조회만 |
-| 예약 | 전체 조회·생성·취소 | 배정 클래스 운영 상태 조회만, 생성·취소 금지 |
-| 출결 | 전체 클래스 기록 | 본인 배정 클래스 기록 |
-| 결제·환불·Revenue | 조회·처리 | 금지 |
-| 계정 | 전체 관리, 물리 삭제 제외 | 관리 금지 |
-| 비밀번호 | 본인 변경, 계정 재설정 | 본인 변경 |
+| 영역 | ADMIN | MANAGER | TEACHER |
+|---|---|---|---|
+| 운영 Dashboard | 전체 운영·재무 | 운영 정보 전체, 재무정보 제외 | 본인 배정 클래스 운영 정보만 |
+| 아이 관리 | 전체 | 전체 | 전체 목록·상세·등록·수정 금지 |
+| 배정 참가자 정보 | 전체 | 전체 | 아이 이름·보호자 연락처·안전정보 조회 |
+| ChildSafetyInfo | 조회·수정 | 조회·수정 | 배정 참가자 조회만 |
+| 동의 | 조회·관리 | 조회·관리 | 금지 |
+| 프로그램 | 조회·생성·수정 | 조회·생성·수정 | 배정 클래스 문맥 조회 |
+| 선생님 | 조회·생성·수정 | 조회·생성·수정 | 본인 정보·배정 클래스 문맥 조회 |
+| 클래스 | 조회·생성·반복 생성·수정·취소 | 조회·생성·반복 생성·수정·취소 | 본인 배정 클래스 조회 |
+| 예약 | 조회·생성·취소 | 조회·생성·취소 | 배정 클래스 예약 상태 조회 |
+| 출결 | 기록 | 기록 | 본인 배정 클래스 기록 |
+| 결제 | 조회·등록·관리 | 금지 | 금지 |
+| 환불 | 조회·처리 | 금지 | 금지 |
+| Revenue·매출 집계 | 조회 | 금지 | 금지 |
+| 계정·권한 | 관리 | 금지 | 금지 |
+| 본인 비밀번호 | 변경 | 변경 | 변경 |
 
 ### Account Lifecycle
 - ADMIN이 이메일, 이름, 역할, 활성 상태와 임시 비밀번호를 입력해 내부 계정을 만든다.
 - TEACHER 계정 생성 또는 TEACHER로의 역할 변경에는 중복 연결되지 않은 활성 Teacher 한 명이 필요하다.
+- ADMIN과 MANAGER 계정 및 해당 역할로의 변경에는 Teacher 연결이 필요하지 않다.
 - 사용자는 임시 비밀번호로 인증한 뒤 비밀번호 변경 화면에서 새 비밀번호를 설정해야 운영 기능을 사용할 수 있다.
 - ADMIN이 비밀번호를 재설정하면 새 임시 비밀번호가 발급되고, 해당 사용자의 기존 session은 다음 보호된 요청부터 운영 기능을 사용할 수 없다.
 - ADMIN은 계정 정보를 변경하거나 비활성화할 수 있으나 본인과 마지막 활성 ADMIN 보호 규칙을 우회할 수 없다.
-- 비활성 User는 로그인하거나 보호된 기능을 사용할 수 없다. TEACHER는 연결 Teacher도 활성이어야 한다.
+- 비활성 User는 로그인하거나 보호된 기능을 사용할 수 없다. ADMIN과 MANAGER는 User 활성 상태만 적용하고 TEACHER는 연결 Teacher도 활성이어야 한다.
+- MANAGER는 자신의 비밀번호만 변경할 수 있고 다른 계정의 lifecycle이나 변경 이력에는 접근할 수 없다.
 - 계정은 물리 삭제하지 않고 비활성 상태와 append-only 변경 이력으로 운영 기록을 보존한다.
 
 ### Security Rules
 - 인증과 인가는 서버가 최종 강제하며 UI 숨김만으로 권한을 허용하지 않는다.
 - 보호된 요청마다 최신 DB의 User 역할·활성 상태·비밀번호 변경 필요 상태를 확인하고, TEACHER는 연결 Teacher 활성 상태와 대상 클래스 배정을 추가 확인한다.
+- MANAGER의 재무·계정 route, query와 Server Action을 서버에서 차단하며, 허용된 운영 화면의 query와 payload에서도 Payment·Refund·금액·Revenue 필드를 제외한다.
+- MANAGER가 계정 action이나 조작된 role 값을 직접 제출해 자신 또는 다른 사용자를 ADMIN으로 승격할 수 없다.
 - TEACHER의 참가자 개인정보와 ChildSafetyInfo 조회는 본인 배정 ClassSchedule 범위로 제한한다.
 - 출결 Server Action은 클라이언트의 권한 식별자를 신뢰하지 않고 현재 로그인 User에서 Teacher와 ClassTeacher 배정을 서버에서 확인한다.
 - 비밀번호는 hash만 저장하며 평문·hash·token·session 값을 화면, 로그와 계정 이력에 노출하지 않는다.
-- 역할 변경, 비활성화와 비밀번호 재설정 후 과거 JWT 정보로 접근을 계속 허용하지 않는다.
+- ADMIN/MANAGER/TEACHER 역할 변경, 비활성화와 비밀번호 재설정 후 과거 JWT 정보로 접근을 계속 허용하지 않는다.
 - 계정 관리와 변경 이력에는 ADMIN 권한을 요구하며 마지막 활성 ADMIN 보호를 동시 요청에서도 우회할 수 없어야 한다.
 
 ### Schema Impact
@@ -1573,17 +1609,27 @@ Now — 월 단위 반복 클래스의 동일 정보 재입력과 날짜 누락 
 - append-only 최소 계정 변경 이력을 위한 계정 전용 이력 구조와 migration이 필요할 것으로 예상한다. 전체 시스템 범용 AuditLog로 확장하지 않는다.
 - 기존 session의 즉시 권한 반영은 보호된 요청에서 DB를 재확인하거나 session/version 전략으로 구현할 수 있으며 정확한 구조는 PLAN에서 결정한다.
 - migration은 기존 ADMIN의 role, isActive, password hash와 로그인 가능 상태를 보존해야 하며 기존 ADMIN에 Teacher 연결을 요구하지 않는다.
-- 현재 `Role` enum의 ADMIN/TEACHER 값은 그대로 사용하며 새 role은 추가하지 않는다.
+- 현재 `Role` enum에 MANAGER 값을 추가하는 schema 변경과 migration이 필요하다. 기존 ADMIN/TEACHER 값과 계정은 유지한다.
+- Teacher 연결 필수 여부는 TEACHER role에만 적용하며 ADMIN과 MANAGER에는 Teacher 연결을 요구하지 않는다.
 
 ### Acceptance Criteria
-- ADMIN은 계정 목록을 보고 내부 ADMIN 또는 TEACHER 계정을 생성할 수 있다.
+- ADMIN은 계정 목록을 보고 내부 ADMIN, MANAGER 또는 TEACHER 계정을 생성할 수 있다.
 - TEACHER 계정은 중복 연결되지 않은 활성 Teacher 한 명과 반드시 연결되고, 비활성 Teacher나 이미 계정이 연결된 Teacher에는 연결할 수 없다.
-- ADMIN 계정은 Teacher 연결 없이 정상적으로 생성·사용할 수 있다.
+- ADMIN과 MANAGER 계정은 Teacher 연결 없이 정상적으로 생성·사용할 수 있다.
+- 활성 MANAGER는 자신의 계정으로 로그인하고 비재무 운영 기능을 사용할 수 있다.
+- MANAGER는 아이 목록·상세·등록·수정, ChildSafetyInfo 조회·수정, 동의 관리, 프로그램·선생님·클래스·예약 관리와 출결 기록을 기존 business rule 안에서 수행할 수 있다.
+- MANAGER Dashboard에는 오늘 클래스·예약·참여·일정·운영 상태가 표시되고 매출·결제·환불·순매출과 금액 기반 KPI는 표시되거나 조회되지 않는다.
+- MANAGER가 `/payments`, `/refunds`, `/revenue`, `/accounts` 및 하위 직접 URL에 접근하면 서버에서 차단된다.
+- MANAGER가 결제·환불·Revenue·계정 Server Action 또는 server query를 직접 호출해도 요청이 차단되고 데이터가 변경되지 않는다.
+- MANAGER가 접근 가능한 아이 상세·통합 이력, 클래스 상세·참가자 목록, 예약 상세와 기타 운영 화면의 HTML 및 server payload에는 결제 여부·상태·수단, 환불 여부·상태, 정가·할인·실결제·환불·매출·순매출 정보가 포함되지 않는다.
+- ADMIN은 기존 결제·환불·Revenue와 허용 화면의 재무정보를 계속 조회·처리할 수 있다.
+- TEACHER의 본인 배정 클래스 중심 최소 권한과 개인정보 범위는 ADR-048의 기존 정책을 유지한다.
 - ADMIN은 계정의 이름, 이메일, 역할과 활성 상태를 변경하고 임시 비밀번호를 재설정할 수 있으며 User 물리 삭제 기능은 제공되지 않는다.
 - 신규 계정과 비밀번호가 재설정된 계정은 새 비밀번호를 설정하기 전까지 비밀번호 변경 화면 외 모든 운영 화면·query·action 접근이 차단된다.
 - 비밀번호는 hash만 저장되고 기존 비밀번호, 평문 임시 비밀번호, password hash, token, session 값이 조회 화면·로그·변경 이력에 노출되지 않는다.
-- 본인 계정 비활성화, 본인 ADMIN→TEACHER 강등, 마지막 활성 ADMIN 비활성화·강등 요청이 서버에서 거부되고 최소 한 명의 활성 ADMIN이 유지된다.
+- 본인 계정 비활성화, 본인 ADMIN→MANAGER/TEACHER 강등, 마지막 활성 ADMIN의 비활성화·MANAGER/TEACHER 강등 요청이 서버에서 거부되고 최소 한 명의 활성 ADMIN이 유지된다. MANAGER는 활성 ADMIN 수에 포함되지 않는다.
 - User 또는 연결 Teacher가 비활성화되거나 역할이 변경되면 기존 로그인 session도 변경 후 다음 보호된 서버 요청부터 최신 상태로 허용 또는 차단된다.
+- ADMIN→MANAGER 역할 변경 후 기존 session의 다음 보호된 요청부터 재무·계정 접근이 차단되며, 다른 ADMIN/MANAGER/TEACHER 역할 전환도 같은 방식으로 즉시 반영된다.
 - 비밀번호 재설정 후 기존 session은 다음 보호된 요청부터 비밀번호 변경 화면 외 접근이 차단된다.
 - TEACHER Dashboard에는 본인 배정 클래스 운영 정보만 표시되고 결제 금액, 환불, Revenue 등 재무 지표가 표시되지 않는다.
 - TEACHER는 `ClassTeacher`로 본인에게 배정된 클래스만 목록과 상세에서 조회하며, 다른 클래스 직접 URL과 server query 접근은 차단된다.
@@ -1595,22 +1641,24 @@ Now — 월 단위 반복 클래스의 동일 정보 재입력과 날짜 누락 
 - ADMIN의 기존 Dashboard, 아이·안전정보·동의·프로그램·선생님·클래스·예약·출결·결제·환불·Revenue 기능은 기존처럼 사용할 수 있다.
 - 계정 생성, 이메일 변경, 역할 변경, 활성 상태 변경과 비밀번호 재설정마다 대상 User, 변경 종류, 처리 ADMIN과 처리 시각을 포함한 append-only 이력이 추가되고 기존 이력은 수정·삭제되지 않는다.
 - 기존 ADMIN은 migration과 배포 후에도 기존 이메일·비밀번호·역할·활성 상태로 로그인할 수 있으며 seed 재실행이 운영 계정의 password, role, isActive를 덮어쓰지 않는다.
-- ADMIN/TEACHER 권한 matrix, 직접 URL, server query, Server Action, stale session, 마지막 ADMIN 보호와 개인정보 범위를 unit 및 E2E로 검증한다.
+- ADMIN/MANAGER/TEACHER 권한 matrix, MANAGER 재무 payload 누출, 직접 URL, server query, Server Action, stale session, 마지막 ADMIN 보호와 개인정보 범위를 unit 및 E2E로 검증한다.
 - 모바일에서 계정 목록·계정 편집·비밀번호 변경과 TEACHER 현장 운영 화면을 가로 스크롤 없이 사용할 수 있다.
 
 ### Conflicts
-- 현재 `(admin)` layout과 주요 Server Action은 `requireAdmin()`을 사용하므로 TEACHER가 사용할 화면·query·출결 action에 역할·배정 범위 인가가 필요하다. ADMIN의 기존 전체 권한은 유지한다.
+- 현재 `(admin)` layout과 주요 Server Action은 `requireAdmin()`을 사용하므로 MANAGER가 사용할 비재무 운영 화면·query·action과 TEACHER가 사용할 배정 클래스 화면·query·출결 action에 역할별 인가가 필요하다. ADMIN의 기존 전체 권한은 유지한다.
 - 현재 JWT session은 로그인 시점의 role을 유지하고 이후 User/Teacher 활성 상태를 재확인하지 않으므로 즉시 적용 정책을 충족하지 못한다. 보호된 서버 요청에서 최신 DB 상태를 강제하는 구조가 필요하다.
 - 현재 User와 Teacher는 별도 entity이고 관계가 없어 본인 배정 클래스 판정이 불가능하다. TEACHER 필수 1:1 연결을 위한 schema/migration이 필요하지만 recurrence나 별도 권한 편집 모델은 필요하지 않다.
+- 현재 Role enum은 ADMIN/TEACHER만 가지므로 MANAGER 추가 migration이 필요하다. ADR-048의 "두 역할만 유지" 결정은 ADR-050이 세 역할로 확장하며, TEACHER 1:1 연결과 최소 권한 결정은 그대로 유지한다.
+- 현재 Dashboard, 아이 상세·통합 이력, 클래스 참가자와 예약 상세 query/UI는 운영정보와 Payment/Refund 상태 또는 금액을 함께 다룬다. MANAGER에게 이 화면 전체를 그대로 제공하면 재무 경계를 위반하므로 server payload부터 역할별 최소 필드로 분리해야 한다.
 - 기존 Child 상세는 연락처·안전정보·동의·결제·환불을 함께 제공하므로 TEACHER에게 전체 페이지를 그대로 허용할 수 없다. 배정 클래스 운영에 필요한 최소 정보만 서버에서 제한해 제공해야 한다.
 - 기존 감사 요구는 향후 범용 AuditLog 확장을 남겨 두었지만 Phase 16은 계정 변경에 한정한 append-only 최소 이력만 확정한다.
 - 현재 seed의 upsert 갱신 동작은 운영 ADMIN 보존 요구와 충돌하므로 계정 관리 도입 시 기존 계정의 password, role, isActive를 덮어쓰지 않도록 정리해야 한다.
 
 ### Open Questions
-없음. User–Teacher 연결, 활성 상태, TEACHER 데이터 범위와 쓰기 권한, 재무·선생님 접근, 계정·비밀번호 lifecycle, 관리자 보호, 기존 session 적용 시점과 계정 변경 이력을 사용자가 확정했다(ADR-048, ADR-049).
+없음. User–Teacher 연결, 활성 상태, TEACHER 데이터 범위와 쓰기 권한, 계정·비밀번호 lifecycle, 관리자 보호, 기존 session 적용 시점과 계정 변경 이력은 ADR-048/049로 확정했고, MANAGER의 비재무 운영 범위와 재무·계정 차단은 ADR-050으로 확정했다.
 
 ### Priority
-Now — 여러 운영자가 최소 권한으로 같은 관리자 시스템을 사용하기 위한 인증·인가 기반이며, 선생님의 현장 출결과 안전 대응을 허용하면서 재무·전체 고객정보·관리 기능의 접근을 차단해야 한다.
+Now — 관리자·준관리자·선생님이 같은 시스템을 역할에 맞는 최소 권한으로 사용하기 위한 인증·인가 기반이다. 준관리자에게 비재무 운영을 위임하면서 재무·계정 권한을 차단하고, 선생님의 현장 출결·안전 대응은 본인 배정 클래스 범위로 제한해야 한다.
 
 ---
 
@@ -1619,11 +1667,11 @@ Now — 여러 운영자가 최소 권한으로 같은 관리자 시스템을 �
 ### 아이
 - [ ] 아이를 등록할 수 있다.
 - [ ] 아이를 검색할 수 있다.
-- [ ] 아이 상세에서 관계/예약/결제/환불을 볼 수 있다.
+- [ ] ADMIN은 아이 상세에서 관계/예약/결제/환불을 볼 수 있고, MANAGER의 아이 상세에는 결제·환불 정보가 포함되지 않는다.
 - [ ] 아이 상세에서 총 예약/참석/불참/취소/예정 5개 요약과 예정 클래스·지난 이력을 확인할 수 있다.
 - [ ] 총 예약에는 CANCELLED가 포함되고 참석/불참은 출결 후 취소 여부와 무관하게 보존된 attendance로 집계된다.
 - [ ] ClassSchedule이 CANCELLED이고 Reservation이 RESERVED인 미래 예약도 예정에서 제외해 지난 이력에 포함하며, 수업 취소와 예약 취소를 구분한다.
-- [ ] 이력에서 예약·출결·결제 상태를 독립적으로 확인하고, 부분환불/전액환불을 구분하되 금액은 표시하지 않는다.
+- [ ] ADMIN의 아이 이력에서는 예약·출결·결제 상태를 독립적으로 확인하고 부분환불/전액환불을 구분하되 금액은 표시하지 않는다. MANAGER의 이력 query와 화면에는 결제 상태도 포함하지 않는다.
 - [ ] 지난 이력은 최근 10건부터 표시되고 더보기 후 중복·누락 없이 이어진다.
 - [ ] 아이 이력의 `historyPage`는 잘못된 값이면 1, 100 초과이면 100으로 정규화되고 누적 조회량은 최대 1000건이다.
 - [ ] 취소된 ClassSchedule의 RESERVED 예약은 수업 취소·예약됨 이력을 유지하되 예약 취소 액션이 없고, 직접 취소 URL에서도 취소 form이 제공되지 않는다.
@@ -1649,7 +1697,7 @@ Now — 여러 운영자가 최소 권한으로 같은 관리자 시스템을 �
 - [ ] 클래스를 취소할 수 있다.
 - [ ] 취소 사유가 저장된다.
 - [ ] 진행 예정 클래스의 RESERVED 예약만 좌석 점유로 세어 잔여 N석/만석/정원 초과 N명을 표시하고, 종료 클래스에는 좌석 정보 대신 종료를 표시한다.
-- [ ] 모바일 클래스 상세에서 일반 참가자와 취소 예약을 구분하고 예약·출결·결제 상태를 확인할 수 있다.
+- [ ] 모바일 클래스 상세에서 일반 참가자와 취소 예약을 구분하고 예약·출결 상태를 확인할 수 있다. 결제 상태는 ADMIN에게만 표시하고 MANAGER/TEACHER payload에는 포함하지 않는다.
 
 ### 예약
 - [ ] 아이 1명 단위로 예약된다.
@@ -1661,7 +1709,7 @@ Now — 여러 운영자가 최소 권한으로 같은 관리자 시스템을 �
 - [ ] COMPLETED/NO_SHOW의 사후 취소와 attendance 이력 보존, 출결 없는 종료 클래스 RESERVED 취소 차단은 기존 정책대로 유지된다.
 - [ ] 클래스 상세와 아이 상세 양쪽에서 동일한 예약 생성 흐름으로 진입할 수 있다.
 - [ ] 출결 후 취소된 예약은 취소 상태와 보존된 참석/불참 이력을 함께 표시한다.
-- [ ] 참가자 통합 화면은 PAID/PARTIAL_REFUNDED/REFUNDED를 결제완료로, CANCELLED/Payment 없음을 미결제로 요약하되 출결이나 환불 정책을 변경하지 않는다.
+- [ ] ADMIN 참가자 통합 화면은 PAID/PARTIAL_REFUNDED/REFUNDED를 결제완료로, CANCELLED/Payment 없음을 미결제로 요약하되 출결이나 환불 정책을 변경하지 않는다. MANAGER/TEACHER 참가자 조회에는 이 결제 요약을 포함하지 않는다.
 
 ### 환불
 - [ ] 아이별 환불이 가능하다.
@@ -1681,19 +1729,23 @@ Now — 여러 운영자가 최소 권한으로 같은 관리자 시스템을 �
 - [ ] 예약자 명단은 클래스별로 그룹화되고, 출결 없는 사전 취소 예약은 제외되며 출결 후 취소 예약은 보존된 출결 이력과 함께 표시된다.
 - [ ] 예약자 명단에서 아이 상세 화면으로 이동할 수 있다.
 - [ ] 오늘 예약 현황과 오늘 취소 처리 건수가 15.6의 KST 및 상태 기준과 일치한다.
-- [ ] 오늘 순매출이 ADR-040의 오늘 결제액-오늘 완료 환불액 기준과 일치한다.
+- [ ] ADMIN Dashboard의 오늘 순매출이 ADR-040의 오늘 결제액-오늘 완료 환불액 기준과 일치하며 MANAGER/TEACHER Dashboard에는 해당 지표와 원천 금액이 포함되지 않는다.
 - [ ] 대시보드가 특정 예약을 환불 처리 필요 건으로 자동 판정하지 않는다.
 
 ### 계정 및 권한
-- [ ] ADMIN은 내부 ADMIN/TEACHER 계정을 생성하고 이름·이메일·역할·활성 상태와 임시 비밀번호를 관리할 수 있다.
+- [ ] 역할은 ADMIN(관리자), MANAGER(준관리자), TEACHER(선생님) 세 개이며 ADMIN만 내부 계정·역할을 관리할 수 있다.
+- [ ] MANAGER는 운영 Dashboard와 아이·안전정보·동의·프로그램·선생님·클래스·예약·출결의 비재무 운영 기능을 사용할 수 있다.
+- [ ] MANAGER의 결제·환불·Revenue·계정 직접 URL, query와 Server Action은 서버에서 차단된다.
+- [ ] MANAGER Dashboard와 허용된 아이·클래스·예약 화면의 HTML/server payload에는 결제·환불·금액·Revenue 정보가 포함되지 않는다.
 - [ ] TEACHER User는 기존 활성 Teacher와 필수 1:1로 연결되고 중복 연결은 허용되지 않는다.
+- [ ] ADMIN과 MANAGER는 Teacher 연결 없이 존재하며 Teacher.isActive가 MANAGER 접근에 영향을 주지 않는다.
 - [ ] 신규·비밀번호 재설정 계정은 비밀번호 변경 전 운영 기능 접근이 차단되며 비밀번호는 hash만 저장된다.
-- [ ] 본인 계정 비활성화, 본인 ADMIN 강등, 마지막 활성 ADMIN 비활성화·강등이 서버에서 거부된다.
+- [ ] 본인 계정 비활성화, 본인 ADMIN→MANAGER/TEACHER 강등, 마지막 활성 ADMIN 비활성화·MANAGER/TEACHER 강등이 서버에서 거부되며 MANAGER는 활성 ADMIN 수에 포함되지 않는다.
 - [ ] 계정·Teacher 비활성화, 역할 변경과 비밀번호 재설정은 기존 session에도 다음 보호된 서버 요청부터 적용된다.
 - [ ] TEACHER는 본인 배정 클래스 운영 정보와 해당 참가자의 아이 이름·보호자 연락처·안전정보만 조회할 수 있다.
 - [ ] TEACHER는 본인 배정 클래스의 출결만 기록할 수 있고 그 외 클래스·예약·재무·계정 쓰기는 차단된다.
 - [ ] TEACHER에게 결제·환불·Revenue·재무 Dashboard·전체 아이·전체 Teacher 관리가 노출되지 않는다.
-- [ ] Navigation 숨김과 별개로 직접 URL, server query와 Server Action에서 최신 DB 역할·활성·배정 범위를 검증한다.
+- [ ] Navigation 숨김과 별개로 직접 URL, server query와 Server Action에서 최신 DB 역할·활성·배정·재무 범위를 검증한다.
 - [ ] 계정 생성과 주요 변경이 append-only 이력으로 남고 비밀번호·hash·token·session 값은 기록되지 않는다.
 - [ ] 기존 ADMIN의 로그인·역할·활성 상태가 migration과 seed 이후에도 유지된다.
 
