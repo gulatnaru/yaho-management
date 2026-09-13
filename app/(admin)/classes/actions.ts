@@ -5,8 +5,23 @@ import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAdmin } from "@/lib/auth/authorization";
-import { cancelClassInputSchema, classInputSchema, type ClassInput } from "@/lib/validation/class";
+import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
+import {
+  cancelClassInputSchema,
+  classInputSchema,
+  classRegistrationModeSchema,
+  getRecurringClassFormInput,
+  recurringClassInputSchema,
+  type ClassInput,
+  type ClassRegistrationMode,
+} from "@/lib/validation/class";
+import {
+  createRecurringClassesCore,
+  RecurringClassDuplicateError,
+  RecurringProgramNotUsableError,
+  RecurringTeachersNotUsableError,
+} from "@/server/classes/create-recurring";
 
 /**
  * 트랜잭션 내부에서 "확인 후 쓰기" 사이의 레이스 컨디션을 막기 위해 던지는 내부 전용 에러들이다.
@@ -25,6 +40,9 @@ type PrismaLike = typeof prisma | Prisma.TransactionClient;
 export type ClassFormFieldKey =
   | "programId"
   | "date"
+  | "repeatStartDate"
+  | "repeatEndDate"
+  | "weekdays"
   | "startTime"
   | "endTime"
   | "location"
@@ -37,8 +55,12 @@ export type ClassFormFieldKey =
   | "safetyMemo";
 
 export type ClassFormValues = {
+  registrationMode?: ClassRegistrationMode;
   programId?: string;
   date?: string;
+  repeatStartDate?: string;
+  repeatEndDate?: string;
+  weekdays?: string[];
   startTime?: string;
   endTime?: string;
   location?: string;
@@ -82,8 +104,23 @@ function parseClassForm(formData: FormData) {
 function readClassFormValues(formData: FormData): ClassFormValues {
   const toStringOrUndefined = (value: FormDataEntryValue | null) =>
     typeof value === "string" ? value : undefined;
+  const registrationMode = classRegistrationModeSchema.safeParse(formData.get("registrationMode"));
 
   return {
+    ...(registrationMode.success
+      ? {
+          registrationMode: registrationMode.data,
+          ...(registrationMode.data === "recurring"
+            ? {
+                repeatStartDate: toStringOrUndefined(formData.get("repeatStartDate")),
+                repeatEndDate: toStringOrUndefined(formData.get("repeatEndDate")),
+                weekdays: formData
+                  .getAll("weekdays")
+                  .filter((value): value is string => typeof value === "string"),
+              }
+            : {}),
+        }
+      : {}),
     programId: toStringOrUndefined(formData.get("programId")),
     date: toStringOrUndefined(formData.get("date")),
     startTime: toStringOrUndefined(formData.get("startTime")),
@@ -106,6 +143,9 @@ function toFieldErrors(error: import("zod").ZodError<unknown>): Partial<Record<C
   const known: ClassFormFieldKey[] = [
     "programId",
     "date",
+    "repeatStartDate",
+    "repeatEndDate",
+    "weekdays",
     "startTime",
     "endTime",
     "location",
@@ -151,8 +191,69 @@ async function areTeachersUsable(client: PrismaLike, teacherIds: string[]): Prom
   return activeCount === teacherIds.length;
 }
 
+async function createRecurringClass(formData: FormData): Promise<ClassFormState> {
+  const values = readClassFormValues(formData);
+  const result = recurringClassInputSchema.safeParse(getRecurringClassFormInput(formData));
+  if (!result.success) {
+    return { errors: toFieldErrors(result.error), values };
+  }
+
+  const now = new Date();
+  const pastDates = findPastRecurringClassDates(result.data.targetDates, now);
+  if (pastDates.length > 0) {
+    return {
+      formError: `오늘보다 이전인 날짜는 반복 등록할 수 없습니다: ${pastDates.join(", ")}`,
+      values,
+    };
+  }
+
+  try {
+    await createRecurringClassesCore(result.data);
+  } catch (error) {
+    if (error instanceof RecurringProgramNotUsableError) {
+      return {
+        formError: "선택한 프로그램을 사용할 수 없습니다. 다시 선택해주세요.",
+        values,
+      };
+    }
+    if (error instanceof RecurringTeachersNotUsableError) {
+      return {
+        formError: "선택한 선생님 중 배정할 수 없는 선생님이 있습니다. 다시 선택해주세요.",
+        values,
+      };
+    }
+    if (error instanceof RecurringClassDuplicateError) {
+      return {
+        formError: `이미 같은 클래스가 있는 날짜가 있습니다: ${error.dates.join(", ")}`,
+        values,
+      };
+    }
+    console.error(
+      "[classes] failed to create recurring classes:",
+      error instanceof Error ? error.message : "unknown error",
+    );
+    return { formError: "반복 클래스 등록에 실패했습니다. 어떤 클래스도 생성되지 않았습니다.", values };
+  }
+
+  revalidatePath("/classes");
+  redirect(
+    `/classes?dateFrom=${encodeURIComponent(result.data.repeatStartDate)}&dateTo=${encodeURIComponent(result.data.repeatEndDate)}&status=all`,
+  );
+}
+
 export async function createClass(_prevState: ClassFormState, formData: FormData): Promise<ClassFormState> {
   await requireAdmin();
+
+  const registrationMode = classRegistrationModeSchema.safeParse(formData.get("registrationMode") ?? "single");
+  if (!registrationMode.success) {
+    return {
+      formError: "등록 방식을 다시 선택해주세요.",
+      values: readClassFormValues(formData),
+    };
+  }
+  if (registrationMode.data === "recurring") {
+    return createRecurringClass(formData);
+  }
 
   const result = parseClassForm(formData);
   if (!result.success) {

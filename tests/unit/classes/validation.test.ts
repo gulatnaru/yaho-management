@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { cancelClassInputSchema, classInputSchema } from "@/lib/validation/class";
+import {
+  cancelClassInputSchema,
+  classInputSchema,
+  recurringClassInputSchema,
+} from "@/lib/validation/class";
 
 const baseInput = {
   programId: "program-1",
@@ -155,5 +159,79 @@ describe("cancelClassInputSchema", () => {
   it("rejects a missing cancel reason", () => {
     const result = cancelClassInputSchema.safeParse({});
     expect(result.success).toBe(false);
+  });
+});
+
+describe("recurringClassInputSchema", () => {
+  const recurringInput = {
+    programId: "program-1",
+    repeatStartDate: "2026-10-01",
+    repeatEndDate: "2026-10-31",
+    weekdays: ["0", "6"],
+    startTime: "09:00",
+    endTime: "11:00",
+    location: " 실외 운동장 ",
+    capacity: "8",
+    teacherIds: ["teacher-1"],
+    memo: "주말 수업",
+    insured: true,
+    insurer: "테스트 보험",
+    insurancePolicyNo: "POLICY-TEST",
+    safetyMemo: "합성 테스트 메모",
+  };
+
+  it("validates common fields and computes multiple weekdays in one month", () => {
+    const result = recurringClassInputSchema.safeParse(recurringInput);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.location).toBe("실외 운동장");
+      expect(result.data.weekdays).toEqual([0, 6]);
+      expect(result.data.targetDates).toEqual([
+        "2026-10-03",
+        "2026-10-04",
+        "2026-10-10",
+        "2026-10-11",
+        "2026-10-17",
+        "2026-10-18",
+        "2026-10-24",
+        "2026-10-25",
+        "2026-10-31",
+      ]);
+    }
+  });
+
+  it("normalizes duplicate weekdays", () => {
+    const result = recurringClassInputSchema.safeParse({
+      ...recurringInput,
+      weekdays: ["6", "6"],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.weekdays).toEqual([6]);
+  });
+
+  it.each([
+    { override: { repeatEndDate: "2026-11-01" }, field: "repeatEndDate" },
+    { override: { weekdays: [] }, field: "weekdays" },
+    {
+      override: { repeatStartDate: "2026-10-05", repeatEndDate: "2026-10-05", weekdays: ["2"] },
+      field: "weekdays",
+    },
+    { override: { capacity: "100" }, field: "capacity" },
+    { override: { teacherIds: [] }, field: "teacherIds" },
+    { override: { startTime: "11:00", endTime: "09:00" }, field: "endTime" },
+  ])("rejects recurring input that violates $field", ({ override, field }) => {
+    const result = recurringClassInputSchema.safeParse({ ...recurringInput, ...override });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const fieldErrors = result.error.flatten().fieldErrors as Record<string, string[] | undefined>;
+      expect(fieldErrors[field]).toBeDefined();
+    }
+  });
+
+  it("does not add recurring past-date rules to the existing single schema", () => {
+    const result = classInputSchema.safeParse({ ...baseInput, date: "2020-01-01" });
+    expect(result.success).toBe(true);
   });
 });
