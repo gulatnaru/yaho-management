@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { cn } from "@/lib/utils";
 import { getChildDetail } from "@/lib/children/queries";
 import { getChildSafetyInfo } from "@/lib/children/safety-info/queries";
 import { SafetyForm } from "./safety-form";
 
 export default async function ChildSafetyPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireOperationalPrincipal();
   const { id } = await params;
   const [child, safetyInfo] = await Promise.all([getChildDetail(id), getChildSafetyInfo(id)]);
   if (!child) notFound();

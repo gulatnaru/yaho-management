@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { authenticateOperator } from "@/lib/auth/credentials";
+import { writeJwtIdentity, writeSessionIdentity } from "@/lib/auth/session";
 import { credentialsSchema } from "@/lib/validation/auth";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -22,22 +23,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   callbacks: {
     jwt: ({ token, user }) => {
-      if (user) {
-        token.id = user.id;
-        token.role = user.role;
-      }
-      return token;
+      return writeJwtIdentity(token, user);
     },
     session: ({ session, token }) => {
-      if (session.user) {
-        if (typeof token.id === "string") {
-          session.user.id = token.id;
-        }
-        if (token.role === "ADMIN" || token.role === "TEACHER") {
-          session.user.role = token.role;
-        }
-      }
-      return session;
+      return writeSessionIdentity(session, token);
     },
   },
   pages: {

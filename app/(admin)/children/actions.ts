@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { childInputSchema, type ChildInput } from "@/lib/validation/child";
 
 export type ChildFormValues = {
@@ -52,7 +52,7 @@ function readChildFormValues(formData: FormData): ChildFormValues {
 }
 
 export async function createChild(_prevState: ChildFormState, formData: FormData): Promise<ChildFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const result = parseChildForm(formData);
   if (!result.success) {
@@ -86,7 +86,7 @@ export async function updateChild(
   _prevState: ChildFormState,
   formData: FormData,
 ): Promise<ChildFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const result = parseChildForm(formData);
   if (!result.success) {
@@ -116,7 +116,7 @@ export async function updateChild(
 }
 
 export async function setChildActive(id: string, isActive: boolean): Promise<{ error?: string }> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   try {
     await prisma.child.update({

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { teacherInputSchema, type TeacherInput } from "@/lib/validation/teacher";
 
 export type TeacherFormValues = {
@@ -43,7 +43,7 @@ function readTeacherFormValues(formData: FormData): TeacherFormValues {
 }
 
 export async function createTeacher(_prevState: TeacherFormState, formData: FormData): Promise<TeacherFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const result = parseTeacherForm(formData);
   if (!result.success) {
@@ -74,7 +74,7 @@ export async function updateTeacher(
   _prevState: TeacherFormState,
   formData: FormData,
 ): Promise<TeacherFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const result = parseTeacherForm(formData);
   if (!result.success) {
@@ -104,7 +104,7 @@ export async function updateTeacher(
 }
 
 export async function setTeacherActive(id: string, isActive: boolean): Promise<{ error?: string }> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   try {
     await prisma.teacher.update({

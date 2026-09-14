@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatKrw } from "@/lib/payments/format";
-import type { DashboardTodayMetrics } from "@/server/dashboard/types";
+import type { DashboardFinancialMetrics, DashboardOperationalMetrics } from "@/server/dashboard/types";
 
 function SummaryCard({
   label,
@@ -35,11 +35,19 @@ function SummaryCard({
   );
 }
 
-export function DashboardSummary({ metrics, today }: { metrics: DashboardTodayMetrics; today: string }) {
+export function DashboardSummary({
+  metrics,
+  financialMetrics,
+  today,
+}: {
+  metrics: DashboardOperationalMetrics;
+  financialMetrics?: DashboardFinancialMetrics;
+  today: string;
+}) {
   return (
     <section aria-labelledby="today-summary-heading" className="space-y-3">
       <h2 className="text-lg font-semibold" id="today-summary-heading">오늘 운영 요약</h2>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className={`grid grid-cols-2 gap-3 ${financialMetrics ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <SummaryCard
           href={`/classes?dateFrom=${today}&dateTo=${today}&status=all`}
           label="오늘 수업"
@@ -58,18 +66,20 @@ export function DashboardSummary({ metrics, today }: { metrics: DashboardTodayMe
           testId="summary-cancellations"
           value={`${metrics.cancellationCount}건`}
         />
-        <SummaryCard
-          href={`/revenue?dateFrom=${today}&dateTo=${today}`}
-          label="오늘 순매출"
-          testId="summary-net-revenue"
-          value={formatKrw(metrics.netRevenue)}
-        >
-          <p className="mt-1 break-words text-[11px] leading-tight text-slate-500 sm:text-xs">
-            <span data-testid="summary-paid-amount">결제 {formatKrw(metrics.paidAmount)}</span>
-            {" · "}
-            <span data-testid="summary-refunded-amount">환불 {formatKrw(metrics.refundedAmount)}</span>
-          </p>
-        </SummaryCard>
+        {financialMetrics ? (
+          <SummaryCard
+            href={`/revenue?dateFrom=${today}&dateTo=${today}`}
+            label="오늘 순매출"
+            testId="summary-net-revenue"
+            value={formatKrw(financialMetrics.netRevenue)}
+          >
+            <p className="mt-1 break-words text-[11px] leading-tight text-slate-500 sm:text-xs">
+              <span data-testid="summary-paid-amount">결제 {formatKrw(financialMetrics.paidAmount)}</span>
+              {" · "}
+              <span data-testid="summary-refunded-amount">환불 {formatKrw(financialMetrics.refundedAmount)}</span>
+            </p>
+          </SummaryCard>
+        ) : null}
       </div>
     </section>
   );

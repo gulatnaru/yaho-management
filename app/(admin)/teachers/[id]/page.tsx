@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningBanner } from "@/components/ui/warning-banner";
+import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { toTelHref } from "@/lib/shared/contact";
 import { countFutureScheduledAssignments } from "@/lib/teachers/deactivation-warning";
-import { getTeacherDetail } from "@/lib/teachers/queries";
+import { getTeacherDetailForPrincipal } from "@/lib/teachers/queries";
 import { TeacherStatusToggle } from "../_components/teacher-status-toggle";
 
 interface TeacherDetailPageProps {
@@ -13,11 +14,14 @@ interface TeacherDetailPageProps {
 }
 
 export default async function TeacherDetailPage({ params }: TeacherDetailPageProps) {
+  const principal = await requireCurrentPrincipal();
   const { id } = await params;
 
+  const canManage = principal.role === "ADMIN" || principal.role === "MANAGER";
+
   const [teacher, futureAssignmentCount] = await Promise.all([
-    getTeacherDetail(id),
-    countFutureScheduledAssignments(id),
+    getTeacherDetailForPrincipal(id, principal),
+    canManage ? countFutureScheduledAssignments(id) : Promise.resolve(0),
   ]);
 
   if (!teacher) {
@@ -28,16 +32,20 @@ export default async function TeacherDetailPage({ params }: TeacherDetailPagePro
 
   return (
     <section className="space-y-6">
-      <Link className="text-sm text-slate-500 hover:underline" href="/teachers">
-        ← 목록으로
-      </Link>
+      {canManage ? (
+        <Link className="text-sm text-slate-500 hover:underline" href="/teachers">
+          ← 목록으로
+        </Link>
+      ) : null}
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{teacher.name}</h1>
         <div className="flex items-center gap-2">
-          <Link className={buttonVariants()} href={`/teachers/${teacher.id}/edit`}>
-            정보 수정
-          </Link>
+          {canManage ? (
+            <Link className={buttonVariants()} href={`/teachers/${teacher.id}/edit`}>
+              정보 수정
+            </Link>
+          ) : null}
         </div>
       </div>
 
@@ -74,11 +82,11 @@ export default async function TeacherDetailPage({ params }: TeacherDetailPagePro
         </CardContent>
       </Card>
 
-      {showWarning ? (
+      {canManage && showWarning ? (
         <WarningBanner>이 선생님은 예정된 클래스 {futureAssignmentCount}건에 배정되어 있습니다.</WarningBanner>
       ) : null}
 
-      <TeacherStatusToggle id={teacher.id} isActive={teacher.isActive} />
+      {canManage ? <TeacherStatusToggle id={teacher.id} isActive={teacher.isActive} /> : null}
     </section>
   );
 }

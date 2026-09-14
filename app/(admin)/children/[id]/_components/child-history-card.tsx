@@ -15,7 +15,7 @@ import {
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import { getAttendanceLabel } from "@/lib/reservations/participants";
 import { cn } from "@/lib/utils";
-import type { ChildHistoryItem } from "@/server/children/history";
+import type { ChildHistoryDisplayItem } from "@/server/children/history";
 
 const CLASS_VARIANTS: Record<ChildHistoryClassLabel, NonNullable<BadgeProps["variant"]>> = {
   "수업 예정": "default",
@@ -43,11 +43,22 @@ const PAYMENT_VARIANTS: Record<
   미결제: "secondary",
 };
 
-export function ChildHistoryCard({ item, now }: { item: ChildHistoryItem; now: Date }) {
+export function ChildHistoryCard({
+  item,
+  now,
+  showPayment,
+}: {
+  item: ChildHistoryDisplayItem;
+  now: Date;
+  showPayment: boolean;
+}) {
   const classLabel = getChildHistoryClassLabel(item.classSchedule, now);
   const reservationLabel = getChildHistoryReservationLabel(item.status);
   const attendanceLabel = getAttendanceLabel(item.attendance);
-  const paymentLabel = getChildHistoryPaymentLabel(item.paymentItem?.payment.status);
+  const paymentLabel =
+    showPayment && "paymentItem" in item
+      ? getChildHistoryPaymentLabel(item.paymentItem?.payment.status)
+      : undefined;
   const canCancel = canCancelReservation(item, item.classSchedule, now);
 
   return (
@@ -63,7 +74,7 @@ export function ChildHistoryCard({ item, now }: { item: ChildHistoryItem; now: D
         <p className="mt-1 break-words text-sm text-slate-500">{item.classSchedule.location}</p>
       </div>
 
-      <dl className="mt-4 grid min-w-0 grid-cols-2 gap-3 text-sm md:grid-cols-4">
+      <dl className={`mt-4 grid min-w-0 grid-cols-2 gap-3 text-sm ${showPayment ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <div className="min-w-0">
           <dt className="text-xs text-slate-500">수업</dt>
           <dd className="mt-1">
@@ -92,12 +103,14 @@ export function ChildHistoryCard({ item, now }: { item: ChildHistoryItem; now: D
             </Badge>
           </dd>
         </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-slate-500">결제</dt>
-          <dd className="mt-1">
-            <Badge variant={PAYMENT_VARIANTS[paymentLabel]}>{paymentLabel}</Badge>
-          </dd>
-        </div>
+        {paymentLabel ? (
+          <div className="min-w-0">
+            <dt className="text-xs text-slate-500">결제</dt>
+            <dd className="mt-1">
+              <Badge variant={PAYMENT_VARIANTS[paymentLabel]}>{paymentLabel}</Badge>
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       <div className="mt-4 flex flex-col gap-2 md:flex-row">

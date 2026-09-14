@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listProgramCandidates, listTeacherCandidates } from "@/lib/classes/candidates";
 import { formatKstDate, formatKstTime } from "@/lib/classes/datetime";
 import { getClassDetail } from "@/lib/classes/queries";
@@ -11,6 +12,7 @@ interface EditClassPageProps {
 }
 
 export default async function EditClassPage({ params }: EditClassPageProps) {
+  await requireOperationalPrincipal();
   const { id } = await params;
   const classDetail = await getClassDetail(id);
 

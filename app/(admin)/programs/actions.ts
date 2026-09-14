@@ -3,8 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
-import { programInputSchema, type ProgramInput } from "@/lib/validation/program";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import {
+  programInputSchema,
+  programOperationalInputSchema,
+  type ProgramInput,
+  type ProgramOperationalInput,
+} from "@/lib/validation/program";
 
 export type ProgramFormValues = {
   name?: string;
@@ -17,21 +22,30 @@ export type ProgramFormValues = {
 };
 
 export type ProgramFormState = {
-  errors?: Partial<Record<keyof ProgramInput, string[]>>;
+  errors?: Partial<Record<keyof ProgramInput | keyof ProgramOperationalInput, string[]>>;
   formError?: string;
   values?: ProgramFormValues;
 };
 
-function parseProgramForm(formData: FormData) {
-  return programInputSchema.safeParse({
+function readOperationalProgramInput(formData: FormData) {
+  return {
     name: formData.get("name"),
     description: formData.get("description") || undefined,
     targetAgeMin: formData.get("targetAgeMin") || undefined,
     targetAgeMax: formData.get("targetAgeMax") || undefined,
     defaultDuration: formData.get("defaultDuration") || undefined,
-    defaultPrice: formData.get("defaultPrice") || undefined,
     memo: formData.get("memo") || undefined,
-  });
+  };
+}
+
+function parseProgramForm(formData: FormData, includeFinancialFields: boolean) {
+  const operationalInput = readOperationalProgramInput(formData);
+  return includeFinancialFields
+    ? programInputSchema.safeParse({
+        ...operationalInput,
+        defaultPrice: formData.get("defaultPrice") || undefined,
+      })
+    : programOperationalInputSchema.safeParse(operationalInput);
 }
 
 /**
@@ -39,7 +53,7 @@ function parseProgramForm(formData: FormData) {
  * React 19 의 Server Action 폼은 액션 완료(성공/실패 무관) 시 uncontrolled 필드를 defaultValue 로
  * 리셋하므로, 검증 실패 응답에 원본 값을 담아 폼이 defaultValue 대신 이 값을 우선 사용하게 한다.
  */
-function readProgramFormValues(formData: FormData): ProgramFormValues {
+function readProgramFormValues(formData: FormData, includeFinancialFields: boolean): ProgramFormValues {
   const toStringOrUndefined = (value: FormDataEntryValue | null) =>
     typeof value === "string" ? value : undefined;
 
@@ -49,21 +63,29 @@ function readProgramFormValues(formData: FormData): ProgramFormValues {
     targetAgeMin: toStringOrUndefined(formData.get("targetAgeMin")),
     targetAgeMax: toStringOrUndefined(formData.get("targetAgeMax")),
     defaultDuration: toStringOrUndefined(formData.get("defaultDuration")),
-    defaultPrice: toStringOrUndefined(formData.get("defaultPrice")),
+    ...(includeFinancialFields ? { defaultPrice: toStringOrUndefined(formData.get("defaultPrice")) } : {}),
     memo: toStringOrUndefined(formData.get("memo")),
   };
 }
 
 export async function createProgram(_prevState: ProgramFormState, formData: FormData): Promise<ProgramFormState> {
-  await requireAdmin();
+  const principal = await requireOperationalPrincipal();
+  const includeFinancialFields = principal.role === "ADMIN";
 
-  const result = parseProgramForm(formData);
+  const result = parseProgramForm(formData, includeFinancialFields);
   if (!result.success) {
-    return { errors: result.error.flatten().fieldErrors, values: readProgramFormValues(formData) };
+    return {
+      errors: result.error.flatten().fieldErrors,
+      values: readProgramFormValues(formData, includeFinancialFields),
+    };
   }
 
   let createdId: string;
   try {
+    const defaultPrice =
+      "defaultPrice" in result.data && typeof result.data.defaultPrice === "number"
+        ? result.data.defaultPrice
+        : undefined;
     const program = await prisma.program.create({
       data: {
         name: result.data.name,
@@ -71,15 +93,19 @@ export async function createProgram(_prevState: ProgramFormState, formData: Form
         targetAgeMin: result.data.targetAgeMin ?? null,
         targetAgeMax: result.data.targetAgeMax ?? null,
         defaultDuration: result.data.defaultDuration ?? null,
-        defaultPrice: result.data.defaultPrice,
+        ...(includeFinancialFields && defaultPrice !== undefined ? { defaultPrice } : {}),
         status: "ACTIVE",
         memo: result.data.memo || null,
       },
+      select: { id: true },
     });
     createdId = program.id;
   } catch (error) {
     console.error("[programs] failed to create program:", error instanceof Error ? error.message : "unknown error");
-    return { formError: "프로그램 등록에 실패했습니다. 다시 시도해주세요.", values: readProgramFormValues(formData) };
+    return {
+      formError: "프로그램 등록에 실패했습니다. 다시 시도해주세요.",
+      values: readProgramFormValues(formData, includeFinancialFields),
+    };
   }
 
   revalidatePath("/programs");
@@ -91,14 +117,22 @@ export async function updateProgram(
   _prevState: ProgramFormState,
   formData: FormData,
 ): Promise<ProgramFormState> {
-  await requireAdmin();
+  const principal = await requireOperationalPrincipal();
+  const includeFinancialFields = principal.role === "ADMIN";
 
-  const result = parseProgramForm(formData);
+  const result = parseProgramForm(formData, includeFinancialFields);
   if (!result.success) {
-    return { errors: result.error.flatten().fieldErrors, values: readProgramFormValues(formData) };
+    return {
+      errors: result.error.flatten().fieldErrors,
+      values: readProgramFormValues(formData, includeFinancialFields),
+    };
   }
 
   try {
+    const defaultPrice =
+      "defaultPrice" in result.data && typeof result.data.defaultPrice === "number"
+        ? result.data.defaultPrice
+        : undefined;
     await prisma.program.update({
       where: { id },
       data: {
@@ -107,7 +141,7 @@ export async function updateProgram(
         targetAgeMin: result.data.targetAgeMin ?? null,
         targetAgeMax: result.data.targetAgeMax ?? null,
         defaultDuration: result.data.defaultDuration ?? null,
-        defaultPrice: result.data.defaultPrice,
+        ...(includeFinancialFields && defaultPrice !== undefined ? { defaultPrice } : {}),
         memo: result.data.memo || null,
       },
     });
@@ -115,7 +149,7 @@ export async function updateProgram(
     console.error("[programs] failed to update program:", error instanceof Error ? error.message : "unknown error");
     return {
       formError: "프로그램 정보 수정에 실패했습니다. 다시 시도해주세요.",
-      values: readProgramFormValues(formData),
+      values: readProgramFormValues(formData, includeFinancialFields),
     };
   }
 
@@ -125,7 +159,7 @@ export async function updateProgram(
 }
 
 export async function setProgramStatus(id: string, status: "ACTIVE" | "INACTIVE"): Promise<{ error?: string }> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   try {
     await prisma.program.update({

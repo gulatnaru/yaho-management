@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { createPaymentCore, createRefundCore } from "@/lib/payments/core";
 import {
@@ -40,7 +40,7 @@ export async function createPayment(
   _previousState: PaymentFormState,
   formData: FormData,
 ): Promise<PaymentFormState> {
-  await requireAdmin();
+  await requireAdminPrincipal();
   const values = readPaymentValues(formData);
   const parsed = paymentInputSchema.safeParse(values);
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors, values };
@@ -89,7 +89,7 @@ export async function createRefund(
   _previousState: RefundFormState,
   formData: FormData,
 ): Promise<RefundFormState> {
-  const session = await requireAdmin();
+  const principal = await requireAdminPrincipal();
   const values = readRefundValues(formData);
   const parsed = refundInputSchema.safeParse(values);
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors, values };
@@ -98,7 +98,7 @@ export async function createRefund(
   try {
     const created = await createRefundCore(prisma, {
       ...parsed.data,
-      processedById: session.user.id,
+      processedById: principal.userId,
     });
     paymentId = created.paymentId;
   } catch (error) {

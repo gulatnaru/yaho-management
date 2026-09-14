@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { getChildDetail } from "@/lib/children/queries";
 import { getClassDetail } from "@/lib/classes/queries";
 import { listActiveChildCandidates, listScheduledClassCandidates } from "@/lib/reservations/candidates";
@@ -10,6 +11,7 @@ interface NewReservationPageProps {
 }
 
 export default async function NewReservationPage({ searchParams }: NewReservationPageProps) {
+  await requireOperationalPrincipal();
   const resolvedParams = await searchParams;
 
   const [childCandidates, classCandidates] = await Promise.all([

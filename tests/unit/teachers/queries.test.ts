@@ -14,7 +14,7 @@ vi.mock("@/lib/db/prisma", () => ({
   },
 }));
 
-const { listTeachers, getTeacherDetail } = await import("@/lib/teachers/queries");
+const { listTeachers, getTeacherDetail, getTeacherDetailForPrincipal } = await import("@/lib/teachers/queries");
 
 describe("listTeachers", () => {
   beforeEach(() => {
@@ -52,5 +52,20 @@ describe("getTeacherDetail", () => {
     const result = await getTeacherDetail("missing");
 
     expect(result).toBeNull();
+  });
+
+  it("does not query another Teacher for a TEACHER principal", async () => {
+    const result = await getTeacherDetailForPrincipal("teacher-2", {
+      userId: "user-1",
+      name: "선생님",
+      email: "teacher@yaho.test",
+      role: "TEACHER",
+      teacherId: "teacher-1",
+      authVersion: 1,
+      mustChangePassword: false,
+    });
+
+    expect(result).toBeNull();
+    expect(findUniqueMock).not.toHaveBeenCalled();
   });
 });

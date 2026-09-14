@@ -5,7 +5,7 @@ const createMock = vi.fn();
 const updateMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
-  requireAdmin: (...args: unknown[]) => requireAdminMock(...args),
+  requireOperationalPrincipal: (...args: unknown[]) => requireAdminMock(...args),
 }));
 
 vi.mock("@/lib/db/prisma", () => ({

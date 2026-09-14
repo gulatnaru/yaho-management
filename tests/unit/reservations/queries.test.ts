@@ -3,6 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const reservationFindManyMock = vi.fn();
 const reservationCountMock = vi.fn();
 const reservationFindUniqueMock = vi.fn();
+const requireAdminPrincipalMock = vi.fn();
+const requireOperationalPrincipalMock = vi.fn();
+const requireAssignedClassMock = vi.fn();
+
+vi.mock("@/lib/auth/authorization", () => ({
+  requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+  requireOperationalPrincipal: (...args: unknown[]) => requireOperationalPrincipalMock(...args),
+  requireAssignedClass: (...args: unknown[]) => requireAssignedClassMock(...args),
+}));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
@@ -14,7 +23,23 @@ vi.mock("@/lib/db/prisma", () => ({
   },
 }));
 
-const { listReservations, getReservationDetail, listReservationsByClassSchedule } = await import("@/lib/reservations/queries");
+const {
+  getReservationDetail,
+  getReservationOperationalDetail,
+  listOperationalReservationsByClassSchedule,
+  listReservations,
+  listReservationsByClassSchedule,
+  listTeacherReservationsByClassSchedule,
+} = await import("@/lib/reservations/queries");
+
+beforeEach(() => {
+  requireAdminPrincipalMock.mockReset();
+  requireAdminPrincipalMock.mockResolvedValue({ role: "ADMIN" });
+  requireOperationalPrincipalMock.mockReset();
+  requireOperationalPrincipalMock.mockResolvedValue({ role: "MANAGER" });
+  requireAssignedClassMock.mockReset();
+  requireAssignedClassMock.mockResolvedValue({ role: "TEACHER", teacherId: "teacher-1" });
+});
 
 describe("listReservations", () => {
   beforeEach(() => {
@@ -113,6 +138,19 @@ describe("getReservationDetail", () => {
       }),
     );
   });
+
+  it("uses a non-financial projection for MANAGER reservation detail", async () => {
+    reservationFindUniqueMock.mockResolvedValue({ id: "reservation-1" });
+
+    await getReservationOperationalDetail("reservation-1");
+
+    const [[callArg]] = reservationFindUniqueMock.mock.calls;
+    expect(callArg.select).not.toHaveProperty("paymentItem");
+    const serialized = JSON.stringify(callArg.select);
+    for (const forbidden of ["amount", "payment", "refund", "method", "paidAmount", "refundedAmount"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
 });
 
 describe("listReservationsByClassSchedule", () => {
@@ -143,5 +181,49 @@ describe("listReservationsByClassSchedule", () => {
       select: { payment: { select: { status: true } } },
     });
     expect(reservationFindManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the payment relation from MANAGER class participants", async () => {
+    await listOperationalReservationsByClassSchedule("class-1");
+
+    const [[callArg]] = reservationFindManyMock.mock.calls;
+    expect(callArg.select).not.toHaveProperty("paymentItem");
+    expect(JSON.stringify(callArg.select)).not.toContain("payment");
+  });
+
+  it("checks ADMIN access before selecting participant payment status", async () => {
+    requireAdminPrincipalMock.mockRejectedValueOnce(new Error("FORBIDDEN"));
+
+    await expect(listReservationsByClassSchedule("class-1")).rejects.toThrow("FORBIDDEN");
+    expect(reservationFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes TEACHER participant data through assignment and returns no financial relation", async () => {
+    const principal = {
+      userId: "teacher-user-1",
+      name: "선생님",
+      email: "teacher@yaho.test",
+      role: "TEACHER" as const,
+      teacherId: "teacher-1",
+      authVersion: 1,
+      mustChangePassword: false,
+    };
+
+    await listTeacherReservationsByClassSchedule("class-1", principal);
+
+    expect(requireAssignedClassMock).toHaveBeenCalledWith("class-1", principal);
+    const [[callArg]] = reservationFindManyMock.mock.calls;
+    expect(callArg.where).toEqual({
+      classScheduleId: "class-1",
+      classSchedule: { teachers: { some: { teacherId: "teacher-1" } } },
+    });
+    expect(callArg.select).not.toHaveProperty("paymentItem");
+    expect(callArg.select.child.select).toEqual(expect.objectContaining({
+      id: true,
+      name: true,
+      guardianName: true,
+      guardianPhone: true,
+      safetyInfo: expect.any(Object),
+    }));
   });
 });

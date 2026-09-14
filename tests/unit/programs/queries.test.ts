@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const findManyMock = vi.fn().mockResolvedValue([]);
 const countMock = vi.fn().mockResolvedValue(0);
 const findUniqueMock = vi.fn().mockResolvedValue(null);
+const requireAdminPrincipalMock = vi.fn();
+const requireOperationalPrincipalMock = vi.fn();
+
+vi.mock("@/lib/auth/authorization", () => ({
+  requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+  requireOperationalPrincipal: (...args: unknown[]) => requireOperationalPrincipalMock(...args),
+}));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
@@ -14,7 +21,7 @@ vi.mock("@/lib/db/prisma", () => ({
   },
 }));
 
-const { listPrograms, getProgramDetail } = await import("@/lib/programs/queries");
+const { getProgramAdminDetail, getProgramOperationalDetail, listPrograms } = await import("@/lib/programs/queries");
 
 describe("listPrograms", () => {
   beforeEach(() => {
@@ -41,16 +48,37 @@ describe("listPrograms", () => {
   });
 });
 
-describe("getProgramDetail", () => {
+describe("role-aware program detail", () => {
   beforeEach(() => {
     findUniqueMock.mockClear();
+    requireAdminPrincipalMock.mockReset();
+    requireAdminPrincipalMock.mockResolvedValue({ role: "ADMIN" });
+    requireOperationalPrincipalMock.mockReset();
+    requireOperationalPrincipalMock.mockResolvedValue({ role: "MANAGER" });
   });
 
   it("returns null when the program does not exist", async () => {
     findUniqueMock.mockResolvedValueOnce(null);
 
-    const result = await getProgramDetail("missing");
+    const result = await getProgramAdminDetail("missing");
 
     expect(result).toBeNull();
+  });
+
+  it("excludes defaultPrice from the MANAGER projection", async () => {
+    await getProgramOperationalDetail("program-1");
+
+    const [[callArg]] = findUniqueMock.mock.calls;
+    expect(callArg.select).not.toHaveProperty("defaultPrice");
+    expect(callArg.select).toEqual(
+      expect.objectContaining({ id: true, name: true, defaultDuration: true, status: true }),
+    );
+  });
+
+  it("keeps defaultPrice in the ADMIN projection", async () => {
+    await getProgramAdminDetail("program-1");
+
+    const [[callArg]] = findUniqueMock.mock.calls;
+    expect(callArg.select.defaultPrice).toBe(true);
   });
 });

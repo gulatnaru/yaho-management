@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { calculateAge } from "@/lib/children/age";
 import { getChildConsentSummary } from "@/lib/children/consent/queries";
 import type { ConsentType } from "@/lib/children/consent/validation";
@@ -21,7 +22,9 @@ import { parseChildHistoryPage } from "@/lib/validation/child-history";
 import {
   getChildHistorySummary,
   listChildPastHistory,
+  listChildPastHistoryOperational,
   listChildUpcomingReservations,
+  listChildUpcomingReservationsOperational,
 } from "@/server/children/history";
 import { ChildHistorySection } from "./_components/child-history-section";
 import { ChildHistorySummaryCards } from "./_components/child-history-summary";
@@ -53,6 +56,8 @@ export default async function ChildDetailPage({
   searchParams,
 }: ChildDetailPageProps) {
   const [{ id }, resolvedSearchParams] = await Promise.all([params, searchParams]);
+  const principal = await requireOperationalPrincipal();
+  const isAdmin = principal.role === "ADMIN";
   const historyPage = parseChildHistoryPage(resolvedSearchParams.historyPage);
   const now = new Date();
 
@@ -68,10 +73,14 @@ export default async function ChildDetailPage({
     getChildDetail(id),
     getChildSafetyInfo(id),
     getChildConsentSummary(id),
-    listPaymentItemsByChild(id),
+    isAdmin ? listPaymentItemsByChild(id) : Promise.resolve(undefined),
     getChildHistorySummary(id, now),
-    listChildUpcomingReservations(id, now),
-    listChildPastHistory(id, now, historyPage),
+    isAdmin
+      ? listChildUpcomingReservations(id, now)
+      : listChildUpcomingReservationsOperational(id, now),
+    isAdmin
+      ? listChildPastHistory(id, now, historyPage)
+      : listChildPastHistoryOperational(id, now, historyPage),
   ]);
 
   if (!child) notFound();
@@ -154,6 +163,7 @@ export default async function ChildDetailPage({
         id="upcoming-classes"
         items={upcomingReservations}
         now={now}
+        showPayment={isAdmin}
         title="예정된 클래스"
       />
       <ChildHistorySection
@@ -163,6 +173,7 @@ export default async function ChildDetailPage({
         items={pastHistory.items}
         moreHref={moreHistoryHref}
         now={now}
+        showPayment={isAdmin}
         title="지난 이력"
       />
 
@@ -266,44 +277,46 @@ export default async function ChildDetailPage({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>결제·환불 이력</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {paymentItems.length === 0 ? (
-            <p className="text-sm text-slate-500">결제 이력이 없습니다.</p>
-          ) : (
-            <ul className="space-y-3">
-              {paymentItems.map((item) => (
-                <li className="rounded-md border p-3 text-sm" key={item.id}>
-                  <div className="flex flex-col justify-between gap-2 sm:flex-row">
-                    <Link
-                      className="font-medium hover:underline"
-                      href={`/payments/${item.payment.id}`}
-                    >
-                      {item.reservation.classSchedule.program.name}
-                    </Link>
-                    <span>
-                      {formatKrw(item.paidAmount)} 결제 · {formatKrw(item.refundedAmount)} 환불
-                    </span>
-                  </div>
-                  {item.refunds.length > 0 ? (
-                    <ul className="mt-2 space-y-1 border-t pt-2 text-xs text-slate-600">
-                      {item.refunds.map((refund) => (
-                        <li key={refund.id}>
-                          {formatKstDateTime(refund.refundedAt)} · {formatKrw(refund.amount)} ·{" "}
-                          {refund.reasonDetail || "상세 사유 없음"}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      {isAdmin && paymentItems ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>결제·환불 이력</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {paymentItems.length === 0 ? (
+              <p className="text-sm text-slate-500">결제 이력이 없습니다.</p>
+            ) : (
+              <ul className="space-y-3">
+                {paymentItems.map((item) => (
+                  <li className="rounded-md border p-3 text-sm" key={item.id}>
+                    <div className="flex flex-col justify-between gap-2 sm:flex-row">
+                      <Link
+                        className="font-medium hover:underline"
+                        href={`/payments/${item.payment.id}`}
+                      >
+                        {item.reservation.classSchedule.program.name}
+                      </Link>
+                      <span>
+                        {formatKrw(item.paidAmount)} 결제 · {formatKrw(item.refundedAmount)} 환불
+                      </span>
+                    </div>
+                    {item.refunds.length > 0 ? (
+                      <ul className="mt-2 space-y-1 border-t pt-2 text-xs text-slate-600">
+                        {item.refunds.map((refund) => (
+                          <li key={refund.id}>
+                            {formatKstDateTime(refund.refundedAt)} · {formatKrw(refund.amount)} ·{" "}
+                            {refund.reasonDetail || "상세 사유 없음"}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <PlaceholderSection description="Phase 7에서 제공 예정" title="친구관계" />

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listPrograms } from "@/lib/programs/queries";
 import type { ProgramListStatus } from "@/lib/programs/query-builder";
 import { ProgramSearchForm } from "./_components/program-search-form";
@@ -24,6 +25,7 @@ function buildPageHref(params: { q?: string; status: ProgramListStatus; page: nu
 }
 
 export default async function ProgramsPage({ searchParams }: ProgramsPageProps) {
+  await requireOperationalPrincipal();
   const resolvedParams = await searchParams;
   const status = parseStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;

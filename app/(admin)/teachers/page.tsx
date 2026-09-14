@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listTeachers } from "@/lib/teachers/queries";
 import type { TeacherListStatus } from "@/lib/teachers/query-builder";
 import { TeacherSearchForm } from "./_components/teacher-search-form";
@@ -24,6 +25,7 @@ function buildPageHref(params: { q?: string; status: TeacherListStatus; page: nu
 }
 
 export default async function TeachersPage({ searchParams }: TeachersPageProps) {
+  await requireOperationalPrincipal();
   const resolvedParams = await searchParams;
   const status = parseStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;

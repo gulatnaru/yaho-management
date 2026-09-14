@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import {
   cancelReservationInputSchema,
@@ -60,7 +60,7 @@ export async function createReservation(
   _prevState: ReservationFormState,
   formData: FormData,
 ): Promise<ReservationFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const result = reservationSubmissionSchema.safeParse({
     classScheduleId: formData.get("classScheduleId"),
@@ -167,7 +167,7 @@ export async function cancelReservation(
   _prevState: ReservationCancelFormState,
   formData: FormData,
 ): Promise<ReservationCancelFormState> {
-  const session = await requireAdmin();
+  const principal = await requireOperationalPrincipal();
 
   const current = await prisma.reservation.findUnique({
     where: { id },
@@ -215,7 +215,7 @@ export async function cancelReservation(
         cancelledAt,
         cancelReason: result.data.cancelReason,
         cancelDetail: result.data.cancelDetail || null,
-        cancelledById: session.user.id,
+        cancelledById: principal.userId,
       },
     });
 

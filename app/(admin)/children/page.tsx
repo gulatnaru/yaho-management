@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listChildren } from "@/lib/children/queries";
 import type { ChildListStatus } from "@/lib/children/query-builder";
 import { ChildSearchForm } from "./_components/child-search-form";
@@ -24,6 +25,7 @@ function buildPageHref(params: { q?: string; status: ChildListStatus; page: numb
 }
 
 export default async function ChildrenPage({ searchParams }: ChildrenPageProps) {
+  await requireOperationalPrincipal();
   const resolvedParams = await searchParams;
   const status = parseStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;

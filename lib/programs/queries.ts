@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+import { requireAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { buildProgramListWhere, type ProgramListStatus } from "@/lib/programs/query-builder";
 
@@ -16,6 +18,30 @@ const PROGRAM_LIST_SELECT = {
   targetAgeMax: true,
   status: true,
 } as const;
+
+const PROGRAM_OPERATIONAL_DETAIL_SELECT = {
+  id: true,
+  name: true,
+  description: true,
+  targetAgeMin: true,
+  targetAgeMax: true,
+  defaultDuration: true,
+  status: true,
+  memo: true,
+} as const satisfies Prisma.ProgramSelect;
+
+const PROGRAM_ADMIN_DETAIL_SELECT = {
+  ...PROGRAM_OPERATIONAL_DETAIL_SELECT,
+  defaultPrice: true,
+} as const satisfies Prisma.ProgramSelect;
+
+export type ProgramOperationalDetail = Prisma.ProgramGetPayload<{
+  select: typeof PROGRAM_OPERATIONAL_DETAIL_SELECT;
+}>;
+
+export type ProgramAdminDetail = Prisma.ProgramGetPayload<{
+  select: typeof PROGRAM_ADMIN_DETAIL_SELECT;
+}>;
 
 export async function listPrograms(params: ListProgramsParams) {
   const where = buildProgramListWhere({ q: params.q, status: params.status });
@@ -41,8 +67,18 @@ export async function listPrograms(params: ListProgramsParams) {
   };
 }
 
-export async function getProgramDetail(id: string) {
+export async function getProgramOperationalDetail(id: string) {
+  await requireOperationalPrincipal();
   return prisma.program.findUnique({
     where: { id },
+    select: PROGRAM_OPERATIONAL_DETAIL_SELECT,
+  });
+}
+
+export async function getProgramAdminDetail(id: string) {
+  await requireAdminPrincipal();
+  return prisma.program.findUnique({
+    where: { id },
+    select: PROGRAM_ADMIN_DETAIL_SELECT,
   });
 }

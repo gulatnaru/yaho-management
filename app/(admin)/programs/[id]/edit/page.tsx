@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getProgramDetail } from "@/lib/programs/queries";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { getProgramAdminDetail, getProgramOperationalDetail } from "@/lib/programs/queries";
 import { ProgramForm } from "../../_components/program-form";
 
 interface EditProgramPageProps {
@@ -9,7 +10,11 @@ interface EditProgramPageProps {
 
 export default async function EditProgramPage({ params }: EditProgramPageProps) {
   const { id } = await params;
-  const program = await getProgramDetail(id);
+  const principal = await requireOperationalPrincipal();
+  const isAdmin = principal.role === "ADMIN";
+  const program = isAdmin
+    ? await getProgramAdminDetail(id)
+    : await getProgramOperationalDetail(id);
 
   if (!program) {
     notFound();
@@ -29,11 +34,14 @@ export default async function EditProgramPage({ params }: EditProgramPageProps) 
           targetAgeMin: program.targetAgeMin === null ? "" : String(program.targetAgeMin),
           targetAgeMax: program.targetAgeMax === null ? "" : String(program.targetAgeMax),
           defaultDuration: program.defaultDuration === null ? "" : String(program.defaultDuration),
-          defaultPrice: String(program.defaultPrice),
+          ...(isAdmin && "defaultPrice" in program
+            ? { defaultPrice: String(program.defaultPrice) }
+            : {}),
           memo: program.memo ?? "",
         }}
         mode="edit"
         programId={program.id}
+        showDefaultPrice={isAdmin}
       />
     </section>
   );

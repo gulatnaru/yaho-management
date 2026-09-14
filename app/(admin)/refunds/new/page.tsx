@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { formatKrw } from "@/lib/payments/format";
 import { getRefundRegistrationContext } from "@/lib/payments/queries";
 import { RefundForm } from "../_components/refund-form";
 
 export default async function NewRefundPage({ searchParams }: { searchParams: Promise<{ paymentItemId?: string }> }) {
+  await requireAdminPrincipal();
   const { paymentItemId } = await searchParams;
   if (!paymentItemId) notFound();
   const item = await getRefundRegistrationContext(paymentItemId);

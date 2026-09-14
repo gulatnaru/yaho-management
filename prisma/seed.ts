@@ -1,6 +1,6 @@
-import { hash } from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { ensureBootstrapAdmin } from "../server/accounts/bootstrap";
 
 const environmentSchema = z.object({
   ADMIN_EMAIL: z.string().trim().email(),
@@ -11,24 +11,15 @@ const prisma = new PrismaClient();
 
 async function main() {
   const environment = environmentSchema.parse(process.env);
-  const password = await hash(environment.ADMIN_PASSWORD, 12);
-
-  await prisma.user.upsert({
-    where: { email: environment.ADMIN_EMAIL },
-    create: {
-      email: environment.ADMIN_EMAIL,
-      name: "운영자",
-      password,
-      role: "ADMIN",
-      isActive: true,
-    },
-    update: { password, role: "ADMIN", isActive: true },
+  await ensureBootstrapAdmin(prisma, {
+    email: environment.ADMIN_EMAIL,
+    password: environment.ADMIN_PASSWORD,
   });
 }
 
 main()
-  .catch((error) => {
-    console.error(error);
+  .catch(() => {
+    console.error("Seed failed.");
     process.exitCode = 1;
   })
   .finally(async () => {

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listReservations } from "@/lib/reservations/queries";
 import { parseReservationListStatus, type ReservationListStatus } from "@/lib/reservations/query-builder";
 import { ReservationSearchForm } from "./_components/reservation-search-form";
@@ -37,6 +38,7 @@ function buildPageHref(params: {
 }
 
 export default async function ReservationsPage({ searchParams }: ReservationsPageProps) {
+  await requireOperationalPrincipal();
   const resolvedParams = await searchParams;
   const status = parseReservationListStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;

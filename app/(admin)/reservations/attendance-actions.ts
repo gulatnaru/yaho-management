@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import {
   AttendanceNotRecordableError,
@@ -22,21 +22,30 @@ export async function recordAttendanceAction(
   _previousState: AttendanceFormState,
   formData: FormData,
 ): Promise<AttendanceFormState> {
-  const session = await requireAdmin();
+  const principal = await requireCurrentPrincipal();
   const parsed = attendanceInputSchema.safeParse({
     reservationId: formData.get("reservationId"),
     attendance: formData.get("attendance"),
   });
   if (!parsed.success) return { error: "출결 값을 확인해 주세요." };
 
-  const reservation = await prisma.reservation.findUnique({
-    where: { id: parsed.data.reservationId },
+  const reservation = await prisma.reservation.findFirst({
+    where: {
+      id: parsed.data.reservationId,
+      ...(principal.role === "TEACHER"
+        ? { classSchedule: { teachers: { some: { teacherId: principal.teacherId } } } }
+        : {}),
+    },
     select: { classScheduleId: true, status: true, classSchedule: { select: { endsAt: true } } },
   });
   if (!reservation) return { error: "예약을 찾을 수 없습니다." };
 
   try {
-    const input = { ...parsed.data, recordedById: session.user.id, classEndsAt: reservation.classSchedule.endsAt };
+    const input = {
+      ...parsed.data,
+      recordedById: principal.userId,
+      classEndsAt: reservation.classSchedule.endsAt,
+    };
     if (reservation.status === "RESERVED") {
       await recordAttendanceCore(prisma, input);
     } else if (reservation.status === "COMPLETED" || reservation.status === "NO_SHOW") {

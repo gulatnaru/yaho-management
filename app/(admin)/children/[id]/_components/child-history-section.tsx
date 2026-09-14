@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ChildHistoryItem } from "@/server/children/history";
+import type { ChildHistoryDisplayItem } from "@/server/children/history";
 import { ChildHistoryCard } from "./child-history-card";
 
 type ChildHistorySectionProps = {
@@ -9,9 +9,10 @@ type ChildHistorySectionProps = {
   title: string;
   description: string;
   emptyMessage: string;
-  items: ChildHistoryItem[];
+  items: ChildHistoryDisplayItem[];
   now: Date;
   moreHref?: string;
+  showPayment: boolean;
 };
 
 export function ChildHistorySection({
@@ -22,6 +23,7 @@ export function ChildHistorySection({
   items,
   now,
   moreHref,
+  showPayment,
 }: ChildHistorySectionProps) {
   const headingId = `${id}-heading`;
 
@@ -41,7 +43,7 @@ export function ChildHistorySection({
         <ul className="min-w-0 space-y-3">
           {items.map((item) => (
             <li className="min-w-0" key={item.id}>
-              <ChildHistoryCard item={item} now={now} />
+              <ChildHistoryCard item={item} now={now} showPayment={showPayment} />
             </li>
           ))}
         </ul>

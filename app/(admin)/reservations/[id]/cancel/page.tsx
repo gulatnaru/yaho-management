@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
-import { getReservationDetail } from "@/lib/reservations/queries";
+import { getReservationOperationalDetail } from "@/lib/reservations/queries";
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import { ReservationCancelForm } from "../../_components/reservation-cancel-form";
 
@@ -11,7 +11,7 @@ interface CancelReservationPageProps {
 
 export default async function CancelReservationPage({ params }: CancelReservationPageProps) {
   const { id } = await params;
-  const reservation = await getReservationDetail(id);
+  const reservation = await getReservationOperationalDetail(id);
 
   if (!reservation) {
     notFound();

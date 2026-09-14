@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { TeacherForm } from "../_components/teacher-form";
 
-export default function NewTeacherPage() {
+export default async function NewTeacherPage() {
+  await requireOperationalPrincipal();
   return (
     <section className="space-y-6">
       <Link className="text-sm text-slate-500 hover:underline" href="/teachers">

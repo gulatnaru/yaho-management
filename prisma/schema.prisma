@@ -23,7 +23,16 @@ datasource db {
 
 enum Role {
   ADMIN
-  TEACHER // 요구사항 17장: 구조만 열어두고 초기에는 ADMIN 중심으로 운영
+  MANAGER
+  TEACHER
+}
+
+enum UserAccountChangeType {
+  CREATED
+  EMAIL_CHANGED
+  ROLE_CHANGED
+  ACTIVE_CHANGED
+  PASSWORD_RESET
 }
 
 enum Gender {
@@ -132,21 +141,47 @@ enum RefundStatus {
 // ─────────────────────────────────────────────
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  password  String? // Auth.js Credentials 사용 시. OAuth 도입 시 Account/Session 모델 추가 필요
-  role      Role     @default(ADMIN)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  name               String
+  password           String? // Auth.js Credentials 사용 시. OAuth 도입 시 Account/Session 모델 추가 필요
+  role               Role     @default(ADMIN)
+  isActive           Boolean  @default(true)
+  teacherId          String?  @unique
+  mustChangePassword Boolean  @default(false)
+  authVersion        Int      @default(1)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  cancelledClasses      ClassSchedule[]   @relation("ClassCancelledBy")
-  cancelledReservations Reservation[]     @relation("ReservationCancelledBy")
-  processedRefunds      Refund[]          @relation("RefundProcessedBy")
-  safetyInfoUpdates     ChildSafetyInfo[] @relation("SafetyInfoUpdatedBy")
-  consentRecords        ChildConsent[]    @relation("ConsentRecordedBy")
-  attendanceRecords     Reservation[]     @relation("AttendanceRecordedBy")
+  cancelledClasses        ClassSchedule[]     @relation("ClassCancelledBy")
+  cancelledReservations   Reservation[]       @relation("ReservationCancelledBy")
+  processedRefunds        Refund[]            @relation("RefundProcessedBy")
+  safetyInfoUpdates       ChildSafetyInfo[]   @relation("SafetyInfoUpdatedBy")
+  consentRecords          ChildConsent[]      @relation("ConsentRecordedBy")
+  attendanceRecords       Reservation[]       @relation("AttendanceRecordedBy")
+  teacher                 Teacher?            @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  accountChanges          UserAccountChange[] @relation("AccountChangeTarget")
+  performedAccountChanges UserAccountChange[] @relation("AccountChangeActor")
+}
+
+model UserAccountChange {
+  id               String                @id @default(cuid())
+  targetUserId     String
+  actorAdminId     String
+  type             UserAccountChangeType
+  previousEmail    String?
+  nextEmail        String?
+  previousRole     Role?
+  nextRole         Role?
+  previousIsActive Boolean?
+  nextIsActive     Boolean?
+  createdAt        DateTime              @default(now())
+
+  targetUser User @relation("AccountChangeTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
+  actorAdmin User @relation("AccountChangeActor", fields: [actorAdminId], references: [id], onDelete: Restrict)
+
+  @@index([targetUserId, createdAt])
+  @@index([actorAdminId, createdAt])
 }
 
 // ─────────────────────────────────────────────
@@ -242,6 +277,7 @@ model Teacher {
   updatedAt DateTime @updatedAt
 
   classes ClassTeacher[]
+  user    User?
 }
 
 model Program {
@@ -440,6 +476,10 @@ model Refund {
 //   ),
 //   ADD CONSTRAINT "program_default_duration_positive" CHECK ("defaultDuration" IS NULL OR "defaultDuration" > 0),
 //   ADD CONSTRAINT "program_default_price_nonneg" CHECK ("defaultPrice" >= 0);
+//
+// ALTER TABLE "User"
+//   ADD CONSTRAINT "user_teacher_role_consistency" CHECK (("role" = 'TEACHER') = ("teacherId" IS NOT NULL)),
+//   ADD CONSTRAINT "user_auth_version_positive" CHECK ("authVersion" >= 1);
 //
 // 서버에서만 검증하는 규칙 (QA 필수 항목)
 // - capacity 는 1~99 정수

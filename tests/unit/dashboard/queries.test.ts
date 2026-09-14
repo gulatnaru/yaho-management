@@ -5,6 +5,11 @@ const { queryRawMock, classFindManyMock, reservationCountMock } = vi.hoisted(() 
   classFindManyMock: vi.fn(),
   reservationCountMock: vi.fn(),
 }));
+const requireAdminPrincipalMock = vi.fn();
+
+vi.mock("@/lib/auth/authorization", () => ({
+  requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+}));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
@@ -48,6 +53,8 @@ describe("dashboard queries", () => {
     queryRawMock.mockReset();
     classFindManyMock.mockReset();
     reservationCountMock.mockReset();
+    requireAdminPrincipalMock.mockReset();
+    requireAdminPrincipalMock.mockResolvedValue({ role: "ADMIN" });
   });
 
   it("aggregates KST dates, excludes cancelled classes, and avoids class duplication", async () => {
@@ -91,6 +98,28 @@ describe("dashboard queries", () => {
     ]) {
       expect(keys.has(forbidden)).toBe(false);
     }
+  });
+
+  it("scopes every TEACHER dashboard query to the linked Teacher assignment", async () => {
+    const teacherId = "teacher-1";
+    const sql = sqlText(buildMonthlyCalendarQuery(range, teacherId));
+    expect(sql).toContain('FROM "ClassTeacher" ct');
+    expect(sql).toContain('ct."teacherId" =');
+
+    classFindManyMock.mockResolvedValueOnce([]);
+    await getDashboardClasses(range, teacherId);
+    expect(classFindManyMock.mock.calls[0][0].where).toEqual({
+      startsAt: { gte: range.startUtc, lt: range.endExclusiveUtc },
+      status: { not: "CANCELLED" },
+      teachers: { some: { teacherId } },
+    });
+
+    reservationCountMock.mockResolvedValueOnce(0);
+    await getTodayCancellationCount(range, teacherId);
+    expect(reservationCountMock.mock.calls[0][0].where).toEqual({
+      cancelledAt: { gte: range.startUtc, lt: range.endExclusiveUtc },
+      classSchedule: { teachers: { some: { teacherId } } },
+    });
   });
 
   it("keeps operation and current reserved counts separate", async () => {
@@ -139,5 +168,12 @@ describe("dashboard queries", () => {
       refundedAmount: 30_000,
       netRevenue: -20_000,
     });
+  });
+
+  it("does not issue financial SQL when the ADMIN guard rejects access", async () => {
+    requireAdminPrincipalMock.mockRejectedValueOnce(new Error("FORBIDDEN"));
+
+    await expect(getTodayFinancialMetrics(range)).rejects.toThrow("FORBIDDEN");
+    expect(queryRawMock).not.toHaveBeenCalled();
   });
 });
