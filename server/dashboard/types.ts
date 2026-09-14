@@ -58,8 +58,10 @@ export interface DashboardFinancialMetrics {
   netRevenue: number;
 }
 
-export interface DashboardTodayMetrics extends DashboardFinancialMetrics {
+export interface DashboardOperationalMetrics {
   classCount: number;
   operationReservationCount: number;
   cancellationCount: number;
 }
+
+export interface DashboardTodayMetrics extends DashboardOperationalMetrics, DashboardFinancialMetrics {}

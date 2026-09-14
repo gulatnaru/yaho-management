@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { getPaymentRegistrationContext } from "@/lib/payments/queries";
 import { PaymentForm } from "../_components/payment-form";
 
 export default async function NewPaymentPage({ searchParams }: { searchParams: Promise<{ reservationId?: string }> }) {
+  await requireAdminPrincipal();
   const { reservationId } = await searchParams;
   if (!reservationId) notFound();
   const reservation = await getPaymentRegistrationContext(reservationId);

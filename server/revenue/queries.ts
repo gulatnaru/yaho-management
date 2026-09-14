@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { mergeRevenueFacts } from "@/server/revenue/aggregate";
 import type {
@@ -104,6 +105,7 @@ export function buildRefundFactsQuery(filters: FinancialFilters) {
 }
 
 export async function getRevenueReport(filters: RevenueQueryFilters) {
+  await requireAdminPrincipal();
   // ADR-040: 각 fact를 독립 집계한 뒤 애플리케이션에서 병합한다.
   // PaymentItem과 Refund를 한 JOIN으로 합치면 Refund 행 수만큼 결제금액이 중복 합산된다.
   const [operations, payments, refunds] = await Promise.all([
@@ -116,6 +118,7 @@ export async function getRevenueReport(filters: RevenueQueryFilters) {
 }
 
 export async function listRevenueProgramOptions() {
+  await requireAdminPrincipal();
   return prisma.program.findMany({
     select: { id: true, name: true },
     orderBy: [{ name: "asc" }, { id: "asc" }],

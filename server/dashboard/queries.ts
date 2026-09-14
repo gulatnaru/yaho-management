@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import type {
   DashboardCalendarDayMetric,
@@ -24,7 +25,7 @@ interface DateRange {
   endExclusiveUtc: Date;
 }
 
-export function buildMonthlyCalendarQuery(range: DateRange) {
+export function buildMonthlyCalendarQuery(range: DateRange, teacherId?: string) {
   return Prisma.sql`
     SELECT
       TO_CHAR(cs."startsAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS "date",
@@ -38,13 +39,24 @@ export function buildMonthlyCalendarQuery(range: DateRange) {
     WHERE cs."startsAt" >= ${range.startUtc}
       AND cs."startsAt" < ${range.endExclusiveUtc}
       AND cs."status" <> 'CANCELLED'
+      ${teacherId
+        ? Prisma.sql`AND EXISTS (
+            SELECT 1
+            FROM "ClassTeacher" ct
+            WHERE ct."classScheduleId" = cs."id"
+              AND ct."teacherId" = ${teacherId}
+          )`
+        : Prisma.empty}
     GROUP BY TO_CHAR(cs."startsAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')
     ORDER BY "date" ASC
   `;
 }
 
-export async function getMonthlyCalendarMetrics(range: DateRange): Promise<DashboardCalendarDayMetric[]> {
-  const facts = await prisma.$queryRaw<MonthlyCalendarFact[]>(buildMonthlyCalendarQuery(range));
+export async function getMonthlyCalendarMetrics(
+  range: DateRange,
+  teacherId?: string,
+): Promise<DashboardCalendarDayMetric[]> {
+  const facts = await prisma.$queryRaw<MonthlyCalendarFact[]>(buildMonthlyCalendarQuery(range, teacherId));
   return facts.map((fact) => ({
     date: fact.date,
     classCount: toSafeInteger(fact.classCount),
@@ -52,11 +64,15 @@ export async function getMonthlyCalendarMetrics(range: DateRange): Promise<Dashb
   }));
 }
 
-export async function getDashboardClasses(range: DateRange): Promise<DashboardClassDetail[]> {
+export async function getDashboardClasses(
+  range: DateRange,
+  teacherId?: string,
+): Promise<DashboardClassDetail[]> {
   const classes = await prisma.classSchedule.findMany({
     where: {
       startsAt: { gte: range.startUtc, lt: range.endExclusiveUtc },
       status: { not: "CANCELLED" },
+      ...(teacherId ? { teachers: { some: { teacherId } } } : {}),
     },
     select: {
       id: true,
@@ -106,9 +122,14 @@ export async function getDashboardClasses(range: DateRange): Promise<DashboardCl
   });
 }
 
-export async function getTodayCancellationCount(range: DateRange): Promise<number> {
+export async function getTodayCancellationCount(range: DateRange, teacherId?: string): Promise<number> {
   return prisma.reservation.count({
-    where: { cancelledAt: { gte: range.startUtc, lt: range.endExclusiveUtc } },
+    where: {
+      cancelledAt: { gte: range.startUtc, lt: range.endExclusiveUtc },
+      ...(teacherId
+        ? { classSchedule: { teachers: { some: { teacherId } } } }
+        : {}),
+    },
   });
 }
 
@@ -134,6 +155,7 @@ export function buildTodayRefundsQuery(range: DateRange) {
 }
 
 export async function getTodayFinancialMetrics(range: DateRange): Promise<DashboardFinancialMetrics> {
+  await requireAdminPrincipal();
   const [paymentFacts, refundFacts] = await Promise.all([
     prisma.$queryRaw<AmountFact[]>(buildTodayPaymentsQuery(range)),
     prisma.$queryRaw<AmountFact[]>(buildTodayRefundsQuery(range)),

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDate, formatKstDateTimeRange, formatKstTime } from "@/lib/classes/datetime";
 import { formatKrw } from "@/lib/payments/format";
 import { getPaymentDetail } from "@/lib/payments/queries";
@@ -14,6 +15,7 @@ const REASON_LABEL: Record<string, string> = { PERSONAL: "개인 사정", ILLNES
 const REFUND_STATUS_LABEL = { REQUESTED: "요청", COMPLETED: "완료", CANCELLED: "취소" } as const;
 
 export default async function PaymentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireAdminPrincipal();
   const { id } = await params;
   const payment = await getPaymentDetail(id);
   if (!payment) notFound();

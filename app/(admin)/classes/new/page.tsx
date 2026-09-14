@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listProgramCandidates, listTeacherCandidates } from "@/lib/classes/candidates";
 import { ClassForm } from "../_components/class-form";
 
 export default async function NewClassPage() {
+  await requireOperationalPrincipal();
   const [programCandidates, teacherCandidates] = await Promise.all([
     listProgramCandidates(),
     listTeacherCandidates(),

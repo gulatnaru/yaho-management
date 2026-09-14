@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningBanner } from "@/components/ui/warning-banner";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { countFutureScheduledClasses } from "@/lib/programs/deactivation-warning";
 import { formatDuration, formatPrice, formatTargetAgeRange } from "@/lib/programs/format";
-import { getProgramDetail } from "@/lib/programs/queries";
+import { getProgramAdminDetail, getProgramOperationalDetail } from "@/lib/programs/queries";
 import { ProgramStatusToggle } from "../_components/program-status-toggle";
 
 interface ProgramDetailPageProps {
@@ -14,8 +15,13 @@ interface ProgramDetailPageProps {
 
 export default async function ProgramDetailPage({ params }: ProgramDetailPageProps) {
   const { id } = await params;
+  const principal = await requireOperationalPrincipal();
+  const isAdmin = principal.role === "ADMIN";
 
-  const [program, futureClassCount] = await Promise.all([getProgramDetail(id), countFutureScheduledClasses(id)]);
+  const [program, futureClassCount] = await Promise.all([
+    isAdmin ? getProgramAdminDetail(id) : getProgramOperationalDetail(id),
+    countFutureScheduledClasses(id),
+  ]);
 
   if (!program) {
     notFound();
@@ -55,10 +61,12 @@ export default async function ProgramDetailPage({ params }: ProgramDetailPagePro
             <p className="text-sm text-slate-500">기본 소요시간</p>
             <p>{formatDuration(program.defaultDuration)}</p>
           </div>
-          <div>
-            <p className="text-sm text-slate-500">기본가격</p>
-            <p>{formatPrice(program.defaultPrice)}</p>
-          </div>
+          {isAdmin && "defaultPrice" in program && typeof program.defaultPrice === "number" ? (
+            <div>
+              <p className="text-sm text-slate-500">기본가격</p>
+              <p>{formatPrice(program.defaultPrice)}</p>
+            </div>
+          ) : null}
           <div>
             <p className="text-sm text-slate-500">운영상태</p>
             <p>{program.status === "ACTIVE" ? "활성" : "비활성"}</p>

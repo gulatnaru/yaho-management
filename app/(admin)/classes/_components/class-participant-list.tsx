@@ -5,7 +5,7 @@ import { formatKstDateTime } from "@/lib/classes/datetime";
 import { getParticipantPaymentLabel } from "@/lib/payments/participant-summary";
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import { getAttendanceLabel, groupClassParticipants } from "@/lib/reservations/participants";
-import type { ClassReservationParticipant } from "@/lib/reservations/queries";
+import type { ClassReservationDisplayParticipant } from "@/lib/reservations/queries";
 import {
   getReservationDisplayStatus,
   type ReservationDisplayStatus,
@@ -39,29 +39,42 @@ type ParticipantClassSchedule = {
 function ParticipantCard({
   reservation,
   classSchedule,
+  showPayment,
+  canManageReservations,
+  linkChildDetails,
 }: {
-  reservation: ClassReservationParticipant;
+  reservation: ClassReservationDisplayParticipant;
   classSchedule: ParticipantClassSchedule;
+  showPayment: boolean;
+  canManageReservations: boolean;
+  linkChildDetails: boolean;
 }) {
   const reservationStatus = getReservationDisplayStatus(reservation, classSchedule);
   const attendanceLabel = getAttendanceLabel(reservation.attendance);
-  const paymentLabel = getParticipantPaymentLabel(reservation.paymentItem?.payment.status);
+  const paymentLabel =
+    showPayment && "paymentItem" in reservation
+      ? getParticipantPaymentLabel(reservation.paymentItem?.payment.status)
+      : undefined;
   const safety = reservation.child.safetyInfo;
 
   return (
     <li className="min-w-0 space-y-4 rounded-md border border-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link className="min-w-0 break-all font-medium hover:underline" href={`/children/${reservation.child.id}`}>
-          {reservation.child.name}
-        </Link>
-        {canCancelReservation(reservation, classSchedule) ? (
+        {linkChildDetails ? (
+          <Link className="min-w-0 break-all font-medium hover:underline" href={`/children/${reservation.child.id}`}>
+            {reservation.child.name}
+          </Link>
+        ) : (
+          <span className="min-w-0 break-all font-medium">{reservation.child.name}</span>
+        )}
+        {canManageReservations && canCancelReservation(reservation, classSchedule) ? (
           <Link className="text-sm text-red-600 hover:underline" href={`/reservations/${reservation.id}/cancel`}>
             예약 취소
           </Link>
         ) : null}
       </div>
 
-      <dl className="grid grid-cols-3 gap-2 text-xs">
+      <dl className={`grid gap-2 text-xs ${showPayment ? "grid-cols-3" : "grid-cols-2"}`}>
         <div className="min-w-0 space-y-1">
           <dt className="text-slate-500">예약</dt>
           <dd>
@@ -84,15 +97,21 @@ function ParticipantCard({
             </Badge>
           </dd>
         </div>
-        <div className="min-w-0 space-y-1">
-          <dt className="text-slate-500">결제</dt>
-          <dd>
-            <Badge variant={paymentLabel === "결제완료" ? "success" : "secondary"}>{paymentLabel}</Badge>
-          </dd>
-        </div>
+        {paymentLabel ? (
+          <div className="min-w-0 space-y-1">
+            <dt className="text-slate-500">결제</dt>
+            <dd>
+              <Badge variant={paymentLabel === "결제완료" ? "success" : "secondary"}>{paymentLabel}</Badge>
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+        <span className="break-words">
+          보호자 연락처: {reservation.child.guardianName || "미입력"}{" "}
+          {reservation.child.guardianPhone || ""}
+        </span>
         <span>알레르기: {safety?.allergies || "없음"}</span>
         <span>응급 유의사항: {safety?.emergencyNotes || "없음"}</span>
         <span className="break-words">
@@ -119,11 +138,17 @@ function ParticipantGroup({
   items,
   classSchedule,
   emptyText,
+  showPayment,
+  canManageReservations,
+  linkChildDetails,
 }: {
   title: string;
-  items: ClassReservationParticipant[];
+  items: ClassReservationDisplayParticipant[];
   classSchedule: ParticipantClassSchedule;
   emptyText: string;
+  showPayment: boolean;
+  canManageReservations: boolean;
+  linkChildDetails: boolean;
 }) {
   return (
     <section className="space-y-3">
@@ -139,6 +164,9 @@ function ParticipantGroup({
               classSchedule={classSchedule}
               key={reservation.id}
               reservation={reservation}
+              canManageReservations={canManageReservations}
+              linkChildDetails={linkChildDetails}
+              showPayment={showPayment}
             />
           ))}
         </ul>
@@ -150,28 +178,40 @@ function ParticipantGroup({
 export function ClassParticipantList({
   reservations,
   classSchedule,
+  showPayment,
+  canManageReservations,
+  linkChildDetails,
 }: {
-  reservations: ClassReservationParticipant[];
+  reservations: ClassReservationDisplayParticipant[];
   classSchedule: ParticipantClassSchedule;
+  showPayment: boolean;
+  canManageReservations: boolean;
+  linkChildDetails: boolean;
 }) {
   const groups = groupClassParticipants(reservations);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>참가자 · 출결 · 결제</CardTitle>
+        <CardTitle>{showPayment ? "참가자 · 출결 · 결제" : "참가자 · 출결"}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         <ParticipantGroup
           classSchedule={classSchedule}
           emptyText="예약된 아이가 없습니다."
           items={groups.participants}
+          canManageReservations={canManageReservations}
+          linkChildDetails={linkChildDetails}
+          showPayment={showPayment}
           title="일반 참가자"
         />
         <ParticipantGroup
           classSchedule={classSchedule}
           emptyText="취소된 예약이 없습니다."
           items={groups.cancelled}
+          canManageReservations={canManageReservations}
+          linkChildDetails={linkChildDetails}
+          showPayment={showPayment}
           title="취소 예약"
         />
       </CardContent>

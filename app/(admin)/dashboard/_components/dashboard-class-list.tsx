@@ -12,7 +12,15 @@ function reservationVariant(status: string): NonNullable<BadgeProps["variant"]> 
   return "default";
 }
 
-function ClassCard({ classItem, showReservations }: { classItem: DashboardClassDetail; showReservations: boolean }) {
+function ClassCard({
+  classItem,
+  showReservations,
+  linkChildren,
+}: {
+  classItem: DashboardClassDetail;
+  showReservations: boolean;
+  linkChildren: boolean;
+}) {
   return (
     <Card data-testid={`dashboard-class-${classItem.id}`}>
       <CardHeader>
@@ -40,9 +48,13 @@ function ClassCard({ classItem, showReservations }: { classItem: DashboardClassD
             <ul className="divide-y rounded-md border" aria-label={`${classItem.program.name} 예약 현황`}>
               {classItem.reservations.map((reservation) => (
                 <li className="flex items-center justify-between gap-3 p-3 text-sm" key={reservation.id}>
-                  <Link className="font-medium hover:underline" href={`/children/${reservation.child.id}`}>
-                    {reservation.child.name}
-                  </Link>
+                  {linkChildren ? (
+                    <Link className="font-medium hover:underline" href={`/children/${reservation.child.id}`}>
+                      {reservation.child.name}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{reservation.child.name}</span>
+                  )}
                   <Badge variant={reservationVariant(reservation.status)}>
                     {getDashboardReservationLabel(reservation.status, reservation.attendance)}
                   </Badge>
@@ -62,12 +74,14 @@ export function DashboardClassList({
   classes,
   showReservations,
   emptyMessage,
+  linkChildren,
 }: {
   title: string;
   description: string;
   classes: DashboardClassDetail[];
   showReservations: boolean;
   emptyMessage: string;
+  linkChildren: boolean;
 }) {
   return (
     <section className="space-y-3">
@@ -79,7 +93,14 @@ export function DashboardClassList({
         <div className="rounded-lg border border-dashed bg-white p-8 text-center text-sm text-slate-500">{emptyMessage}</div>
       ) : (
         <div className="space-y-3">
-          {classes.map((classItem) => <ClassCard classItem={classItem} key={classItem.id} showReservations={showReservations} />)}
+          {classes.map((classItem) => (
+            <ClassCard
+              classItem={classItem}
+              key={classItem.id}
+              linkChildren={linkChildren}
+              showReservations={showReservations}
+            />
+          ))}
         </div>
       )}
     </section>

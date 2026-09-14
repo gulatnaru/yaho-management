@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
 import {
@@ -242,7 +242,7 @@ async function createRecurringClass(formData: FormData): Promise<ClassFormState>
 }
 
 export async function createClass(_prevState: ClassFormState, formData: FormData): Promise<ClassFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const registrationMode = classRegistrationModeSchema.safeParse(formData.get("registrationMode") ?? "single");
   if (!registrationMode.success) {
@@ -332,7 +332,7 @@ export async function updateClass(
   _prevState: ClassFormState,
   formData: FormData,
 ): Promise<ClassFormState> {
-  await requireAdmin();
+  await requireOperationalPrincipal();
 
   const current = await prisma.classSchedule.findUnique({
     where: { id },
@@ -489,7 +489,7 @@ export async function cancelClass(
   _prevState: ClassCancelFormState,
   formData: FormData,
 ): Promise<ClassCancelFormState> {
-  const session = await requireAdmin();
+  const principal = await requireOperationalPrincipal();
 
   const current = await prisma.classSchedule.findUnique({
     where: { id },
@@ -533,7 +533,7 @@ export async function cancelClass(
         cancelledAt: new Date(),
         cancelReason: result.data.cancelReason,
         cancelDetail: result.data.cancelDetail || null,
-        cancelledById: session.user.id,
+        cancelledById: principal.userId,
       },
     });
 

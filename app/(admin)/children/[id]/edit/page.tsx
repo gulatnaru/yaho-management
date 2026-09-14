@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { getChildDetail } from "@/lib/children/queries";
 import { ChildForm } from "../../_components/child-form";
 
@@ -8,6 +9,7 @@ interface EditChildPageProps {
 }
 
 export default async function EditChildPage({ params }: EditChildPageProps) {
+  await requireOperationalPrincipal();
   const { id } = await params;
   const child = await getChildDetail(id);
 

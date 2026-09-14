@@ -1,11 +1,12 @@
 import { Prisma } from "@prisma/client";
+import { requireAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
 import {
   CHILD_HISTORY_PAGE_SIZE,
   MAX_CHILD_HISTORY_PAGE,
 } from "@/lib/children/history";
 import { prisma } from "@/lib/db/prisma";
 
-const CHILD_HISTORY_ITEM_SELECT = {
+const CHILD_HISTORY_OPERATIONAL_ITEM_SELECT = {
   id: true,
   status: true,
   attendance: true,
@@ -19,6 +20,10 @@ const CHILD_HISTORY_ITEM_SELECT = {
       program: { select: { id: true, name: true } },
     },
   },
+} as const satisfies Prisma.ReservationSelect;
+
+const CHILD_HISTORY_ITEM_SELECT = {
+  ...CHILD_HISTORY_OPERATIONAL_ITEM_SELECT,
   paymentItem: {
     select: { payment: { select: { status: true } } },
   },
@@ -27,6 +32,12 @@ const CHILD_HISTORY_ITEM_SELECT = {
 export type ChildHistoryItem = Prisma.ReservationGetPayload<{
   select: typeof CHILD_HISTORY_ITEM_SELECT;
 }>;
+
+export type ChildHistoryOperationalItem = Prisma.ReservationGetPayload<{
+  select: typeof CHILD_HISTORY_OPERATIONAL_ITEM_SELECT;
+}>;
+
+export type ChildHistoryDisplayItem = ChildHistoryItem | ChildHistoryOperationalItem;
 
 export type ChildHistorySummary = {
   totalReservations: number;
@@ -71,6 +82,7 @@ export async function getChildHistorySummary(
   childId: string,
   now: Date,
 ): Promise<ChildHistorySummary> {
+  await requireOperationalPrincipal();
   const [groups, upcomingCount] = await Promise.all([
     prisma.reservation.groupBy({
       by: ["status", "attendance"],
@@ -103,9 +115,25 @@ export async function listChildUpcomingReservations(
   childId: string,
   now: Date,
 ): Promise<ChildHistoryItem[]> {
+  await requireAdminPrincipal();
   return prisma.reservation.findMany({
     where: buildChildUpcomingWhere(childId, now),
     select: CHILD_HISTORY_ITEM_SELECT,
+    orderBy: [
+      { classSchedule: { startsAt: "asc" } },
+      { id: "asc" },
+    ],
+  });
+}
+
+export async function listChildUpcomingReservationsOperational(
+  childId: string,
+  now: Date,
+): Promise<ChildHistoryOperationalItem[]> {
+  await requireOperationalPrincipal();
+  return prisma.reservation.findMany({
+    where: buildChildUpcomingWhere(childId, now),
+    select: CHILD_HISTORY_OPERATIONAL_ITEM_SELECT,
     orderBy: [
       { classSchedule: { startsAt: "asc" } },
       { id: "asc" },
@@ -118,6 +146,7 @@ export async function listChildPastHistory(
   now: Date,
   page: number,
 ) {
+  await requireAdminPrincipal();
   const safePage =
     Number.isInteger(page) && page > 0 ? Math.min(page, MAX_CHILD_HISTORY_PAGE) : 1;
   const where = buildChildPastHistoryWhere(childId, now);
@@ -126,6 +155,38 @@ export async function listChildPastHistory(
     prisma.reservation.findMany({
       where,
       select: CHILD_HISTORY_ITEM_SELECT,
+      orderBy: [
+        { classSchedule: { startsAt: "desc" } },
+        { id: "desc" },
+      ],
+      take,
+    }),
+    prisma.reservation.count({ where }),
+  ]);
+
+  return {
+    items,
+    total,
+    page: safePage,
+    pageSize: CHILD_HISTORY_PAGE_SIZE,
+    hasMore: safePage < MAX_CHILD_HISTORY_PAGE && items.length < total,
+  };
+}
+
+export async function listChildPastHistoryOperational(
+  childId: string,
+  now: Date,
+  page: number,
+) {
+  await requireOperationalPrincipal();
+  const safePage =
+    Number.isInteger(page) && page > 0 ? Math.min(page, MAX_CHILD_HISTORY_PAGE) : 1;
+  const where = buildChildPastHistoryWhere(childId, now);
+  const take = safePage * CHILD_HISTORY_PAGE_SIZE;
+  const [items, total] = await Promise.all([
+    prisma.reservation.findMany({
+      where,
+      select: CHILD_HISTORY_OPERATIONAL_ITEM_SELECT,
       orderBy: [
         { classSchedule: { startsAt: "desc" } },
         { id: "desc" },

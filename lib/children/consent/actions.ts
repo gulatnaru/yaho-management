@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { childConsentInputSchema } from "./validation";
 
 export type ConsentFormState = { errors?: Record<string, string[]>; formError?: string; success?: boolean };
@@ -12,7 +12,7 @@ export async function recordChildConsent(
   _previousState: ConsentFormState,
   formData: FormData,
 ): Promise<ConsentFormState> {
-  const session = await requireAdmin();
+  const principal = await requireOperationalPrincipal();
   const parsed = childConsentInputSchema.safeParse({
     consentType: formData.get("consentType"),
     action: formData.get("action"),
@@ -28,7 +28,7 @@ export async function recordChildConsent(
   }
 
   await prisma.childConsent.create({
-    data: { childId, ...parsed.data, recordedById: session.user.id },
+    data: { childId, ...parsed.data, recordedById: principal.userId },
   });
   revalidatePath(`/children/${childId}`);
   return { success: true };

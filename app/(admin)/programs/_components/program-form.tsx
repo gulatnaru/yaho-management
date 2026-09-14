@@ -13,7 +13,7 @@ export type ProgramFormDefaultValues = {
   targetAgeMin: string;
   targetAgeMax: string;
   defaultDuration: string;
-  defaultPrice: string;
+  defaultPrice?: string;
   memo: string;
 };
 
@@ -21,6 +21,7 @@ export interface ProgramFormProps {
   mode: "create" | "edit";
   programId?: string;
   defaultValues?: ProgramFormDefaultValues;
+  showDefaultPrice: boolean;
 }
 
 const emptyDefaults: ProgramFormDefaultValues = {
@@ -35,7 +36,12 @@ const emptyDefaults: ProgramFormDefaultValues = {
 
 const initialState: ProgramFormState = {};
 
-export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: ProgramFormProps) {
+export function ProgramForm({
+  mode,
+  programId,
+  defaultValues = emptyDefaults,
+  showDefaultPrice,
+}: ProgramFormProps) {
   const action = mode === "edit" && programId ? updateProgram.bind(null, programId) : createProgram;
   const [state, formAction, pending] = useActionState(action, initialState);
 
@@ -121,22 +127,24 @@ export function ProgramForm({ mode, programId, defaultValues = emptyDefaults }: 
         ) : null}
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="defaultPrice">기본가격(원)</Label>
-        <Input
-          defaultValue={state.values?.defaultPrice ?? defaultValues.defaultPrice}
-          id="defaultPrice"
-          min={0}
-          name="defaultPrice"
-          step={1}
-          type="number"
-        />
-        {state.errors?.defaultPrice ? (
-          <p className="text-sm text-red-600" role="alert">
-            {state.errors.defaultPrice[0]}
-          </p>
-        ) : null}
-      </div>
+      {showDefaultPrice ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="defaultPrice">기본가격(원)</Label>
+          <Input
+            defaultValue={state.values?.defaultPrice ?? defaultValues.defaultPrice}
+            id="defaultPrice"
+            min={0}
+            name="defaultPrice"
+            step={1}
+            type="number"
+          />
+          {state.errors?.defaultPrice ? (
+            <p className="text-sm text-red-600" role="alert">
+              {state.errors.defaultPrice[0]}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="space-y-1.5">
         <Label htmlFor="memo">메모</Label>

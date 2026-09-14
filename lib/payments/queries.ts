@@ -1,3 +1,4 @@
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 
 export const PAYMENT_LIST_PAGE_SIZE = 20;
@@ -27,6 +28,7 @@ const PAYMENT_ITEM_CONTEXT_SELECT = {
 } as const;
 
 export async function listPayments(page = 1) {
+  await requireAdminPrincipal();
   const safePage = page > 0 ? page : 1;
   const [payments, total] = await Promise.all([
     prisma.payment.findMany({
@@ -54,6 +56,7 @@ export async function listPayments(page = 1) {
 }
 
 export async function getPaymentDetail(id: string) {
+  await requireAdminPrincipal();
   return prisma.payment.findUnique({
     where: { id },
     select: {
@@ -86,6 +89,7 @@ export async function getPaymentDetail(id: string) {
 }
 
 export async function getPaymentRegistrationContext(reservationId: string) {
+  await requireAdminPrincipal();
   return prisma.reservation.findUnique({
     where: { id: reservationId },
     select: {
@@ -106,6 +110,7 @@ export async function getPaymentRegistrationContext(reservationId: string) {
 }
 
 export async function getRefundRegistrationContext(paymentItemId: string) {
+  await requireAdminPrincipal();
   return prisma.paymentItem.findUnique({
     where: { id: paymentItemId },
     select: {
@@ -122,6 +127,7 @@ export async function getRefundRegistrationContext(paymentItemId: string) {
 }
 
 export async function listPaymentItemsByChild(childId: string) {
+  await requireAdminPrincipal();
   return prisma.paymentItem.findMany({
     where: { reservation: { childId } },
     select: {

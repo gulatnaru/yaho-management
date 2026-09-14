@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { listClasses } from "@/lib/classes/queries";
 import { parseClassListStatus } from "@/lib/classes/query-builder";
 import {
@@ -17,6 +18,7 @@ interface ClassesPageProps {
 }
 
 export default async function ClassesPage({ searchParams }: ClassesPageProps) {
+  const principal = await requireCurrentPrincipal();
   const resolvedParams = await searchParams;
   const status = parseClassListStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;
@@ -32,20 +34,25 @@ export default async function ClassesPage({ searchParams }: ClassesPageProps) {
     total,
     page: currentPage,
     totalPages,
-  } = await listClasses({
-    dateFrom: resolvedParams.dateFrom,
-    dateTo: resolvedParams.dateTo,
-    status,
-    page,
-  });
+  } = await listClasses(
+    {
+      dateFrom: resolvedParams.dateFrom,
+      dateTo: resolvedParams.dateTo,
+      status,
+      page,
+    },
+    principal,
+  );
 
   return (
     <section className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">클래스 일정</h1>
-        <Link className={buttonVariants()} href="/classes/new">
-          클래스 등록
-        </Link>
+        {principal.role !== "TEACHER" ? (
+          <Link className={buttonVariants()} href="/classes/new">
+            클래스 등록
+          </Link>
+        ) : null}
       </div>
 
       <ClassSearchForm

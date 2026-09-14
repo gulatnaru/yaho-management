@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { getTeacherDetail } from "@/lib/teachers/queries";
 import { TeacherForm } from "../../_components/teacher-form";
 
@@ -8,6 +9,7 @@ interface EditTeacherPageProps {
 }
 
 export default async function EditTeacherPage({ params }: EditTeacherPageProps) {
+  await requireOperationalPrincipal();
   const { id } = await params;
   const teacher = await getTeacherDetail(id);
 

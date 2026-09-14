@@ -1,3 +1,4 @@
+import type { CurrentPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { buildClassListWhere, type ClassListParams } from "@/lib/classes/query-builder";
 
@@ -29,8 +30,14 @@ const CLASS_LIST_SELECT = {
   },
 } as const;
 
-export async function listClasses(params: ListClassesParams) {
-  const where = buildClassListWhere(params);
+export async function listClasses(params: ListClassesParams, principal: CurrentPrincipal) {
+  const baseWhere = buildClassListWhere(params);
+  const where =
+    principal.role === "TEACHER"
+      ? {
+          AND: [baseWhere, { teachers: { some: { teacherId: principal.teacherId } } }],
+        }
+      : baseWhere;
   const page = params.page && params.page > 0 ? params.page : 1;
 
   const [classes, total] = await Promise.all([
@@ -89,9 +96,34 @@ const CLASS_DETAIL_SELECT = {
   },
 } as const;
 
+const CLASS_TEACHER_DETAIL_SELECT = {
+  ...CLASS_DETAIL_SELECT,
+  teachers: {
+    select: {
+      id: true,
+      teacherId: true,
+      teacher: { select: { id: true, name: true, isActive: true } },
+    },
+  },
+} as const;
+
 export async function getClassDetail(id: string) {
   return prisma.classSchedule.findUnique({
     where: { id },
     select: CLASS_DETAIL_SELECT,
+  });
+}
+
+export async function getClassDetailForPrincipal(id: string, principal: CurrentPrincipal) {
+  if (principal.role !== "TEACHER") {
+    return getClassDetail(id);
+  }
+
+  return prisma.classSchedule.findFirst({
+    where: {
+      id,
+      teachers: { some: { teacherId: principal.teacherId } },
+    },
+    select: CLASS_TEACHER_DETAIL_SELECT,
   });
 }

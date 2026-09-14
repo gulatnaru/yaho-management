@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { getClassDetail } from "@/lib/classes/queries";
 import { getClassDisplayStatus } from "@/lib/classes/status";
@@ -10,6 +11,7 @@ interface CancelClassPageProps {
 }
 
 export default async function CancelClassPage({ params }: CancelClassPageProps) {
+  await requireOperationalPrincipal();
   const { id } = await params;
   const classDetail = await getClassDetail(id);
 

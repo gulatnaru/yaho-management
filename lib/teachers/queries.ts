@@ -1,3 +1,4 @@
+import type { CurrentPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { buildTeacherListWhere, type TeacherListStatus } from "@/lib/teachers/query-builder";
 
@@ -44,4 +45,12 @@ export async function getTeacherDetail(id: string) {
   return prisma.teacher.findUnique({
     where: { id },
   });
+}
+
+export async function getTeacherDetailForPrincipal(id: string, principal: CurrentPrincipal) {
+  if (principal.role === "TEACHER" && principal.teacherId !== id) {
+    return null;
+  }
+
+  return getTeacherDetail(id);
 }

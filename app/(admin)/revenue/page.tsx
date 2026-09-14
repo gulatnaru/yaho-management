@@ -1,4 +1,5 @@
 import { revenueFilterSchema } from "@/lib/validation/revenue";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { getKstMonthRange, getKstWeekRange, resolveRevenuePeriod } from "@/server/revenue/period";
 import { getRevenueReport, listRevenueProgramOptions } from "@/server/revenue/queries";
 import type { RevenueQueryFilters } from "@/server/revenue/types";
@@ -30,6 +31,7 @@ function buildPresetHref(
 }
 
 export default async function RevenuePage({ searchParams }: RevenuePageProps) {
+  await requireAdminPrincipal();
   const raw = await searchParams;
   const parsed = revenueFilterSchema.safeParse({
     dateFrom: firstValue(raw.dateFrom),

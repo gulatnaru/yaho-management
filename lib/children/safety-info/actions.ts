@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { childSafetyInfoInputSchema } from "./validation";
 
 export type SafetyInfoFormState = {
@@ -22,7 +22,7 @@ export async function updateChildSafetyInfo(
   _previousState: SafetyInfoFormState,
   formData: FormData,
 ): Promise<SafetyInfoFormState> {
-  const session = await requireAdmin();
+  const principal = await requireOperationalPrincipal();
   const parsed = childSafetyInfoInputSchema.safeParse({
     allergies: readValue(formData, "allergies"),
     emergencyNotes: readValue(formData, "emergencyNotes"),
@@ -51,8 +51,8 @@ export async function updateChildSafetyInfo(
 
   await prisma.childSafetyInfo.upsert({
     where: { childId },
-    create: { childId, ...parsed.data, updatedById: session.user.id },
-    update: { ...parsed.data, updatedById: session.user.id },
+    create: { childId, ...parsed.data, updatedById: principal.userId },
+    update: { ...parsed.data, updatedById: principal.userId },
   });
 
   revalidatePath(`/children/${childId}`);

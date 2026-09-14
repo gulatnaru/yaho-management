@@ -4,6 +4,11 @@ const { queryRawMock, programFindManyMock } = vi.hoisted(() => ({
   queryRawMock: vi.fn(),
   programFindManyMock: vi.fn(),
 }));
+const requireAdminPrincipalMock = vi.fn();
+
+vi.mock("@/lib/auth/authorization", () => ({
+  requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+}));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
@@ -17,6 +22,7 @@ import {
   buildPaymentFactsQuery,
   buildRefundFactsQuery,
   getRevenueReport,
+  listRevenueProgramOptions,
 } from "@/server/revenue/queries";
 
 const baseFilters = {
@@ -35,6 +41,8 @@ describe("revenue fact queries", () => {
   beforeEach(() => {
     queryRawMock.mockReset();
     programFindManyMock.mockReset();
+    requireAdminPrincipalMock.mockReset();
+    requireAdminPrincipalMock.mockResolvedValue({ role: "ADMIN" });
   });
 
   it("keeps payment method and refund-state filters out of the operation query", () => {
@@ -106,5 +114,14 @@ describe("revenue fact queries", () => {
       refundedAmount: 10_000,
       netRevenue: 35_000,
     });
+  });
+
+  it("checks ADMIN access before issuing report or option queries", async () => {
+    requireAdminPrincipalMock.mockRejectedValue(new Error("FORBIDDEN"));
+
+    await expect(getRevenueReport(baseFilters)).rejects.toThrow("FORBIDDEN");
+    await expect(listRevenueProgramOptions()).rejects.toThrow("FORBIDDEN");
+    expect(queryRawMock).not.toHaveBeenCalled();
+    expect(programFindManyMock).not.toHaveBeenCalled();
   });
 });

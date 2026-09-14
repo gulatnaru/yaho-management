@@ -1,4 +1,4 @@
-import { requireAdmin } from "@/lib/auth/authorization";
+import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { dashboardSearchSchema } from "@/lib/validation/dashboard";
 import { buildMonthlyCalendar } from "@/server/dashboard/calendar";
 import { addKstMonths, getKstDayPeriod, resolveDashboardPeriod } from "@/server/dashboard/period";
@@ -28,7 +28,9 @@ function formatSelectedDateTitle(value: string) {
 }
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
-  await requireAdmin();
+  const principal = await requireCurrentPrincipal();
+  const isAdmin = principal.role === "ADMIN";
+  const teacherId = principal.role === "TEACHER" ? principal.teacherId : undefined;
   const raw = await searchParams;
   const search = dashboardSearchSchema.parse({
     month: firstValue(raw.month),
@@ -36,18 +38,18 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   });
   const period = resolveDashboardPeriod(search);
   const todayRange = { startUtc: period.todayStartUtc, endExclusiveUtc: period.tomorrowStartUtc };
-  const todayClassesPromise = getDashboardClasses(todayRange);
+  const todayClassesPromise = getDashboardClasses(todayRange, teacherId);
   const selectedClassesPromise = period.selectedDate
     ? period.selectedDate === period.today
       ? todayClassesPromise
-      : getDashboardClasses(getKstDayPeriod(period.selectedDate))
+      : getDashboardClasses(getKstDayPeriod(period.selectedDate), teacherId)
     : Promise.resolve(undefined);
 
   const [calendarMetrics, todayClasses, cancellationCount, financialMetrics, selectedClasses] = await Promise.all([
-    getMonthlyCalendarMetrics(period),
+    getMonthlyCalendarMetrics(period, teacherId),
     todayClassesPromise,
-    getTodayCancellationCount(todayRange),
-    getTodayFinancialMetrics(todayRange),
+    getTodayCancellationCount(todayRange, teacherId),
+    isAdmin ? getTodayFinancialMetrics(todayRange) : Promise.resolve(undefined),
     selectedClassesPromise,
   ]);
   const todayMetrics = {
@@ -57,7 +59,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       0,
     ),
     cancellationCount,
-    ...financialMetrics,
   };
 
   return (
@@ -83,6 +84,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           description="출결 없는 사전 취소는 제외하고 운영 이력이 있는 예약만 표시합니다."
           emptyMessage="이날 예정된 수업이 없습니다."
           showReservations
+          linkChildren={principal.role !== "TEACHER"}
           title={formatSelectedDateTitle(period.selectedDate)}
         />
       ) : (
@@ -91,13 +93,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </section>
       )}
 
-      <DashboardSummary metrics={todayMetrics} today={period.today} />
+      <DashboardSummary financialMetrics={financialMetrics} metrics={todayMetrics} today={period.today} />
 
       <DashboardClassList
         classes={todayClasses}
         description="오늘 예정된 수업과 예약 현황입니다."
         emptyMessage="오늘 예정된 수업이 없습니다."
         showReservations={false}
+        linkChildren={principal.role !== "TEACHER"}
         title="오늘 수업"
       />
     </section>

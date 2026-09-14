@@ -5,6 +5,11 @@ const paymentCountMock = vi.fn();
 const paymentFindUniqueMock = vi.fn();
 const paymentItemFindManyMock = vi.fn();
 const paymentItemFindUniqueMock = vi.fn();
+const requireAdminPrincipalMock = vi.fn();
+
+vi.mock("@/lib/auth/authorization", () => ({
+  requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+}));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
@@ -29,6 +34,7 @@ beforeEach(() => {
   paymentFindUniqueMock.mockResolvedValue(null);
   paymentItemFindManyMock.mockResolvedValue([]);
   paymentItemFindUniqueMock.mockResolvedValue(null);
+  requireAdminPrincipalMock.mockResolvedValue({ role: "ADMIN" });
 });
 
 describe("payment queries", () => {
@@ -79,5 +85,13 @@ describe("payment queries", () => {
     const [[callArg]] = paymentItemFindUniqueMock.mock.calls;
     expect(callArg.select.reservation.select.attendance).toBe(true);
     expect(paymentFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("checks ADMIN access before issuing any financial query", async () => {
+    requireAdminPrincipalMock.mockRejectedValueOnce(new Error("FORBIDDEN"));
+
+    await expect(listPayments()).rejects.toThrow("FORBIDDEN");
+    expect(paymentFindManyMock).not.toHaveBeenCalled();
+    expect(paymentCountMock).not.toHaveBeenCalled();
   });
 });

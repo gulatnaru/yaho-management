@@ -3,9 +3,15 @@ import { notFound } from "next/navigation";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { formatKstDate, formatKstDateTimeRange, formatKstTime } from "@/lib/classes/datetime";
 import { formatKrw } from "@/lib/payments/format";
-import { getReservationDetail } from "@/lib/reservations/queries";
+import {
+  getReservationDetail,
+  getReservationOperationalDetail,
+  type ReservationAdminDetail,
+  type ReservationDisplayDetail,
+} from "@/lib/reservations/queries";
 import { getReservationDisplayStatus, type ReservationDisplayStatus } from "@/lib/reservations/status";
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import { cn } from "@/lib/utils";
@@ -34,10 +40,21 @@ const CANCEL_REASON_LABEL: Record<string, string> = {
   OTHER: "기타",
 };
 
+function isAdminReservationDetail(
+  reservation: ReservationDisplayDetail,
+): reservation is ReservationAdminDetail {
+  return "paymentItem" in reservation;
+}
+
 export default async function ReservationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const reservation = await getReservationDetail(id);
+  const principal = await requireOperationalPrincipal();
+  const isAdmin = principal.role === "ADMIN";
+  const reservation = isAdmin
+    ? await getReservationDetail(id)
+    : await getReservationOperationalDetail(id);
   if (!reservation) notFound();
+  const adminReservation = isAdminReservationDetail(reservation) ? reservation : null;
 
   const status = getReservationDisplayStatus(reservation, reservation.classSchedule);
 
@@ -65,22 +82,22 @@ export default async function ReservationDetailPage({ params }: { params: Promis
 
       {reservation.status === "CANCELLED" ? <Card><CardHeader><CardTitle>취소 정보</CardTitle></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><div><p className="text-sm text-slate-500">취소 일시</p><p>{reservation.cancelledAt ? `${formatKstDate(reservation.cancelledAt)} ${formatKstTime(reservation.cancelledAt)}` : "-"}</p></div><div><p className="text-sm text-slate-500">취소 사유</p><p>{reservation.cancelReason ? CANCEL_REASON_LABEL[reservation.cancelReason] : "-"}</p></div><div><p className="text-sm text-slate-500">처리자</p><p>{reservation.cancelledBy?.name ?? "-"}</p></div><div className="sm:col-span-2"><p className="text-sm text-slate-500">상세 사유</p><p className="whitespace-pre-wrap">{reservation.cancelDetail || "상세 사유가 없습니다."}</p></div></CardContent></Card> : null}
 
-      <Card>
+      {isAdmin && adminReservation ? <Card>
         <CardHeader><CardTitle>결제·환불</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          {reservation.paymentItem ? <>
+          {adminReservation.paymentItem ? <>
             <div className="grid gap-4 sm:grid-cols-3">
-              <div><p className="text-sm text-slate-500">실결제액</p><p>{formatKrw(reservation.paymentItem.paidAmount)}</p></div>
-              <div><p className="text-sm text-slate-500">환불 누계</p><p>{formatKrw(reservation.paymentItem.refundedAmount)}</p></div>
-              <div><p className="text-sm text-slate-500">환불 가능</p><p>{formatKrw(reservation.paymentItem.paidAmount - reservation.paymentItem.refundedAmount)}</p></div>
+              <div><p className="text-sm text-slate-500">실결제액</p><p>{formatKrw(adminReservation.paymentItem.paidAmount)}</p></div>
+              <div><p className="text-sm text-slate-500">환불 누계</p><p>{formatKrw(adminReservation.paymentItem.refundedAmount)}</p></div>
+              <div><p className="text-sm text-slate-500">환불 가능</p><p>{formatKrw(adminReservation.paymentItem.paidAmount - adminReservation.paymentItem.refundedAmount)}</p></div>
             </div>
             <div className="flex flex-col gap-2 md:flex-row">
-              <Link className={cn(buttonVariants(), "w-full md:w-auto")} href={`/payments/${reservation.paymentItem.payment.id}`}>결제 상세</Link>
-              {reservation.paymentItem.refundedAmount < reservation.paymentItem.paidAmount ? <Link className={cn(buttonVariants(), "w-full bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100 md:w-auto")} href={`/refunds/new?paymentItemId=${reservation.paymentItem.id}`}>환불 등록</Link> : null}
+              <Link className={cn(buttonVariants(), "w-full md:w-auto")} href={`/payments/${adminReservation.paymentItem.payment.id}`}>결제 상세</Link>
+              {adminReservation.paymentItem.refundedAmount < adminReservation.paymentItem.paidAmount ? <Link className={cn(buttonVariants(), "w-full bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100 md:w-auto")} href={`/refunds/new?paymentItemId=${adminReservation.paymentItem.id}`}>환불 등록</Link> : null}
             </div>
           </> : <Link className={cn(buttonVariants(), "w-full md:w-auto")} href={`/payments/new?reservationId=${reservation.id}`}>결제 등록</Link>}
         </CardContent>
-      </Card>
+      </Card> : null}
 
       <Card><CardHeader><CardTitle>예약 메모</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm text-slate-700">{reservation.memo || "메모가 없습니다."}</p></CardContent></Card>
     </section>

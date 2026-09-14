@@ -4,15 +4,20 @@ import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningBanner } from "@/components/ui/warning-banner";
+import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import {
   formatKstDate,
   formatKstDateTimeRange,
   formatKstTime,
 } from "@/lib/classes/datetime";
-import { getClassDetail } from "@/lib/classes/queries";
+import { getClassDetailForPrincipal } from "@/lib/classes/queries";
 import { getClassDisplayStatus, type ClassDisplayStatus } from "@/lib/classes/status";
 import { isUnderStaffed } from "@/lib/classes/teacher-warning";
-import { listReservationsByClassSchedule } from "@/lib/reservations/queries";
+import {
+  listOperationalReservationsByClassSchedule,
+  listReservationsByClassSchedule,
+  listTeacherReservationsByClassSchedule,
+} from "@/lib/reservations/queries";
 import { toTelHref } from "@/lib/shared/contact";
 import { cn } from "@/lib/utils";
 import { ClassParticipantList } from "../_components/class-participant-list";
@@ -39,9 +44,16 @@ const CANCEL_REASON_LABEL: Record<string, string> = {
 
 export default async function ClassDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const principal = await requireCurrentPrincipal();
+  const isAdmin = principal.role === "ADMIN";
+  const canManage = principal.role !== "TEACHER";
   const [classDetail, reservations] = await Promise.all([
-    getClassDetail(id),
-    listReservationsByClassSchedule(id),
+    getClassDetailForPrincipal(id, principal),
+    isAdmin
+      ? listReservationsByClassSchedule(id)
+      : principal.role === "MANAGER"
+        ? listOperationalReservationsByClassSchedule(id)
+        : listTeacherReservationsByClassSchedule(id, principal),
   ]);
   if (!classDetail) notFound();
 
@@ -60,12 +72,12 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
           {formatKstDateTimeRange(classDetail.startsAt, classDetail.endsAt)}
         </h1>
         <div className="flex flex-wrap gap-2">
-          {classStatus === "SCHEDULED" ? (
+          {canManage && classStatus === "SCHEDULED" ? (
             <Link className={cn(buttonVariants())} href={`/reservations/new?classScheduleId=${id}`}>
               예약 추가
             </Link>
           ) : null}
-          {classStatus === "SCHEDULED" ? (
+          {canManage && classStatus === "SCHEDULED" ? (
             <>
               <Link className={cn(buttonVariants())} href={`/classes/${id}/edit`}>
                 정보 수정
@@ -88,9 +100,13 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div>
             <p className="text-sm text-slate-500">프로그램</p>
-            <Link className="break-all hover:underline" href={`/programs/${classDetail.program.id}`}>
-              {classDetail.program.name}
-            </Link>
+            {canManage ? (
+              <Link className="break-all hover:underline" href={`/programs/${classDetail.program.id}`}>
+                {classDetail.program.name}
+              </Link>
+            ) : (
+              <p className="break-all">{classDetail.program.name}</p>
+            )}
           </div>
           <div>
             <p className="text-sm text-slate-500">일시</p>
@@ -163,7 +179,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
             </div>
             <div>
               <p className="text-sm text-slate-500">처리자</p>
-              <p>{classDetail.cancelledBy?.name ?? "-"}</p>
+              <p>{canManage ? classDetail.cancelledBy?.name ?? "-" : "관리자 처리"}</p>
             </div>
             <div className="sm:col-span-2">
               <p className="text-sm text-slate-500">상세 사유</p>
@@ -198,7 +214,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
               {classDetail.teachers.map((assignment) => (
                 <li className="flex justify-between gap-3 text-sm" key={assignment.id}>
                   <span>{assignment.teacher.name}</span>
-                  {assignment.teacher.phone ? (
+                  {canManage && "phone" in assignment.teacher && assignment.teacher.phone ? (
                     <a className="break-all hover:underline" href={toTelHref(assignment.teacher.phone)}>
                       {assignment.teacher.phone}
                     </a>
@@ -221,6 +237,9 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
       <ClassParticipantList
         classSchedule={{ status: classDetail.status, endsAt: classDetail.endsAt }}
         reservations={reservations}
+        canManageReservations={canManage}
+        linkChildDetails={canManage}
+        showPayment={isAdmin}
       />
     </section>
   );

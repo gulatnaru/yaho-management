@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { ChildForm } from "../_components/child-form";
 
-export default function NewChildPage() {
+export default async function NewChildPage() {
+  await requireOperationalPrincipal();
   return (
     <section className="space-y-6">
       <Link className="text-sm text-slate-500 hover:underline" href="/children">

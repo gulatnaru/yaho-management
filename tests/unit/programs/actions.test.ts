@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const requireAdminMock = vi.fn();
+const requireOperationalPrincipalMock = vi.fn();
 const createMock = vi.fn();
 const updateMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
-  requireAdmin: (...args: unknown[]) => requireAdminMock(...args),
+  requireOperationalPrincipal: (...args: unknown[]) => requireOperationalPrincipalMock(...args),
 }));
 
 vi.mock("@/lib/db/prisma", () => ({
@@ -32,15 +32,15 @@ function formDataWithName(name: string) {
   return formData;
 }
 
-describe("programs server actions require admin", () => {
+describe("programs server actions require an operational principal", () => {
   beforeEach(() => {
-    requireAdminMock.mockReset();
+    requireOperationalPrincipalMock.mockReset();
     createMock.mockReset();
     updateMock.mockReset();
   });
 
-  it("createProgram rejects and never touches prisma when requireAdmin denies access", async () => {
-    requireAdminMock.mockImplementation(() => {
+  it("createProgram rejects and never touches prisma when operational access is denied", async () => {
+    requireOperationalPrincipalMock.mockImplementation(() => {
       throw new Error("UNAUTHORIZED");
     });
 
@@ -48,8 +48,8 @@ describe("programs server actions require admin", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("updateProgram rejects and never touches prisma when requireAdmin denies access", async () => {
-    requireAdminMock.mockImplementation(() => {
+  it("updateProgram rejects and never touches prisma when operational access is denied", async () => {
+    requireOperationalPrincipalMock.mockImplementation(() => {
       throw new Error("UNAUTHORIZED");
     });
 
@@ -57,8 +57,8 @@ describe("programs server actions require admin", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("setProgramStatus rejects and never touches prisma when requireAdmin denies access", async () => {
-    requireAdminMock.mockImplementation(() => {
+  it("setProgramStatus rejects and never touches prisma when operational access is denied", async () => {
+    requireOperationalPrincipalMock.mockImplementation(() => {
       throw new Error("UNAUTHORIZED");
     });
 
@@ -69,8 +69,8 @@ describe("programs server actions require admin", () => {
 
 describe("createProgram validation", () => {
   beforeEach(() => {
-    requireAdminMock.mockReset();
-    requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
+    requireOperationalPrincipalMock.mockReset();
+    requireOperationalPrincipalMock.mockResolvedValue({ role: "ADMIN" });
     createMock.mockReset();
   });
 
@@ -124,8 +124,8 @@ describe("createProgram validation", () => {
 
 describe("updateProgram", () => {
   beforeEach(() => {
-    requireAdminMock.mockReset();
-    requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
+    requireOperationalPrincipalMock.mockReset();
+    requireOperationalPrincipalMock.mockResolvedValue({ role: "ADMIN" });
     updateMock.mockReset();
     updateMock.mockResolvedValue({});
   });
@@ -144,10 +144,45 @@ describe("updateProgram", () => {
   });
 });
 
+describe("MANAGER financial isolation", () => {
+  beforeEach(() => {
+    requireOperationalPrincipalMock.mockReset();
+    requireOperationalPrincipalMock.mockResolvedValue({ role: "MANAGER" });
+    createMock.mockReset();
+    createMock.mockResolvedValue({ id: "program-1" });
+    updateMock.mockReset();
+    updateMock.mockResolvedValue({});
+  });
+
+  it("ignores a tampered defaultPrice and lets the database default apply on create", async () => {
+    const formData = formDataWithName("준관리자 프로그램");
+    formData.set("defaultPrice", "99999999");
+
+    await expect(createProgram({}, formData)).rejects.toThrow("REDIRECT");
+
+    const [[callArg]] = createMock.mock.calls;
+    expect(callArg.data).not.toHaveProperty("defaultPrice");
+    expect(callArg.select).toEqual({ id: true });
+  });
+
+  it("ignores a tampered defaultPrice on update and never echoes it in validation state", async () => {
+    const valid = formDataWithName("준관리자 프로그램");
+    valid.set("defaultPrice", "99999999");
+
+    await expect(updateProgram("program-1", {}, valid)).rejects.toThrow("REDIRECT");
+    expect(updateMock.mock.calls[0][0].data).not.toHaveProperty("defaultPrice");
+
+    const invalid = formDataWithName("   ");
+    invalid.set("defaultPrice", "77777777");
+    const result = await updateProgram("program-1", {}, invalid);
+    expect(result.values).not.toHaveProperty("defaultPrice");
+  });
+});
+
 describe("setProgramStatus", () => {
   beforeEach(() => {
-    requireAdminMock.mockReset();
-    requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
+    requireOperationalPrincipalMock.mockReset();
+    requireOperationalPrincipalMock.mockResolvedValue({ role: "ADMIN" });
     updateMock.mockReset();
     updateMock.mockResolvedValue({});
   });

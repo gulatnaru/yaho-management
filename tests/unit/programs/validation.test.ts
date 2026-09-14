@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { programInputSchema } from "@/lib/validation/program";
+import { programInputSchema, programOperationalInputSchema } from "@/lib/validation/program";
 
 describe("programInputSchema", () => {
   it("passes with only a name and everything else empty", () => {
@@ -72,5 +72,27 @@ describe("programInputSchema", () => {
     if (result.success) {
       expect(result.data.defaultPrice).toBe(0);
     }
+  });
+});
+
+describe("programOperationalInputSchema", () => {
+  it("strips tampered defaultPrice instead of returning financial data", () => {
+    const result = programOperationalInputSchema.parse({
+      name: "준관리자 프로그램",
+      defaultPrice: "500000",
+    });
+
+    expect(result).toEqual({ name: "준관리자 프로그램" });
+    expect(result).not.toHaveProperty("defaultPrice");
+  });
+
+  it("keeps the non-financial validation rules", () => {
+    expect(
+      programOperationalInputSchema.safeParse({
+        name: "준관리자 프로그램",
+        targetAgeMin: "10",
+        targetAgeMax: "5",
+      }).success,
+    ).toBe(false);
   });
 });

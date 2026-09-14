@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const groupByMock = vi.fn();
 const countMock = vi.fn();
 const findManyMock = vi.fn();
+const requireAdminPrincipalMock = vi.fn();
+const requireOperationalPrincipalMock = vi.fn();
+
+vi.mock("@/lib/auth/authorization", () => ({
+  requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+  requireOperationalPrincipal: (...args: unknown[]) => requireOperationalPrincipalMock(...args),
+}));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
@@ -19,7 +26,9 @@ const {
   buildChildUpcomingWhere,
   getChildHistorySummary,
   listChildPastHistory,
+  listChildPastHistoryOperational,
   listChildUpcomingReservations,
+  listChildUpcomingReservationsOperational,
 } = await import("@/server/children/history");
 
 const NOW = new Date("2026-09-11T03:00:00.000Z");
@@ -29,6 +38,8 @@ beforeEach(() => {
   groupByMock.mockResolvedValue([]);
   countMock.mockResolvedValue(0);
   findManyMock.mockResolvedValue([]);
+  requireAdminPrincipalMock.mockResolvedValue({ role: "ADMIN" });
+  requireOperationalPrincipalMock.mockResolvedValue({ role: "MANAGER" });
 });
 
 describe("child history queries", () => {
@@ -109,6 +120,35 @@ describe("child history queries", () => {
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it("uses a non-financial MANAGER projection for upcoming and past history", async () => {
+    await listChildUpcomingReservationsOperational("child-1", NOW);
+    await listChildPastHistoryOperational("child-1", NOW, 1);
+
+    expect(findManyMock).toHaveBeenCalledTimes(2);
+    for (const [callArg] of findManyMock.mock.calls) {
+      const serialized = JSON.stringify(callArg.select);
+      for (const forbidden of [
+        "paymentItem",
+        "payment",
+        "refund",
+        "amount",
+        "discountAmount",
+        "paidAmount",
+        "refundedAmount",
+        "method",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("checks ADMIN access before selecting payment status for child history", async () => {
+    requireAdminPrincipalMock.mockRejectedValueOnce(new Error("FORBIDDEN"));
+
+    await expect(listChildUpcomingReservations("child-1", NOW)).rejects.toThrow("FORBIDDEN");
+    expect(findManyMock).not.toHaveBeenCalled();
   });
 
   it.each([

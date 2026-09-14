@@ -25,7 +25,10 @@ const txMock = {
 };
 
 vi.mock("@/lib/auth/authorization", () => ({
-  requireAdmin: (...args: unknown[]) => requireAdminMock(...args),
+  requireOperationalPrincipal: async (...args: unknown[]) => {
+    const session = await requireAdminMock(...args);
+    return session?.user ? { ...session.user, userId: session.user.id } : session;
+  },
 }));
 
 vi.mock("@/lib/db/prisma", () => ({
