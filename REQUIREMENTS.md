@@ -1662,6 +1662,106 @@ Now — 관리자·준관리자·선생님이 같은 시스템을 역할에 맞�
 
 ---
 
+## Phase 17 — 운영 안정화 3차
+
+### Problem
+- TEACHER Dashboard의 "오늘 예약 현황"과 "오늘 취소" 카드는 TEACHER가 접근할 수 없는 `/reservations`로 연결되어 클릭 시 404가 발생한다.
+- 반복 클래스 등록의 등록 방식 `radiogroup`에는 그룹의 accessible name이 없어 스크린리더가 단건·반복 선택의 목적을 명확히 전달하지 못한다.
+- 공통 Checkbox는 호출자가 전달한 `type` prop으로 checkbox semantics가 덮어써질 수 있다.
+- 여러 Server Action이 동일한 FormData scalar 문자열 읽기 규칙을 각각 반복하고 있어 같은 정규화 변경을 여러 곳에서 맞춰야 한다.
+- 로그인은 존재하지 않거나 로그인 불가능한 User를 bcrypt password verification 전에 반환하므로 존재하는 계정의 잘못된 비밀번호 경로와 계산 비용 차이가 생긴다.
+- Production migration은 배포와 분리된 승인 절차로 실행하도록 문서화되어 있지만 적용 여부를 release 과정에서 강제하지 않아, Phase 16 코드가 필요한 DB schema보다 먼저 배포되어 기존 ADMIN 로그인이 중단된 실제 사고가 발생했다.
+
+### Current Process
+- Dashboard 운영 지표는 역할별 범위로 계산되지만 예약·취소 summary 카드는 모든 역할에 동일한 Link로 렌더링된다. `/reservations`는 ADMIN/MANAGER만 접근할 수 있어 TEACHER의 링크 목적지와 권한이 일치하지 않는다.
+- 클래스 생성 화면은 visible `fieldset` legend와 개별 radio label을 제공하지만 내부 `role="radiogroup"`을 그 label과 명시적으로 연결하지 않는다.
+- Checkbox는 `type="checkbox"` 뒤에 consumer props를 펼치고 전체 input attribute를 prop으로 허용한다. 현재 사용처가 다른 type을 전달하지 않아 즉시 발생한 기능 장애는 없다.
+- Child, Program, Teacher, Class, Reservation, Account와 안전정보 action은 원본 폼 값 보존을 위해 동일한 scalar FormData 판독을 지역 함수로 반복한다. 배열 필드, 재무 필드 제한과 domain validation은 서로 다르다.
+- credentials 인증은 User 조회 뒤 계정 상태와 연결이 유효한 경우에만 password hash 비교를 수행한다. 외부 오류 메시지는 이메일 존재 여부와 무관하게 동일하다.
+- `postinstall`과 CI는 Prisma Client 생성, lint, unit test와 build를 수행하지만 Production migration 상태를 확인하지 않는다. Vercel build에서 migration을 자동 실행하지 않고 Production migration은 별도 승인 절차에 의존한다.
+
+### User Story
+- 선생님으로서 Dashboard의 운영 숫자를 확인할 때 권한상 사용할 수 없는 화면으로 이동하지 않고 싶다.
+- 키보드·스크린리더 사용자로서 클래스 등록 방식 그룹의 이름과 선택지를 명확히 이해하고 싶다.
+- 개발자로서 공통 Checkbox가 호출부 실수에도 항상 checkbox로 동작하고, 반복되는 FormData scalar 읽기 규칙은 한 곳에서 일관되게 유지되기를 원한다.
+- 운영 책임자로서 로그인 실패 과정에서 계정 존재 여부가 처리 비용 차이로 쉽게 구분되지 않기를 원한다.
+- 배포 책임자로서 schema-changing release의 migration 누락이나 실패를 Production release 성공으로 오인하지 않고, 적용 전후 상태와 핵심 흐름을 확인하고 싶다.
+
+### Scope
+- TEACHER Dashboard의 "오늘 예약 현황"과 "오늘 취소" 숫자를 비링크 정보 카드로 표시
+- ADMIN/MANAGER Dashboard의 기존 예약·취소 카드 링크 유지
+- 반복 클래스 등록의 "등록 방식" radiogroup accessible name 보완
+- 공통 Checkbox가 consumer의 `type` prop으로 checkbox semantics를 잃지 않도록 보호
+- 완전히 동일한 FormData scalar 문자열 판독 규칙의 좁은 공통화
+- 존재하지 않거나 로그인 불가능한 User 경로의 password verification 비용 차이 완화
+- schema-changing Production release의 migration 식별, 적용 전 preflight, 적용 결과, 적용 후 status와 핵심 흐름 확인
+- unapplied 또는 failed migration을 release 성공으로 처리하지 않는 운영 gate
+- Dashboard 역할별 링크, 접근성, Checkbox, FormData 원본 값 보존, 로그인과 Production migration release 절차의 회귀 검증
+
+### Out of Scope
+- TEACHER의 Reservation 전체 조회·관리 권한과 신규 TEACHER 예약 화면
+- ADMIN/MANAGER/TEACHER 역할·권한 matrix 변경
+- Dashboard redesign과 새로운 운영 지표
+- 전체 form architecture 또는 generic form framework 도입
+- domain별 FormData reader, 배열·권한·validation semantics 통합
+- Auth.js 교체, MFA, OAuth, SSO
+- Preview DB branching 정책 변경과 Preview migration 자동화
+- 신규 business entity, Prisma business schema/model과 migration
+- 결제·환불·Revenue 정책 변경
+- Vercel build, GitHub Actions migration job, release gate, 수동 runbook 또는 별도 deployment workflow 중 구체 구현 방식 확정
+
+### Business Rules
+- TEACHER의 "오늘 예약 현황"과 "오늘 취소" 카드는 숫자를 기존 기준대로 표시하되 Link나 다른 클릭 가능한 CTA로 렌더링하지 않는다. `/reservations` 또는 다른 대체 route로 연결하지 않는다.
+- ADMIN/MANAGER의 두 카드는 기존 `/reservations` 링크를 유지한다. TEACHER의 `/reservations` 직접 접근과 Reservation 전체 조회·관리 차단도 유지한다.
+- radiogroup 접근성 보완은 단건·반복 등록 선택, validation, 미리보기와 저장 결과를 변경하지 않는다.
+- 공통 Checkbox는 caller가 `type` 값을 전달해도 실제 input의 checkbox semantics를 유지한다.
+- FormData 공통화는 `typeof value === "string" ? value : undefined`와 동등한 scalar 판독에 한정한다. 각 domain reader의 필드 구성, 배열 처리, MANAGER 재무 필드 제한, Zod validation과 오류 후 값 보존 의미는 유지한다.
+- 존재하지 않거나 비활성·role/Teacher 연결 불일치 등으로 로그인할 수 없는 User 경로에도 password verification에 준하는 work를 수행한다. 로그인 성공 조건, 일반 오류 메시지, role·활성·Teacher 연결·강제 비밀번호 변경과 session 정책은 변경하지 않는다.
+- schema-changing release는 필요한 migration을 식별하고 Production 대상 환경을 명시한 뒤 적용 전 preflight를 수행해야 한다.
+- unapplied 또는 failed migration이 있거나 migration 적용이 실패하면 Production release를 성공 또는 완료로 간주하지 않는다.
+- migration 적용 결과와 적용 후 status를 확인하고, 변경된 schema를 사용하는 핵심 사용자 흐름을 smoke verification한 뒤 release를 완료한다.
+- migration 보고에는 대상 환경과 migration 이름을 포함하되 database credential과 connection string을 노출하지 않는다.
+- Production migration 방법으로 `prisma db push`, `prisma migrate reset`, `prisma db seed`를 사용하지 않는다. 승인된 migration은 `prisma migrate deploy`의 기존 원칙을 따른다.
+- Production과 Preview DB를 혼동하지 않으며 ADR-030의 Preview 공유 DB 및 Preview migration 비자동화 정책을 유지한다.
+- migration pipeline의 구체적인 실행 위치, 배포 순서와 자동화 방식은 PLAN에서 기존 migration 호환성과 실패 복구를 검토해 결정한다(ADR-051).
+
+### Acceptance Criteria
+- TEACHER Dashboard의 "오늘 예약 현황"과 "오늘 취소"는 숫자가 표시되지만 Link/CTA가 아니며 `/reservations`나 다른 route로 이동하지 않는다.
+- ADMIN/MANAGER Dashboard의 두 카드는 기존 예약 목록·취소 필터 링크를 유지한다.
+- TEACHER의 `/reservations` 직접 URL, query와 관련 관리 기능 접근은 기존 Phase 16 정책대로 서버에서 차단된다.
+- 클래스 생성 화면의 등록 방식 radiogroup에 visible "등록 방식"과 연결된 accessible name이 존재한다.
+- radiogroup 보완 후 단건·반복 선택, keyboard 사용, validation, 미리보기와 생성 동작에 회귀가 없다.
+- Checkbox caller가 `type` prop을 전달해도 렌더링된 input은 checkbox type과 semantics를 유지한다.
+- 반복 요일, 선생님, 보험, 계정 활성 등 기존 Checkbox 사용처에 회귀가 없다.
+- 동일 scalar FormData 읽기 규칙은 공통 helper를 사용하며 누락 값과 문자열이 아닌 값의 기존 처리를 유지한다.
+- 각 domain reader의 배열 필드, 권한별 필드, validation과 오류 후 원본 값 보존 동작이 유지된다.
+- 존재하지 않는 이메일과 로그인 불가능한 계정 경로에서도 password verification에 준하는 work가 수행된다.
+- 존재하지 않는 이메일과 존재하는 계정의 잘못된 비밀번호는 동일한 일반 오류를 유지한다.
+- 정상 ADMIN/MANAGER/TEACHER 로그인, 비활성 계정 차단, TEACHER mapping 검증, 강제 비밀번호 변경과 password reset lifecycle에 회귀가 없다.
+- schema-changing release와 대상 migration을 release 과정에서 식별할 수 있다.
+- Production 배포 전에 unapplied 또는 failed migration을 감지할 수 있고, 해당 상태나 migration 실행 실패를 release 성공으로 처리하지 않는다.
+- migration 적용 전 preflight, deploy 결과와 적용 후 status가 모두 확인되며 결과에 대상 환경과 migration 이름이 기록된다.
+- Production/Preview/local 대상 혼동을 차단하고 credential과 connection string이 출력되지 않는다.
+- Production migration 경로에서 `db push`, `migrate reset`, seed가 실행되지 않는다.
+- migration 적용 후 변경된 schema를 사용하는 핵심 흐름을 smoke verification하며, 실패하면 release 완료로 처리하지 않는다.
+- 기존 Preview migration 정책과 ADMIN/MANAGER/TEACHER 권한, 예약·결제·환불·Revenue 및 반복 클래스 business rule에 변경이 없다.
+
+### Conflicts
+- TEACHER Dashboard 카드의 비링크 처리는 Reservation 권한을 확대하지 않으므로 ADR-048/ADR-050 및 Phase 16 permission matrix와 충돌하지 않는다.
+- radiogroup과 Checkbox 수정은 UI semantics와 접근성을 강화할 뿐 ADR-047의 반복 등록 규칙을 변경하지 않는다.
+- FormData 공통화는 동일 scalar 판독만 대상으로 하므로 domain validation과 MANAGER 재무정보 경계를 유지한다. domain reader 전체 통합은 범위에서 제외한다.
+- login timing hardening은 ADR-049의 계정 lifecycle과 즉시 권한 반영을 유지하고 외부 오류 의미를 바꾸지 않는다.
+- Production migration gate는 기존 `docs/DEPLOYMENT.md`의 별도 승인 migration 정책을 폐기하지 않고 누락을 성공으로 처리하지 않도록 보강한다. ADR-030의 Preview 정책은 유지한다.
+- 이번 Phase는 기존 Prisma business schema/model을 변경하지 않지만 release 절차와 관련 script·workflow·문서 변경 가능성은 PLAN에서 판단한다.
+
+### Open Questions
+없음. TEACHER Dashboard 예약·취소 카드는 비링크 정보 카드로 확정했고, 나머지 범위와 Production migration release 원칙은 ADR-051로 확정한다. 구체적인 pipeline 방식은 제품 결정이 아니라 PLAN의 기술 설계로 남긴다.
+
+### Priority
+Now — Production migration drift가 실제 로그인 장애를 일으켰고 TEACHER Dashboard에는 알려진 dead link가 남아 있다. 접근성·공통 컴포넌트·로그인 hardening과 좁은 중복 제거를 함께 마무리해 Phase 15~16 이후의 확인된 안정성 backlog를 닫는다.
+
+---
+
 # 23. Acceptance Criteria
 
 ### 아이
