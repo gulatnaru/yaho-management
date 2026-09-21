@@ -1,0 +1,121 @@
+name: Production Release Verification
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect-schema-change:
+    name: detect-schema-change
+    runs-on: ubuntu-latest
+    outputs:
+      schema_change: ${{ steps.detect.outputs.schema_change }}
+      migration_names: ${{ steps.detect.outputs.migration_names }}
+    steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Detect schema changes in the main release
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: >-
+          npx tsx scripts/release/schema-change.ts
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+
+  production-verify:
+    name: production-verify
+    needs: detect-schema-change
+    if: >-
+      needs.detect-schema-change.result == 'success' &&
+      needs.detect-schema-change.outputs.schema_change == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-release-verification
+      cancel-in-progress: false
+    steps:
+      - name: Checkout released main SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install trusted dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Generate Prisma Client
+        run: npx prisma generate --schema prisma/schema.prisma
+
+      - name: Install Chromium for read-only live smoke
+        run: npx playwright install --with-deps chromium
+
+      - name: Checkpoint A - resolve exact Vercel Production release
+        id: production-checkpoint-a
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx tsx scripts/release/production-smoke.ts wait
+
+      - name: Verify post-deploy Production migration status
+        env:
+          EXPECTED_MIGRATIONS: ${{ needs.detect-schema-change.outputs.migration_names }}
+          PRODUCTION_DB_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_IDENTITY_SHA256 }}
+          PRODUCTION_DB_RUNTIME_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_RUNTIME_IDENTITY_SHA256 }}
+          PRODUCTION_DIRECT_URL: ${{ secrets.PRODUCTION_DIRECT_URL }}
+        run: npx tsx scripts/release/production-migration.ts verify
+
+      - name: Checkpoints B and C - verify stable Production invalid-login path
+        env:
+          EXPECTED_PRODUCTION_DEPLOYMENT_ID: ${{ steps.production-checkpoint-a.outputs.deployment_id }}
+          PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL }}
+          RELEASE_SHA: ${{ github.sha }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx tsx scripts/release/production-smoke.ts smoke
+
+  production-release-verify:
+    name: production-release-verify
+    needs: [detect-schema-change, production-verify]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate post-deploy release verification
+        env:
+          DETECT_RESULT: ${{ needs.detect-schema-change.result }}
+          SCHEMA_CHANGE: ${{ needs.detect-schema-change.outputs.schema_change }}
+          VERIFY_RESULT: ${{ needs.production-verify.result }}
+        run: |
+          test "$DETECT_RESULT" = "success"
+          if [[ "$SCHEMA_CHANGE" == "true" ]]; then
+            test "$VERIFY_RESULT" = "success"
+          else
+            test "$SCHEMA_CHANGE" = "false"
+            test "$VERIFY_RESULT" = "skipped"
+          fi

@@ -3,6 +3,11 @@ import { prisma } from "@/lib/db/prisma";
 import { isOperationalRole, isUserRole } from "@/lib/auth/roles";
 import { credentialsSchema } from "@/lib/validation/auth";
 
+// bcrypt cost 12로 미리 생성한 고정 dummy hash다. 존재하지 않거나 password가 없는
+// 계정도 실제 credential 검증과 같은 bcrypt work를 한 번 수행하되 성공할 수는 없다.
+export const INVALID_CREDENTIAL_PASSWORD_HASH =
+  "$2a$12$kfqC442cBAgoJFeIkCnaOuY44AYOb.aJ/0skM1ykHLFc0.0/1oew2";
+
 export type CredentialsInput = ReturnType<typeof credentialsSchema.parse>;
 
 type CredentialUser = {
@@ -56,6 +61,9 @@ export async function authenticateOperator(
     },
   });
 
+  const passwordHash = user?.password ?? INVALID_CREDENTIAL_PASSWORD_HASH;
+  const passwordMatches = await comparePassword(password, passwordHash);
+
   if (
     !user?.isActive ||
     !user.password ||
@@ -77,7 +85,6 @@ export async function authenticateOperator(
     return null;
   }
 
-  const passwordMatches = await comparePassword(password, user.password);
   if (!passwordMatches) {
     return null;
   }

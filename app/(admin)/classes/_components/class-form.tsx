@@ -158,8 +158,14 @@ export function ClassForm({
     >
       {mode === "create" ? (
         <fieldset className="space-y-3">
-          <legend className="text-sm font-medium leading-none">등록 방식</legend>
-          <div className="grid grid-cols-2 gap-2" role="radiogroup">
+          <legend className="text-sm font-medium leading-none" id="registration-mode-legend">
+            등록 방식
+          </legend>
+          <div
+            aria-labelledby="registration-mode-legend"
+            className="grid grid-cols-2 gap-2"
+            role="radiogroup"
+          >
             {[
               { value: "single" as const, label: "단건 등록" },
               { value: "recurring" as const, label: "반복 등록" },

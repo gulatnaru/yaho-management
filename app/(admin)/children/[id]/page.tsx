@@ -291,7 +291,7 @@ export default async function ChildDetailPage({
                   <li className="rounded-md border p-3 text-sm" key={item.id}>
                     <div className="flex flex-col justify-between gap-2 sm:flex-row">
                       <Link
-                        className="font-medium hover:underline"
+                        className="min-w-0 break-words font-medium hover:underline"
                         href={`/payments/${item.payment.id}`}
                       >
                         {item.reservation.classSchedule.program.name}

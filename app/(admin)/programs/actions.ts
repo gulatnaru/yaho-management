@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import {
   programInputSchema,
   programOperationalInputSchema,
@@ -54,17 +55,14 @@ function parseProgramForm(formData: FormData, includeFinancialFields: boolean) {
  * 리셋하므로, 검증 실패 응답에 원본 값을 담아 폼이 defaultValue 대신 이 값을 우선 사용하게 한다.
  */
 function readProgramFormValues(formData: FormData, includeFinancialFields: boolean): ProgramFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
-
   return {
-    name: toStringOrUndefined(formData.get("name")),
-    description: toStringOrUndefined(formData.get("description")),
-    targetAgeMin: toStringOrUndefined(formData.get("targetAgeMin")),
-    targetAgeMax: toStringOrUndefined(formData.get("targetAgeMax")),
-    defaultDuration: toStringOrUndefined(formData.get("defaultDuration")),
-    ...(includeFinancialFields ? { defaultPrice: toStringOrUndefined(formData.get("defaultPrice")) } : {}),
-    memo: toStringOrUndefined(formData.get("memo")),
+    name: readFormString(formData, "name"),
+    description: readFormString(formData, "description"),
+    targetAgeMin: readFormString(formData, "targetAgeMin"),
+    targetAgeMax: readFormString(formData, "targetAgeMax"),
+    defaultDuration: readFormString(formData, "defaultDuration"),
+    ...(includeFinancialFields ? { defaultPrice: readFormString(formData, "defaultPrice") } : {}),
+    memo: readFormString(formData, "memo"),
   };
 }
 

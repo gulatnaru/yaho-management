@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
 import {
@@ -102,8 +103,6 @@ function parseClassForm(formData: FormData) {
  * 리셋하므로, 검증 실패 응답에 원본 값을 담아 폼이 defaultValue 대신 이 값을 우선 사용하게 한다.
  */
 function readClassFormValues(formData: FormData): ClassFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
   const registrationMode = classRegistrationModeSchema.safeParse(formData.get("registrationMode"));
 
   return {
@@ -112,8 +111,8 @@ function readClassFormValues(formData: FormData): ClassFormValues {
           registrationMode: registrationMode.data,
           ...(registrationMode.data === "recurring"
             ? {
-                repeatStartDate: toStringOrUndefined(formData.get("repeatStartDate")),
-                repeatEndDate: toStringOrUndefined(formData.get("repeatEndDate")),
+                repeatStartDate: readFormString(formData, "repeatStartDate"),
+                repeatEndDate: readFormString(formData, "repeatEndDate"),
                 weekdays: formData
                   .getAll("weekdays")
                   .filter((value): value is string => typeof value === "string"),
@@ -121,18 +120,18 @@ function readClassFormValues(formData: FormData): ClassFormValues {
             : {}),
         }
       : {}),
-    programId: toStringOrUndefined(formData.get("programId")),
-    date: toStringOrUndefined(formData.get("date")),
-    startTime: toStringOrUndefined(formData.get("startTime")),
-    endTime: toStringOrUndefined(formData.get("endTime")),
-    location: toStringOrUndefined(formData.get("location")),
-    capacity: toStringOrUndefined(formData.get("capacity")),
+    programId: readFormString(formData, "programId"),
+    date: readFormString(formData, "date"),
+    startTime: readFormString(formData, "startTime"),
+    endTime: readFormString(formData, "endTime"),
+    location: readFormString(formData, "location"),
+    capacity: readFormString(formData, "capacity"),
     teacherIds: formData.getAll("teacherIds").filter((value): value is string => typeof value === "string"),
-    memo: toStringOrUndefined(formData.get("memo")),
+    memo: readFormString(formData, "memo"),
     insured: formData.get("insured") === "on" ? "on" : undefined,
-    insurer: toStringOrUndefined(formData.get("insurer")),
-    insurancePolicyNo: toStringOrUndefined(formData.get("insurancePolicyNo")),
-    safetyMemo: toStringOrUndefined(formData.get("safetyMemo")),
+    insurer: readFormString(formData, "insurer"),
+    insurancePolicyNo: readFormString(formData, "insurancePolicyNo"),
+    safetyMemo: readFormString(formData, "safetyMemo"),
   };
 }
 
@@ -475,12 +474,9 @@ export type ClassCancelFormState = {
  * 동일하게 값을 보존한다 — §2 참고.
  */
 function readCancelClassFormValues(formData: FormData): ClassCancelFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
-
   return {
-    cancelReason: toStringOrUndefined(formData.get("cancelReason")),
-    cancelDetail: toStringOrUndefined(formData.get("cancelDetail")),
+    cancelReason: readFormString(formData, "cancelReason"),
+    cancelDetail: readFormString(formData, "cancelDetail"),
   };
 }
 

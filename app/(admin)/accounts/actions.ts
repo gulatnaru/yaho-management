@@ -4,6 +4,7 @@ import { hash } from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import {
   accountCreateSchema,
   accountUpdateSchema,
@@ -39,16 +40,11 @@ export type PasswordResetState = {
 };
 
 function readAccountValues(formData: FormData): AccountFormValues {
-  const stringValue = (name: string) => {
-    const value = formData.get(name);
-    return typeof value === "string" ? value : undefined;
-  };
-
   return {
-    name: stringValue("name"),
-    email: stringValue("email"),
-    role: stringValue("role"),
-    teacherId: stringValue("teacherId"),
+    name: readFormString(formData, "name"),
+    email: readFormString(formData, "email"),
+    role: readFormString(formData, "role"),
+    teacherId: readFormString(formData, "teacherId"),
     isActive: formData.get("isActive") === "on",
   };
 }
