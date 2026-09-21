@@ -185,6 +185,16 @@ test.describe.serial("Phase 16 계정·권한 관리", () => {
   test("MANAGER는 비재무 운영 화면을 사용하지만 재무·계정 URL과 payload는 받지 않는다", async ({ page }) => {
     await login(page, managerEmail, password);
 
+    await page.goto("/dashboard");
+    await expect(page.getByTestId("summary-operation-reservations")).toHaveAttribute(
+      "href",
+      "/reservations",
+    );
+    await expect(page.getByTestId("summary-cancellations")).toHaveAttribute(
+      "href",
+      "/reservations?status=CANCELLED",
+    );
+
     for (const path of ["/dashboard", "/children", "/programs", "/teachers", "/classes", "/reservations"]) {
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
@@ -220,6 +230,15 @@ test.describe.serial("Phase 16 계정·권한 관리", () => {
 
   test("TEACHER는 배정 클래스 참가자 최소정보와 출결만 사용하고 IDOR는 차단된다", async ({ page }) => {
     await login(page, teacherEmail, password);
+    await page.goto("/dashboard");
+    await expect(page.getByTestId("summary-operation-reservations")).toContainText(/\d+명/);
+    await expect(page.getByTestId("summary-operation-reservations")).not.toHaveAttribute("href");
+    await expect(page.getByTestId("summary-cancellations")).toContainText(/\d+건/);
+    await expect(page.getByTestId("summary-cancellations")).not.toHaveAttribute("href");
+    await expect(page.getByTestId("summary-operation-reservations").getByRole("link")).toHaveCount(0);
+    await expect(page.getByTestId("summary-cancellations").getByRole("link")).toHaveCount(0);
+    await expectDenied(page, "/reservations");
+
     await page.goto(`/classes/${assignedClassId}`);
     await expect(page.getByText(`Phase16 배정 아이 ${suffix}`)).toBeVisible();
     await expect(page.getByText(/010-5555-6666/)).toBeVisible();

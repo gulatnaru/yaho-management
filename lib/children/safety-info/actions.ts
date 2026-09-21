@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import { childSafetyInfoInputSchema } from "./validation";
 
 export type SafetyInfoFormState = {
@@ -12,11 +13,6 @@ export type SafetyInfoFormState = {
   values?: Record<string, string | undefined>;
 };
 
-function readValue(formData: FormData, key: string) {
-  const value = formData.get(key);
-  return typeof value === "string" ? value : undefined;
-}
-
 export async function updateChildSafetyInfo(
   childId: string,
   _previousState: SafetyInfoFormState,
@@ -24,22 +20,22 @@ export async function updateChildSafetyInfo(
 ): Promise<SafetyInfoFormState> {
   const principal = await requireOperationalPrincipal();
   const parsed = childSafetyInfoInputSchema.safeParse({
-    allergies: readValue(formData, "allergies"),
-    emergencyNotes: readValue(formData, "emergencyNotes"),
-    emergencyContactName: readValue(formData, "emergencyContactName"),
-    emergencyContactPhone: readValue(formData, "emergencyContactPhone"),
-    emergencyContactRelation: readValue(formData, "emergencyContactRelation"),
+    allergies: readFormString(formData, "allergies"),
+    emergencyNotes: readFormString(formData, "emergencyNotes"),
+    emergencyContactName: readFormString(formData, "emergencyContactName"),
+    emergencyContactPhone: readFormString(formData, "emergencyContactPhone"),
+    emergencyContactRelation: readFormString(formData, "emergencyContactRelation"),
   });
 
   if (!parsed.success) {
     return {
       errors: parsed.error.flatten().fieldErrors,
       values: {
-        allergies: readValue(formData, "allergies"),
-        emergencyNotes: readValue(formData, "emergencyNotes"),
-        emergencyContactName: readValue(formData, "emergencyContactName"),
-        emergencyContactPhone: readValue(formData, "emergencyContactPhone"),
-        emergencyContactRelation: readValue(formData, "emergencyContactRelation"),
+        allergies: readFormString(formData, "allergies"),
+        emergencyNotes: readFormString(formData, "emergencyNotes"),
+        emergencyContactName: readFormString(formData, "emergencyContactName"),
+        emergencyContactPhone: readFormString(formData, "emergencyContactPhone"),
+        emergencyContactRelation: readFormString(formData, "emergencyContactRelation"),
       },
     };
   }

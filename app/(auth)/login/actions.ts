@@ -1,6 +1,6 @@
 "use server";
 
-import { AuthError } from "next-auth";
+import { CredentialsSignin } from "next-auth";
 import { signIn } from "@/auth";
 import { loginSchema } from "@/lib/validation/auth";
 
@@ -19,7 +19,7 @@ export async function loginAction(_: LoginState, formData: FormData): Promise<Lo
   try {
     await signIn("credentials", { ...result.data, redirectTo: "/dashboard" });
   } catch (error) {
-    if (error instanceof AuthError) {
+    if (error instanceof CredentialsSignin) {
       return { error: "이메일 또는 비밀번호가 올바르지 않습니다." };
     }
 

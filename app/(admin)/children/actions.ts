@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import { childInputSchema, type ChildInput } from "@/lib/validation/child";
 
 export type ChildFormValues = {
@@ -38,16 +39,13 @@ function parseChildForm(formData: FormData) {
  * 리셋하므로, 검증 실패 응답에 원본 값을 담아 폼이 defaultValue 대신 이 값을 우선 사용하게 한다.
  */
 function readChildFormValues(formData: FormData): ChildFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
-
   return {
-    name: toStringOrUndefined(formData.get("name")),
-    birthDate: toStringOrUndefined(formData.get("birthDate")),
-    gender: toStringOrUndefined(formData.get("gender")),
-    guardianName: toStringOrUndefined(formData.get("guardianName")),
-    guardianPhone: toStringOrUndefined(formData.get("guardianPhone")),
-    memo: toStringOrUndefined(formData.get("memo")),
+    name: readFormString(formData, "name"),
+    birthDate: readFormString(formData, "birthDate"),
+    gender: readFormString(formData, "gender"),
+    guardianName: readFormString(formData, "guardianName"),
+    guardianPhone: readFormString(formData, "guardianPhone"),
+    memo: readFormString(formData, "memo"),
   };
 }
 

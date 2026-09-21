@@ -26,6 +26,17 @@ test(reservation): add capacity tests
 ## 머지 전
 CI 통과 / QA PASS / Reviewer PASS / 미해결 CRITICAL·MAJOR 없음
 
+### Production schema gate
+- PR diff에서 `prisma/schema.prisma`와 `prisma/migrations/**` 변경 여부를 확인한다.
+- schema 변경이 없으면 `production-migrate`가 skip되고 최종 `production-schema-gate`가 성공했는지 확인한다. 이 경로에서는 Production DB에 접속하거나 변경하지 않는다.
+- schema 변경이 있으면 신규 migration만 포함됐는지, migration 이름과 exact PR head가 승인 대상과 같은지 확인한다. 기존 migration 수정·삭제나 migration 없는 schema 변경은 ship을 중단한다.
+- GitHub `production` Environment reviewer 승인을 Production migration의 명시적 승인으로 취급한다. `production-migrate`의 preflight, `prisma migrate deploy`, post-status가 모두 성공하고 최종 `production-schema-gate`가 성공하기 전에는 merge하지 않는다.
+- PR code가 Production secret과 함께 실행되지 않고 default branch의 trusted tooling과 exact-head migration payload만 사용되는지 확인한다.
+- Production에서 `prisma db push`, `prisma migrate reset`, `prisma db seed`, `prisma migrate resolve` 또는 자동 rollback을 실행하지 않는다.
+- migration은 merge 전 기존 application과 호환되는 expand 변경이어야 한다. 적용 후 PR이 중단되더라도 migration을 자동 rollback하지 않는다.
+- schema-changing PR merge 후 현재 Production alias가 exact merge SHA의 deployment를 가리키고 read-only migration status, smoke 직전·직후 동일 deployment ID/SHA 검증, invalid-login smoke가 모두 성공해야 release를 완료로 보고한다. 실패하면 Vercel READY와 무관하게 release incomplete로 보고하고 METRICS/정리를 진행하지 않는다.
+- migration 결과에는 environment와 migration 이름만 기록하고 URL, host identity, credential, cookie, token 또는 전체 HTML을 출력하지 않는다.
+
 ## 머지 후
 docs/METRICS.md 에 해당 PR 1행을 기록한다.
 CI 실패 횟수, CRITICAL / MAJOR 건수, QA 반려 횟수, 재작업 횟수, 원인 코드.

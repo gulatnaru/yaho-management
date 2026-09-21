@@ -148,6 +148,7 @@ test("반복 등록은 미리보기한 날짜와 공통 값을 한 번에 생성
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page);
     await page.goto("/classes/new");
+    await expect(page.getByRole("radiogroup", { name: "등록 방식" })).toBeVisible();
     await fillRecurringForm(page, {
       programId: program.id,
       teacherNames: teachers.map(({ name }) => name),

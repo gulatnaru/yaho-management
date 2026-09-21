@@ -12,7 +12,10 @@
     "test:e2e": "playwright test",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "release:schema-change": "tsx scripts/release/schema-change.ts",
+    "release:production-migration": "tsx scripts/release/production-migration.ts",
+    "release:production-smoke": "tsx scripts/release/production-smoke.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

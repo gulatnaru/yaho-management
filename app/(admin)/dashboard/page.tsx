@@ -93,7 +93,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </section>
       )}
 
-      <DashboardSummary financialMetrics={financialMetrics} metrics={todayMetrics} today={period.today} />
+      <DashboardSummary
+        canAccessReservations={principal.role !== "TEACHER"}
+        financialMetrics={financialMetrics}
+        metrics={todayMetrics}
+        today={period.today}
+      />
 
       <DashboardClassList
         classes={todayClasses}

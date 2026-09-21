@@ -1,3 +1,4 @@
+import * as React from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatKrw } from "@/lib/payments/format";
@@ -13,24 +14,32 @@ function SummaryCard({
   label: string;
   value: string;
   testId: string;
-  href: string;
+  href?: string;
   children?: React.ReactNode;
 }) {
+  const card = (
+    <Card className={`h-full min-h-24 ${href ? "transition-colors hover:bg-slate-50" : ""}`}>
+      <CardContent className="flex h-full min-w-0 flex-col justify-between gap-2 p-4">
+        <p className="text-xs font-medium text-slate-500">{label}</p>
+        <div className="min-w-0">
+          <p className="break-words text-lg font-bold leading-tight tabular-nums sm:text-xl">{value}</p>
+          {children}
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  if (!href) {
+    return <div data-testid={testId}>{card}</div>;
+  }
+
   return (
     <Link
       className="block min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2"
       data-testid={testId}
       href={href}
     >
-      <Card className="h-full min-h-24 transition-colors hover:bg-slate-50">
-        <CardContent className="flex h-full min-w-0 flex-col justify-between gap-2 p-4">
-          <p className="text-xs font-medium text-slate-500">{label}</p>
-          <div className="min-w-0">
-            <p className="break-words text-lg font-bold leading-tight tabular-nums sm:text-xl">{value}</p>
-            {children}
-          </div>
-        </CardContent>
-      </Card>
+      {card}
     </Link>
   );
 }
@@ -39,10 +48,12 @@ export function DashboardSummary({
   metrics,
   financialMetrics,
   today,
+  canAccessReservations,
 }: {
   metrics: DashboardOperationalMetrics;
   financialMetrics?: DashboardFinancialMetrics;
   today: string;
+  canAccessReservations: boolean;
 }) {
   return (
     <section aria-labelledby="today-summary-heading" className="space-y-3">
@@ -55,13 +66,13 @@ export function DashboardSummary({
           value={`${metrics.classCount}개`}
         />
         <SummaryCard
-          href="/reservations"
+          href={canAccessReservations ? "/reservations" : undefined}
           label="오늘 예약 현황"
           testId="summary-operation-reservations"
           value={`${metrics.operationReservationCount}명`}
         />
         <SummaryCard
-          href="/reservations?status=CANCELLED"
+          href={canAccessReservations ? "/reservations?status=CANCELLED" : undefined}
           label="오늘 취소"
           testId="summary-cancellations"
           value={`${metrics.cancellationCount}건`}

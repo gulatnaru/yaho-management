@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import { teacherInputSchema, type TeacherInput } from "@/lib/validation/teacher";
 
 export type TeacherFormValues = {
@@ -32,13 +33,10 @@ function parseTeacherForm(formData: FormData) {
  * 리셋하므로, 검증 실패 응답에 원본 값을 담아 폼이 defaultValue 대신 이 값을 우선 사용하게 한다.
  */
 function readTeacherFormValues(formData: FormData): TeacherFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
-
   return {
-    name: toStringOrUndefined(formData.get("name")),
-    phone: toStringOrUndefined(formData.get("phone")),
-    memo: toStringOrUndefined(formData.get("memo")),
+    name: readFormString(formData, "name"),
+    phone: readFormString(formData, "phone"),
+    memo: readFormString(formData, "memo"),
   };
 }
 

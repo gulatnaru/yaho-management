@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { readFormString } from "@/lib/forms/form-data";
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import {
   cancelReservationInputSchema,
@@ -46,13 +47,10 @@ export type ReservationFormState = {
 };
 
 function readReservationFormValues(formData: FormData): ReservationFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
-
   return {
-    classScheduleId: toStringOrUndefined(formData.get("classScheduleId")),
-    childId: toStringOrUndefined(formData.get("childId")),
-    memo: toStringOrUndefined(formData.get("memo")),
+    classScheduleId: readFormString(formData, "classScheduleId"),
+    childId: readFormString(formData, "childId"),
+    memo: readFormString(formData, "memo"),
   };
 }
 
@@ -153,12 +151,9 @@ export type ReservationCancelFormState = {
 };
 
 function readCancelReservationFormValues(formData: FormData): ReservationCancelFormValues {
-  const toStringOrUndefined = (value: FormDataEntryValue | null) =>
-    typeof value === "string" ? value : undefined;
-
   return {
-    cancelReason: toStringOrUndefined(formData.get("cancelReason")),
-    cancelDetail: toStringOrUndefined(formData.get("cancelDetail")),
+    cancelReason: readFormString(formData, "cancelReason"),
+    cancelDetail: readFormString(formData, "cancelDetail"),
   };
 }
 

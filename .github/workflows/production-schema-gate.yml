@@ -1,0 +1,204 @@
+name: Production Schema Gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  detect-schema-change:
+    name: detect-schema-change
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.detect.outputs.kind }}
+      schema_change: ${{ steps.detect.outputs.schema_change }}
+      migration_names: ${{ steps.detect.outputs.migration_names }}
+      same_repository: ${{ steps.repository.outputs.same_repository }}
+    steps:
+      - name: Reject forked pull requests from the Production gate
+        id: repository
+        env:
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$HEAD_REPOSITORY" == "$BASE_REPOSITORY" ]]; then
+            echo "same_repository=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "same_repository=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout trusted release tooling
+        if: steps.repository.outputs.same_repository == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: trusted
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Setup Node
+        if: steps.repository.outputs.same_repository == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: trusted/package-lock.json
+
+      - name: Install trusted dependencies
+        if: steps.repository.outputs.same_repository == 'true'
+        working-directory: trusted
+        run: npm ci --ignore-scripts
+
+      - name: Fetch exact pull request head
+        if: steps.repository.outputs.same_repository == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        working-directory: trusted
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Detect schema changes
+        if: steps.repository.outputs.same_repository == 'true'
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        working-directory: trusted
+        run: >-
+          npx tsx scripts/release/schema-change.ts
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+
+  production-migrate:
+    name: production-migrate
+    needs: detect-schema-change
+    if: >-
+      needs.detect-schema-change.result == 'success' &&
+      needs.detect-schema-change.outputs.same_repository == 'true' &&
+      needs.detect-schema-change.outputs.schema_change == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-migration
+      cancel-in-progress: false
+    steps:
+      - name: Checkout trusted release tooling
+        uses: actions/checkout@v4
+        with:
+          path: trusted
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Checkout approved migration payload
+        uses: actions/checkout@v4
+        with:
+          path: payload
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: |
+            prisma/schema.prisma
+            prisma/migrations
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: trusted/package-lock.json
+
+      - name: Install trusted dependencies
+        working-directory: trusted
+        run: npm ci --ignore-scripts
+
+      - name: Generate trusted Prisma Client
+        working-directory: trusted
+        run: npx prisma generate --schema prisma/schema.prisma
+
+      - name: Recheck exact pull request head after approval
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          current_head=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')
+          test "$current_head" = "$EXPECTED_HEAD_SHA"
+          test "$(git -C payload rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+
+      - name: Production migration preflight
+        working-directory: trusted
+        env:
+          EXPECTED_MIGRATIONS: ${{ needs.detect-schema-change.outputs.migration_names }}
+          PRODUCTION_DB_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_IDENTITY_SHA256 }}
+          PRODUCTION_DB_RUNTIME_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_RUNTIME_IDENTITY_SHA256 }}
+          PRODUCTION_DIRECT_URL: ${{ secrets.PRODUCTION_DIRECT_URL }}
+        run: >-
+          npx tsx scripts/release/production-migration.ts preflight
+          --schema ../payload/prisma/schema.prisma
+          --migrations ../payload/prisma/migrations
+
+      - name: Recheck exact pull request head before migration
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          current_head=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')
+          test "$current_head" = "$EXPECTED_HEAD_SHA"
+
+      - name: Apply approved Production migrations
+        working-directory: trusted
+        env:
+          EXPECTED_MIGRATIONS: ${{ needs.detect-schema-change.outputs.migration_names }}
+          PRODUCTION_DB_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_IDENTITY_SHA256 }}
+          PRODUCTION_DB_RUNTIME_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_RUNTIME_IDENTITY_SHA256 }}
+          PRODUCTION_DIRECT_URL: ${{ secrets.PRODUCTION_DIRECT_URL }}
+        run: >-
+          npx tsx scripts/release/production-migration.ts deploy
+          --schema ../payload/prisma/schema.prisma
+          --migrations ../payload/prisma/migrations
+
+      - name: Verify Production migration status
+        working-directory: trusted
+        env:
+          EXPECTED_MIGRATIONS: ${{ needs.detect-schema-change.outputs.migration_names }}
+          PRODUCTION_DB_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_IDENTITY_SHA256 }}
+          PRODUCTION_DB_RUNTIME_IDENTITY_SHA256: ${{ secrets.PRODUCTION_DB_RUNTIME_IDENTITY_SHA256 }}
+          PRODUCTION_DIRECT_URL: ${{ secrets.PRODUCTION_DIRECT_URL }}
+        run: >-
+          npx tsx scripts/release/production-migration.ts verify
+          --schema ../payload/prisma/schema.prisma
+          --migrations ../payload/prisma/migrations
+
+      - name: Confirm pull request head did not change during migration
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          current_head=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')
+          test "$current_head" = "$EXPECTED_HEAD_SHA"
+
+  production-schema-gate:
+    name: production-schema-gate
+    needs: [detect-schema-change, production-migrate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate final Production schema gate
+        env:
+          DETECT_RESULT: ${{ needs.detect-schema-change.result }}
+          MIGRATE_RESULT: ${{ needs.production-migrate.result }}
+          SAME_REPOSITORY: ${{ needs.detect-schema-change.outputs.same_repository }}
+          SCHEMA_CHANGE: ${{ needs.detect-schema-change.outputs.schema_change }}
+        run: |
+          test "$DETECT_RESULT" = "success"
+          test "$SAME_REPOSITORY" = "true"
+          if [[ "$SCHEMA_CHANGE" == "true" ]]; then
+            test "$MIGRATE_RESULT" = "success"
+          else
+            test "$SCHEMA_CHANGE" = "false"
+            test "$MIGRATE_RESULT" = "skipped"
+          fi

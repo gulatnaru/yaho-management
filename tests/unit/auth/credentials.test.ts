@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { authenticateOperator, type CredentialLookupClient } from "@/lib/auth/credentials";
+import {
+  authenticateOperator,
+  INVALID_CREDENTIAL_PASSWORD_HASH,
+  type CredentialLookupClient,
+} from "@/lib/auth/credentials";
 
 function credentialClient(
   user: Awaited<ReturnType<CredentialLookupClient["user"]["findUnique"]>>,
@@ -20,6 +24,10 @@ const baseUser = {
 };
 
 describe("authenticateOperator", () => {
+  it("uses a precomputed bcrypt cost-12 dummy hash", () => {
+    expect(INVALID_CREDENTIAL_PASSWORD_HASH).toMatch(/^\$2[aby]\$12\$/);
+  });
+
   it("returns identity and authVersion without returning a role", async () => {
     const result = await authenticateOperator(
       { email: baseUser.email, password: "valid-password" },
@@ -69,6 +77,7 @@ describe("authenticateOperator", () => {
         comparePassword,
       ),
     ).resolves.toBeNull();
+    expect(comparePassword).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed for inactive, inconsistent, or invalid-version accounts", async () => {
@@ -77,6 +86,7 @@ describe("authenticateOperator", () => {
       { ...baseUser, isActive: false },
       { ...baseUser, teacherId: "teacher-1", teacher: { id: "teacher-1", isActive: true } },
       { ...baseUser, authVersion: 0 },
+      { ...baseUser, role: "UNKNOWN" },
     ]) {
       await expect(
         authenticateOperator(
@@ -86,5 +96,64 @@ describe("authenticateOperator", () => {
         ),
       ).resolves.toBeNull();
     }
+    expect(comparePassword).toHaveBeenCalledTimes(4);
+    for (const call of comparePassword.mock.calls) {
+      expect(call).toEqual(["valid-password", "stored-hash"]);
+    }
+  });
+
+  it("performs one dummy password comparison for a missing User", async () => {
+    const comparePassword = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      authenticateOperator(
+        { email: "missing@yaho.test", password: "valid-password" },
+        credentialClient(null),
+        comparePassword,
+      ),
+    ).resolves.toBeNull();
+
+    expect(comparePassword).toHaveBeenCalledTimes(1);
+    expect(comparePassword).toHaveBeenCalledWith("valid-password", INVALID_CREDENTIAL_PASSWORD_HASH);
+  });
+
+  it("performs one dummy password comparison when the stored password is null", async () => {
+    const comparePassword = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      authenticateOperator(
+        { email: baseUser.email, password: "valid-password" },
+        credentialClient({ ...baseUser, password: null }),
+        comparePassword,
+      ),
+    ).resolves.toBeNull();
+
+    expect(comparePassword).toHaveBeenCalledTimes(1);
+    expect(comparePassword).toHaveBeenCalledWith("valid-password", INVALID_CREDENTIAL_PASSWORD_HASH);
+  });
+
+  it("compares the real hash exactly once for valid wrong and correct passwords", async () => {
+    const wrongCompare = vi.fn().mockResolvedValue(false);
+    const correctCompare = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      authenticateOperator(
+        { email: baseUser.email, password: "wrong-password" },
+        credentialClient(baseUser),
+        wrongCompare,
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      authenticateOperator(
+        { email: baseUser.email, password: "valid-password" },
+        credentialClient(baseUser),
+        correctCompare,
+      ),
+    ).resolves.toMatchObject({ id: baseUser.id });
+
+    expect(wrongCompare).toHaveBeenCalledOnce();
+    expect(wrongCompare).toHaveBeenCalledWith("wrong-password", "stored-hash");
+    expect(correctCompare).toHaveBeenCalledOnce();
+    expect(correctCompare).toHaveBeenCalledWith("valid-password", "stored-hash");
   });
 });
