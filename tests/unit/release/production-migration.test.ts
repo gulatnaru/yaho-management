@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   assertExpectedRuntimeFingerprint,
   assertPostMigrationState,
   assertExpectedFingerprint,
+  crlfVariantFromLfBytes,
   databaseIdentityFingerprint,
   evaluateMigrationState,
   migrationChecksum,
@@ -35,6 +37,10 @@ function appliedRow(root: string, name: string) {
     finished_at: new Date("2026-01-01T00:00:00Z"),
     rolled_back_at: null,
   };
+}
+
+function checksum(contents: string | Buffer): string {
+  return createHash("sha256").update(contents).digest("hex");
 }
 
 describe("Production migration identity", () => {
@@ -161,6 +167,198 @@ describe("Production migration identity", () => {
 describe("Production migration state", () => {
   const baseline = "20260820050000_init";
   const expected = "20261001090000_add_example";
+  const legacyCrlfMigration = "20260825090000_phase6_safety_attendance";
+
+  it("accepts an exact raw-byte checksum", () => {
+    const root = migrationFixture([baseline, expected]);
+
+    expect(
+      evaluateMigrationState({
+        repositoryMigrations: [baseline, expected],
+        rows: [appliedRow(root, baseline)],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toMatchObject({ appliedMigrations: [baseline] });
+  });
+
+  it("accepts the legacy Phase 6 CRLF checksum for an LF repository file", () => {
+    const root = migrationFixture([legacyCrlfMigration, expected]);
+    const lfSql = `-- ${legacyCrlfMigration}\nSELECT 1;\n`;
+    const crlfChecksum = checksum(lfSql.replace(/\n/g, "\r\n"));
+
+    expect(
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [{ ...appliedRow(root, legacyCrlfMigration), checksum: crlfChecksum }],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toMatchObject({ appliedMigrations: [legacyCrlfMigration] });
+  });
+
+  it("converts only lone LF bytes and preserves CRLF, lone CR, and other bytes", () => {
+    const input = Buffer.from([0x41, 0x0a, 0x42, 0x0d, 0x0a, 0x43, 0x0d, 0x44]);
+    const expectedBytes = Buffer.from([
+      0x41, 0x0d, 0x0a, 0x42, 0x0d, 0x0a, 0x43, 0x0d, 0x44,
+    ]);
+
+    expect(crlfVariantFromLfBytes(input)).toEqual(expectedBytes);
+  });
+
+  it("preserves invalid UTF-8 bytes and rejects the former string-roundtrip candidate", () => {
+    const root = migrationFixture([legacyCrlfMigration, expected]);
+    const invalidUtf8Sql = Buffer.from([
+      0x2d, 0x2d, 0xff, 0x0a, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x31, 0x3b, 0x0a,
+    ]);
+    const bytePreservingCrlf = Buffer.from([
+      0x2d, 0x2d, 0xff, 0x0d, 0x0a, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x31, 0x3b,
+      0x0d, 0x0a,
+    ]);
+    writeFileSync(
+      path.join(root, legacyCrlfMigration, "migration.sql"),
+      invalidUtf8Sql,
+    );
+
+    expect(crlfVariantFromLfBytes(invalidUtf8Sql)).toEqual(bytePreservingCrlf);
+    expect(
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [
+          {
+            ...appliedRow(root, legacyCrlfMigration),
+            checksum: checksum(bytePreservingCrlf),
+          },
+        ],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toMatchObject({ appliedMigrations: [legacyCrlfMigration] });
+
+    const buggyStringRoundtrip = Buffer.from(
+      invalidUtf8Sql.toString("utf8").replace(/\n/g, "\r\n"),
+      "utf8",
+    );
+    expect(buggyStringRoundtrip).not.toEqual(bytePreservingCrlf);
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [
+          {
+            ...appliedRow(root, legacyCrlfMigration),
+            checksum: checksum(buggyStringRoundtrip),
+          },
+        ],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
+
+  it("rejects a CRLF checksum for a migration outside the legacy allowlist", () => {
+    const root = migrationFixture([baseline, expected]);
+    const lfSql = `-- ${baseline}\nSELECT 1;\n`;
+
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [baseline, expected],
+        rows: [{ ...appliedRow(root, baseline), checksum: checksum(lfSql.replace(/\n/g, "\r\n")) }],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
+
+  it.each([
+    `prefix-${legacyCrlfMigration}`,
+    `${legacyCrlfMigration}-suffix`,
+  ])("rejects the CRLF fallback for a similar migration name: %s", (migrationName) => {
+    const root = migrationFixture([migrationName, expected]);
+    const lfSql = `-- ${migrationName}\nSELECT 1;\n`;
+
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [migrationName, expected],
+        rows: [
+          {
+            ...appliedRow(root, migrationName),
+            checksum: checksum(lfSql.replace(/\n/g, "\r\n")),
+          },
+        ],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
+
+  it("rejects changed SQL content for the legacy Phase 6 migration", () => {
+    const root = migrationFixture([legacyCrlfMigration, expected]);
+    const changedCrlfSql = `-- ${legacyCrlfMigration}\r\nSELECT 2;\r\n`;
+
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [{ ...appliedRow(root, legacyCrlfMigration), checksum: checksum(changedCrlfSql) }],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
+
+  it("rejects final-newline changes even for the legacy Phase 6 migration", () => {
+    const root = migrationFixture([legacyCrlfMigration, expected]);
+    const withoutFinalNewline = `-- ${legacyCrlfMigration}\r\nSELECT 1;`;
+
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [{ ...appliedRow(root, legacyCrlfMigration), checksum: checksum(withoutFinalNewline) }],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
+
+  it.each([
+    ["comment", `-- changed comment\r\nSELECT 1;\r\n`],
+    ["whitespace", `-- ${legacyCrlfMigration}\r\nSELECT  1;\r\n`],
+    ["extra newline", `-- ${legacyCrlfMigration}\r\nSELECT 1;\r\n\r\n`],
+    ["case", `-- ${legacyCrlfMigration}\r\nselect 1;\r\n`],
+  ])("rejects a legacy Phase 6 %s change", (_label, changedSql) => {
+    const root = migrationFixture([legacyCrlfMigration, expected]);
+
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [
+          {
+            ...appliedRow(root, legacyCrlfMigration),
+            checksum: checksum(changedSql),
+          },
+        ],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
+
+  it("rejects an arbitrary checksum for the legacy Phase 6 migration", () => {
+    const root = migrationFixture([legacyCrlfMigration, expected]);
+
+    expect(() =>
+      evaluateMigrationState({
+        repositoryMigrations: [legacyCrlfMigration, expected],
+        rows: [
+          {
+            ...appliedRow(root, legacyCrlfMigration),
+            checksum: "0".repeat(64),
+          },
+        ],
+        expectedMigrations: [expected],
+        migrationRoot: root,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "APPLIED_MIGRATION_CHANGED" }));
+  });
 
   it("allows exactly the expected pending migration", () => {
     const root = migrationFixture([baseline, expected]);

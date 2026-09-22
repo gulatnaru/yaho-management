@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { PrismaClient } from "@prisma/client";
 
 const PHASE_16_MIGRATION = "20260913170000_phase16_account_access_management";
+const LEGACY_CRLF_MIGRATION = "20260825090000_phase6_safety_attendance";
 const PREFLIGHT_MARKER = /^--\s*yaho-release-preflight:\s*([a-z0-9-]+)\s*$/gim;
 
 type MigrationRow = {
@@ -159,6 +160,43 @@ export function migrationChecksum(migrationRoot: string, migrationName: string):
     .digest("hex");
 }
 
+export function crlfVariantFromLfBytes(input: Buffer): Buffer {
+  let insertedCarriageReturns = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    if (input[index] === 0x0a && (index === 0 || input[index - 1] !== 0x0d)) {
+      insertedCarriageReturns += 1;
+    }
+  }
+
+  const output = Buffer.alloc(input.length + insertedCarriageReturns);
+  let outputIndex = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    const byte = input[index];
+    if (byte === 0x0a && (index === 0 || input[index - 1] !== 0x0d)) {
+      output[outputIndex] = 0x0d;
+      outputIndex += 1;
+    }
+    output[outputIndex] = byte;
+    outputIndex += 1;
+  }
+  return output;
+}
+
+export function migrationChecksumMatchesApplied(
+  migrationRoot: string,
+  migrationName: string,
+  storedChecksum: string,
+): boolean {
+  const migrationFile = path.join(migrationRoot, migrationName, "migration.sql");
+  const raw = readFileSync(migrationFile);
+  const rawChecksum = createHash("sha256").update(raw).digest("hex");
+  if (rawChecksum === storedChecksum) return true;
+  if (migrationName !== LEGACY_CRLF_MIGRATION) return false;
+
+  const crlfVariant = crlfVariantFromLfBytes(raw);
+  return createHash("sha256").update(crlfVariant).digest("hex") === storedChecksum;
+}
+
 export function evaluateMigrationState({
   repositoryMigrations,
   rows,
@@ -211,7 +249,7 @@ export function evaluateMigrationState({
   }
 
   for (const [name, row] of appliedByName) {
-    if (row.checksum !== migrationChecksum(migrationRoot, name)) {
+    if (!migrationChecksumMatchesApplied(migrationRoot, name, row.checksum)) {
       throw new ProductionMigrationError(
         "APPLIED_MIGRATION_CHANGED",
         `Applied migration checksum differs from the approved payload: ${name}`,
