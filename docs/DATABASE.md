@@ -72,7 +72,7 @@ DB 레벨에서 강제한다.
 - ChildConsent: unique 제약 없음. 동의/철회마다 행을 쌓는 append-only 구조
 - ClassSchedule: 보험 가입 여부 / 보험사 / 증권번호 컬럼 보유
 - ReservationApplicationLink: `unique(classScheduleId)`, `unique(token)`, 토큰 길이 32자 이상
-- ReservationApplication: 필수 확인 3종(프로그램 이용사항, 개인정보, 법정대리인)은 항상 true(사진 공유·홍보 활용은 선택, ADR-055), 개인정보 항목(아이·보호자·관계)은 파기 전 필수이고 파기 후에는 요청사항과 함께 NULL이며 처리 대기 신청은 파기할 수 없다, 입금 확인 시각·처리자는 함께 존재, 상태별 필수 컬럼 일관성(SUBMITTED는 처리 정보 없음, CONFIRMED는 입금 확인·아이·예약 있음, REJECTED/CANCELLED는 사유 있음)을 CHECK로 보장한다. `reservationId`는 ADR-024 재예약 때문에 unique가 아니다
+- ReservationApplication: 필수 확인 4종(프로그램 이용사항, 개인정보, 법정대리인, 취소 및 환불규정)은 항상 true(사진 공유·홍보 활용은 선택, ADR-055/056), 개인정보 항목(아이·보호자·관계)은 파기 전 필수이고 파기 후에는 요청사항과 함께 NULL이며 처리 대기 신청은 파기할 수 없다, 입금 확인 시각·처리자는 함께 존재, 상태별 필수 컬럼 일관성(SUBMITTED는 처리 정보 없음, CONFIRMED는 입금 확인·아이·예약 있음, REJECTED/CANCELLED는 사유 있음)을 CHECK로 보장한다. `reservationId`는 ADR-024 재예약 때문에 unique가 아니다
 - ChildConsent.reservationApplicationId: 온라인 신청에서 받은 동의의 출처. 확정 시에만 채워진다
 
 ## Payment 구조 주석
@@ -109,15 +109,16 @@ ChildConsent 는 append-only 다. 기존 행을 수정하거나 삭제하지 않
 - `recordedAt` = 신청 제출 시각, `recordedById` = 확정한 ADMIN, `reservationApplicationId` = 출처 신청
 - 개인정보는 AGREED
 - 사진 공유·홍보 활용은 동의했으면 AGREED, 동의하지 않았고 기존 아이의 현재 상태가 AGREED 이면 REVOKED, 그 외에는 DECLINED 를 추가한다(ADR-055)
-- 프로그램 이용사항·법정대리인 확인은 ChildConsent 가 아니라 신청의 확인 기록으로 남는다
+- 프로그램 이용사항·법정대리인·취소 및 환불규정 확인은 ChildConsent 가 아니라 신청의 확인 기록으로 남는다
 
-## 예약 신청 개인정보 보관·파기 (ADR-055)
+## 예약 신청 개인정보 보관·파기 (ADR-055, ADR-056)
 - 보관 만료일은 저장하지 않고 조회 시점에 계산한다(`lib/reservation-applications/retention.ts`).
   - 처리 대기·반려·취소: 신청 클래스의 KST 수업일 + 1년
-  - 확정: 연결된 아이의 마지막 프로그램 이용일(KST) + 3년. 이용일은 운영 예약 기준(출결 없는 사전 취소·취소된 클래스 제외)의 가장 늦은 클래스 시작일이며 없으면 신청 클래스일이다.
+  - 확정: 연결된 아이의 마지막 예약 수업일(KST) + 3년. 수업 전에 취소된 예약(CANCELLED, 출결 없음)과 취소된 클래스의 예약을 뺀 가장 최근 클래스 날짜이며 NO_SHOW·출결 후 취소는 포함한다. 유효한 예약이 없을 때만 신청 대상 클래스 날짜를 쓴다(`lib/reservation-applications/last-reserved-class.ts`).
   - 만료일 당일까지 보관하고 다음 날부터 파기 대상이다.
 - ADMIN이 `/reservation-applications/retention` 에서 파기한다. 자동 배치는 없다. 파기는 `personalDataPurgedAt/ById` 를 기록하고 아이·보호자 항목, 아이와의 관계, 요청사항을 NULL 로 바꾼다. 신청 행과 상태·처리 기록·동의 여부·문구 버전은 남는다.
-- 처리 대기 신청은 먼저 반려·취소해야 한다. 확정된 아이(Child)와 ChildConsent 는 이 경로로 지워지지 않는다(REQUIREMENTS 24장).
+- 처리 대기 신청은 먼저 반려·취소해야 한다. 확정된 아이(Child)와 ChildConsent 는 이 경로로 지워지지 않는다. 확정 고객 정보의 3년 파기 방식은 REQUIREMENTS Phase 18 Open Question이며, 해소 전까지 Production 신청 접수는 닫혀 있다.
+- Child 는 Reservation·ReservationApplication 이 RESTRICT 로 참조하고 Reservation 은 PaymentItem·Refund 가 RESTRICT 로 참조한다. 따라서 3년 파기는 Child·예약 삭제(cascade)가 아니라 Child 를 제자리에서 비식별화하는 방식을 전제로 한다.
 
 ## 민감정보 취급 규칙
 `ChildSafetyInfo`는 다음을 반드시 지킨다.
