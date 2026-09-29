@@ -1,0 +1,200 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { WarningBanner } from "@/components/ui/warning-banner";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { formatKstDate, formatKstDateTime, formatKstDateTimeRange } from "@/lib/classes/datetime";
+import { getClassDisplayStatus } from "@/lib/classes/status";
+import { APPLICATION_GENDER_LABEL, APPLICATION_STATUS_LABEL } from "@/lib/reservation-applications/constants";
+import {
+  getReservationApplicationDetail,
+  listChildCandidatesForApplication,
+} from "@/lib/reservation-applications/queries";
+import { toTelHref } from "@/lib/shared/contact";
+import { ApplicationConfirmForm, type ApplicationChildOption } from "../_components/application-confirm-form";
+import { ApplicationResolveForm } from "../_components/application-resolve-form";
+import { APPLICATION_STATUS_VARIANT } from "../_components/application-table";
+import { DepositConfirmButton } from "../_components/deposit-confirm-button";
+
+export const dynamic = "force-dynamic";
+
+const CLASS_STATUS_LABEL = { SCHEDULED: "예정", CANCELLED: "취소", ENDED: "완료" } as const;
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-sm text-slate-500">{label}</dt>
+      <dd className="break-words">{children}</dd>
+    </div>
+  );
+}
+
+export default async function ReservationApplicationDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireAdminPrincipal();
+  const { id } = await params;
+  const application = await getReservationApplicationDetail(id);
+  if (!application) notFound();
+
+  const isPending = application.status === "SUBMITTED";
+  const canConfirm = isPending && application.depositConfirmedAt !== null;
+  const classStatus = getClassDisplayStatus(application.classSchedule);
+  const candidates = canConfirm ? await listChildCandidatesForApplication(application) : [];
+  const childOptions: ApplicationChildOption[] = candidates.map((candidate) => ({
+    id: candidate.id,
+    name: candidate.name,
+    birthDateLabel: candidate.birthDate ? formatKstDate(candidate.birthDate) : "미입력",
+    guardianPhone: candidate.guardianPhone,
+    isActive: candidate.isActive,
+    matchLabel:
+      candidate.matchesName && candidate.matchesPhone
+        ? "이름·연락처 일치"
+        : candidate.matchesName
+          ? "이름 일치"
+          : "연락처 일치",
+  }));
+
+  return (
+    <section className="space-y-6">
+      <Link className="text-sm text-slate-500 hover:underline" href="/reservation-applications">
+        신청 목록으로
+      </Link>
+
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <h1 className="break-words text-2xl font-bold">{application.childName} 예약 신청</h1>
+        <Badge variant={APPLICATION_STATUS_VARIANT[application.status]}>
+          {APPLICATION_STATUS_LABEL[application.status]}
+        </Badge>
+      </div>
+
+      {application.isPossibleDuplicate ? (
+        <WarningBanner>같은 클래스에 같은 아이로 보이는 다른 신청이 있습니다. 중복 여부를 확인해주세요.</WarningBanner>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>신청 내용</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <Field label="아이 이름">{application.childName}</Field>
+            <Field label="생년월일">{formatKstDate(application.childBirthDate)}</Field>
+            <Field label="성별">{APPLICATION_GENDER_LABEL[application.childGender]}</Field>
+            <Field label="보호자 이름">{application.guardianName}</Field>
+            <Field label="보호자 연락처">
+              <a className="hover:underline" href={toTelHref(application.guardianPhone)}>
+                {application.guardianPhone}
+              </a>
+            </Field>
+            <Field label="신청 일시">{formatKstDateTime(application.submittedAt)}</Field>
+            <div className="min-w-0 sm:col-span-2">
+              <dt className="text-sm text-slate-500">요청사항</dt>
+              <dd className="whitespace-pre-wrap break-words">{application.requestNote || "없음"}</dd>
+            </div>
+          </dl>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>동의</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <Field label="개인정보 수집·이용">{application.privacyConsentAgreed ? "동의" : "미동의"}</Field>
+            <Field label="활동 사진 촬영 및 보호자 공유">
+              {application.photoShareConsentAgreed ? "동의" : "미동의"}
+            </Field>
+            <Field label="활동 사진 홍보·마케팅 활용">
+              {application.photoMarketingConsentAgreed ? "동의" : "미동의"}
+            </Field>
+            <Field label="동의 문구 버전">{application.consentVersion}</Field>
+          </dl>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>신청 클래스</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <Field label="프로그램">{application.classSchedule.program.name}</Field>
+            <Field label="일시">
+              {formatKstDateTimeRange(application.classSchedule.startsAt, application.classSchedule.endsAt)}
+            </Field>
+            <Field label="장소">{application.classSchedule.location}</Field>
+            <Field label="클래스 상태">{CLASS_STATUS_LABEL[classStatus]}</Field>
+          </dl>
+          <Link className="text-sm hover:underline" href={`/classes/${application.classSchedule.id}`}>
+            클래스 상세 보기
+          </Link>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>처리 기록</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p>
+            입금 확인:{" "}
+            {application.depositConfirmedAt
+              ? `${formatKstDateTime(application.depositConfirmedAt)} · ${application.depositConfirmedBy?.name ?? "-"}`
+              : "미확인"}
+          </p>
+          {application.resolvedAt ? (
+            <p>
+              {APPLICATION_STATUS_LABEL[application.status]}: {formatKstDateTime(application.resolvedAt)} ·{" "}
+              {application.resolvedBy?.name ?? "-"}
+            </p>
+          ) : null}
+          {application.resolutionNote ? (
+            <p className="whitespace-pre-wrap break-words">사유: {application.resolutionNote}</p>
+          ) : null}
+          {application.status === "CONFIRMED" && application.child && application.reservationId ? (
+            <div className="flex flex-col gap-2 md:flex-row md:gap-4">
+              <Link className="hover:underline" href={`/children/${application.child.id}`}>
+                아이 상세: {application.child.name}
+              </Link>
+              <Link className="hover:underline" href={`/reservations/${application.reservationId}`}>
+                예약 상세 보기
+              </Link>
+              <Link className="hover:underline" href={`/payments/new?reservationId=${application.reservationId}`}>
+                결제 등록
+              </Link>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {isPending ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>처리하기</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {classStatus !== "SCHEDULED" ? (
+              <WarningBanner>
+                취소되었거나 종료된 클래스라 예약으로 확정할 수 없습니다. 신청을 반려해주세요.
+              </WarningBanner>
+            ) : null}
+            {canConfirm ? (
+              <ApplicationConfirmForm
+                applicationId={application.id}
+                childOptions={childOptions}
+                defaultMemo={application.requestNote ?? ""}
+              />
+            ) : (
+              <DepositConfirmButton applicationId={application.id} />
+            )}
+            <div className="grid gap-6 border-t border-slate-100 pt-6 md:grid-cols-2">
+              <ApplicationResolveForm applicationId={application.id} kind="REJECTED" />
+              <ApplicationResolveForm applicationId={application.id} kind="CANCELLED" />
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+    </section>
+  );
+}

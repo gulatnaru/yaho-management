@@ -7,10 +7,14 @@ import { WarningBanner } from "@/components/ui/warning-banner";
 import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import {
   formatKstDate,
+  formatKstDateTime,
   formatKstDateTimeRange,
   formatKstTime,
 } from "@/lib/classes/datetime";
 import { getClassDetailForPrincipal } from "@/lib/classes/queries";
+import { getApplicationLinkAdminState } from "@/lib/reservation-applications/availability";
+import { getApplicationLinkForClass } from "@/lib/reservation-applications/queries";
+import { buildApplicationAvailabilityContext } from "@/lib/reservation-applications/runtime";
 import { getClassDisplayStatus, type ClassDisplayStatus } from "@/lib/classes/status";
 import { isUnderStaffed } from "@/lib/classes/teacher-warning";
 import {
@@ -20,6 +24,7 @@ import {
 } from "@/lib/reservations/queries";
 import { toTelHref } from "@/lib/shared/contact";
 import { cn } from "@/lib/utils";
+import { ApplicationLinkCard } from "../_components/application-link-card";
 import { ClassParticipantList } from "../_components/class-participant-list";
 
 const CLASS_LABEL: Record<ClassDisplayStatus, string> = {
@@ -47,13 +52,15 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
   const principal = await requireCurrentPrincipal();
   const isAdmin = principal.role === "ADMIN";
   const canManage = principal.role !== "TEACHER";
-  const [classDetail, reservations] = await Promise.all([
+  const [classDetail, reservations, applicationLink] = await Promise.all([
     getClassDetailForPrincipal(id, principal),
     isAdmin
       ? listReservationsByClassSchedule(id)
       : principal.role === "MANAGER"
         ? listOperationalReservationsByClassSchedule(id)
         : listTeacherReservationsByClassSchedule(id, principal),
+    // 예약 신청 링크는 ADMIN 전용이다(ADR-053). 다른 역할은 조회하지도 않는다.
+    isAdmin ? getApplicationLinkForClass(id) : Promise.resolve(null),
   ]);
   if (!classDetail) notFound();
 
@@ -132,6 +139,23 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
           </div>
         </CardContent>
       </Card>
+
+      {isAdmin ? (
+        <ApplicationLinkCard
+          classScheduleId={id}
+          link={
+            applicationLink
+              ? {
+                  token: applicationLink.token,
+                  isActive: applicationLink.isActive,
+                  issuedAtLabel: formatKstDateTime(applicationLink.issuedAt),
+                  issuedByName: applicationLink.issuedBy.name,
+                }
+              : null
+          }
+          state={getApplicationLinkAdminState(applicationLink, classDetail, buildApplicationAvailabilityContext(new Date()))}
+        />
+      ) : null}
 
       <Card>
         <CardHeader>

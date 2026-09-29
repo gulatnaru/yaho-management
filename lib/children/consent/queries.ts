@@ -8,6 +8,8 @@ const CONSENT_SELECT = {
   action: true,
   recordedAt: true,
   memo: true,
+  // Phase 18: 보호자가 온라인 예약 신청에서 동의한 기록인지 구분한다(ADR-054).
+  reservationApplicationId: true,
   recordedBy: { select: { name: true } },
 } as const;
 

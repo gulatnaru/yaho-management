@@ -269,6 +269,7 @@ export default async function ChildDetailPage({
                     {CONSENT_LABEL[record.consentType as ConsentType]} ·{" "}
                     {record.action === "AGREED" ? "동의" : "철회"} ·{" "}
                     {formatKstDateTime(record.recordedAt)} · {record.recordedBy?.name ?? "알 수 없음"}
+                    {record.reservationApplicationId ? " · 보호자 온라인 동의(예약 신청)" : null}
                   </li>
                 ))}
               </ul>
