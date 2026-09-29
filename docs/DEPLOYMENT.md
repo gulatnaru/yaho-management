@@ -36,9 +36,9 @@ Vercel 프로젝트 설정의 Environment Variables에 아래를 Production/Prev
 
 - 예약 신청(Phase 18, ADR-052) 설정값 6개는 하나라도 없거나 https가 아니면 공개 신청을 받지 않는다(fail closed). 값을 바꾸면 재배포한다.
 - Preview(`VERCEL_ENV=preview`)는 공유 DB(ADR-030)이므로 설정과 무관하게 공개 신청을 받지 않는다.
-- Production은 `lib/reservation-applications/consent-content.ts`의 동의 문구가 확정 원문(`isPlaceholder: false`)이고 `pendingDecisions`가 비어 있을 때만 공개 신청을 받는다. 2026-09-30 현재 확정 고객(Child)·동의이력의 3년 파기 방식 결정이 남아 있어 닫혀 있다(ADR-056).
-- Phase 18 migration 세 개(`20260929073840_phase18_reservation_applications`, `20260929150958_phase18_application_consent_retention`, `20260929155124_phase18_refund_terms_acknowledgement`)는 같은 release로 적용한다. 두 번째·세 번째 migration은 `ReservationApplication`이 비어 있지 않으면 스스로 중단한다. 로컬·Preview DB에 Phase 18 테스트 신청이 있으면 그 테스트 데이터를 먼저 지운다(Production은 첫 migration 직후라 비어 있다).
-- 신청 개인정보 보관기간 정리: ADMIN이 주기적으로(예: 월 1회) `/reservation-applications/retention`에서 만료 대상과 먼저 처리가 필요한 대기 신청을 확인하고 파기한다. 자동 배치는 없다(docs/DATABASE.md 참고).
+- Production은 `lib/reservation-applications/consent-content.ts`의 동의 문구가 확정 원문(`isPlaceholder: false`)이고 `pendingDecisions`가 비어 있을 때만 공개 신청을 받는다. 2026-09-30-r3 기준 pendingDecisions 는 비어 있으므로 아래 환경변수 6개가 등록되면 Production 접수가 열린다.
+- Phase 18 migration 네 개(`20260929073840_phase18_reservation_applications`, `20260929150958_phase18_application_consent_retention`, `20260929155124_phase18_refund_terms_acknowledgement`, `20260929162100_phase18_child_personal_data_purge`)는 같은 release로 적용한다. 네 번째는 기존 `Child` 에 nullable 컬럼과 파기된 행에만 걸리는 CHECK 를 더하는 expand-only 변경이다. 두 번째·세 번째 migration은 `ReservationApplication`이 비어 있지 않으면 스스로 중단한다. 로컬·Preview DB에 Phase 18 테스트 신청이 있으면 그 테스트 데이터를 먼저 지운다(Production은 첫 migration 직후라 비어 있다).
+- 개인정보 보관기간 정리: ADMIN이 주기적으로(예: 월 1회) `/reservation-applications/retention`에서 만료된 신청(수업일+1년), 만료된 확정 고객(마지막 예약 수업일+5년), 먼저 처리가 필요한 대기 신청을 확인하고 파기한다. 자동 배치는 없으므로 이 정리를 거르면 만료된 개인정보가 남는다(docs/DATABASE.md 참고).
 
 - `AUTH_SECRET`은 Production과 Preview가 같은 값을 쓰지 않는다 — 한쪽이 유출돼도 다른 환경의 세션을 위조할 수 없어야 한다.
 - `NEXTAUTH_URL`은 두 환경 모두 값을 채우지 않고 비워 둔다. Vercel은 요청 헤더로 배포 URL을 자동 감지하므로, 값을 채우면 오히려 PR마다 달라지는 Preview URL과 어긋나 인증이 깨질 수 있다.

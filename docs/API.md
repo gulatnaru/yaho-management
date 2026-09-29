@@ -73,5 +73,5 @@ GET    /api/revenue/by-class
 
 ## Reservation Applications (Phase 18, Server Actions)
 - 공개(인증 없음): `GET /apply/:token` 신청 화면, `submitReservationApplication(token)` 제출, `GET /apply/complete` 완료 안내. 대상 클래스는 토큰으로만 결정하고, 무효·중지·마감은 같은 문구로 닫는다(ADR-052).
-- ADMIN 전용: `issueApplicationLink` / `stopApplicationLink`(클래스 상세), `confirmApplicationDeposit`, `confirmReservationApplication`, `rejectReservationApplication`, `cancelReservationApplication`(`/reservation-applications`), `purgeExpiredApplications`(`/reservation-applications/retention`, ADR-055). MANAGER·TEACHER는 서버에서 차단한다(ADR-053).
+- ADMIN 전용: `issueApplicationLink` / `stopApplicationLink`(클래스 상세), `confirmApplicationDeposit`, `confirmReservationApplication`, `rejectReservationApplication`, `cancelReservationApplication`(`/reservation-applications`), `purgeExpiredPersonalData`(`/reservation-applications/retention` — 만료 신청과 확정 고객 파기, ADR-055~057). MANAGER·TEACHER는 서버에서 차단한다(ADR-053).
 - 확정은 신청 행 잠금 후 기존 예약 생성 규칙을 같은 트랜잭션에서 실행하고 Payment는 만들지 않는다.

@@ -111,14 +111,19 @@ ChildConsent 는 append-only 다. 기존 행을 수정하거나 삭제하지 않
 - 사진 공유·홍보 활용은 동의했으면 AGREED, 동의하지 않았고 기존 아이의 현재 상태가 AGREED 이면 REVOKED, 그 외에는 DECLINED 를 추가한다(ADR-055)
 - 프로그램 이용사항·법정대리인·취소 및 환불규정 확인은 ChildConsent 가 아니라 신청의 확인 기록으로 남는다
 
-## 예약 신청 개인정보 보관·파기 (ADR-055, ADR-056)
+## 개인정보 보관·파기 (ADR-055~057)
 - 보관 만료일은 저장하지 않고 조회 시점에 계산한다(`lib/reservation-applications/retention.ts`).
   - 처리 대기·반려·취소: 신청 클래스의 KST 수업일 + 1년
-  - 확정: 연결된 아이의 마지막 예약 수업일(KST) + 3년. 수업 전에 취소된 예약(CANCELLED, 출결 없음)과 취소된 클래스의 예약을 뺀 가장 최근 클래스 날짜이며 NO_SHOW·출결 후 취소는 포함한다. 유효한 예약이 없을 때만 신청 대상 클래스 날짜를 쓴다(`lib/reservation-applications/last-reserved-class.ts`).
+  - 확정 고객(확정 신청과 그 아이의 개인정보·동의이력): 아이의 마지막 예약 수업일(KST) + 5년. 수업 전에 취소된 예약(CANCELLED, 출결 없음)과 취소된 클래스의 예약을 뺀 가장 최근 클래스 날짜이며 NO_SHOW·출결 후 취소는 포함한다. 유효한 예약이 없을 때만 (가장 최근) 확정 신청의 대상 클래스 날짜를 쓰고, 둘 다 없는 아이는 대상이 아니다(`lib/reservation-applications/last-reserved-class.ts`, `retention.ts`).
   - 만료일 당일까지 보관하고 다음 날부터 파기 대상이다.
 - ADMIN이 `/reservation-applications/retention` 에서 파기한다. 자동 배치는 없다. 파기는 `personalDataPurgedAt/ById` 를 기록하고 아이·보호자 항목, 아이와의 관계, 요청사항을 NULL 로 바꾼다. 신청 행과 상태·처리 기록·동의 여부·문구 버전은 남는다.
-- 처리 대기 신청은 먼저 반려·취소해야 한다. 확정된 아이(Child)와 ChildConsent 는 이 경로로 지워지지 않는다. 확정 고객 정보의 3년 파기 방식은 REQUIREMENTS Phase 18 Open Question이며, 해소 전까지 Production 신청 접수는 닫혀 있다.
-- Child 는 Reservation·ReservationApplication 이 RESTRICT 로 참조하고 Reservation 은 PaymentItem·Refund 가 RESTRICT 로 참조한다. 따라서 3년 파기는 Child·예약 삭제(cascade)가 아니라 Child 를 제자리에서 비식별화하는 방식을 전제로 한다.
+- 처리 대기 신청은 먼저 반려·취소해야 한다.
+- 확정 고객 파기(`server/reservation-applications/retention.ts`, 한 트랜잭션):
+  - Child 는 삭제하지 않고 비식별화한다: name `(파기됨)`, birthDate·guardianName·guardianPhone·memo NULL, gender UNSPECIFIED, isActive false, `personalDataPurgedAt/ById` 기록. CHECK `child_purged_personal_data_cleared` 가 파기된 행의 상태를 보장한다.
+  - ChildConsent·ChildSafetyInfo·Relationship 행을 삭제한다(ChildConsent append-only 의 유일한 예외, ADR-057).
+  - Reservation.memo·cancelDetail 을 NULL 로 바꾸고 해당 아이의 확정 신청 사본도 파기한다.
+  - Reservation·출결·Payment·PaymentItem·Refund 행과 금액·상태·일시는 유지한다. Payment.payerName·memo, Refund.reasonDetail 은 거래기록으로 유지한다(법정 보존, 별도 과제).
+- Child 는 Reservation·ReservationApplication 이, Reservation 은 PaymentItem·Refund 가 RESTRICT 로 참조하므로 cascade delete 를 쓰지 않는다. 비식별화된 아이는 수정·재활성화·동의/안전정보 기록·새 예약이 서버에서 거부된다.
 
 ## 민감정보 취급 규칙
 `ChildSafetyInfo`는 다음을 반드시 지킨다.
