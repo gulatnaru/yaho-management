@@ -490,6 +490,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
   });
 
   test("MANAGER와 TEACHER는 예약 신청 관리와 링크 카드에 접근할 수 없다", async ({ page }) => {
+    const currentLink = await prisma.reservationApplicationLink.findUniqueOrThrow({ where: { classScheduleId: openClassId } });
     for (const email of [managerEmail, teacherEmail]) {
       await page.context().clearCookies();
       await login(page, email, staffPassword);
@@ -497,7 +498,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       await expectDenied(page, "/reservation-applications");
       await page.goto(`/classes/${openClassId}`);
       await expect(page.getByTestId("application-link-card")).toHaveCount(0);
-      expect(await page.content()).not.toContain("/apply/");
+      expect(await page.content()).not.toContain(currentLink.token);
     }
   });
 
