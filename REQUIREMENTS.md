@@ -52,6 +52,8 @@ YAHO 운영자가 아이, 친구/형제관계, 프로그램, 클래스 일정, �
 - Reservation
 - Payment
 - Refund
+- ReservationApplication: 예약 확정 전 보호자 신청 (Phase 18, 10.6)
+- ReservationApplicationLink: 클래스별 공개 신청 링크 (Phase 18, 10.6)
 
 ---
 
@@ -1910,7 +1912,7 @@ Now — Production migration drift가 실제 로그인 장애를 일으켰고 TE
 - PaymentItem은 Reservation이 있어야 만들 수 있어(ADR-005) 확정 전 입금은 기록할 수 없다. 반려·취소 신청의 입금 반환은 시스템 밖에서 처리하며 24장에 남겼다(ADR-053).
 - ADR-010의 관리자 등록 선택 입력 규칙은 유지하고 신청서에만 필수 항목을 둔다.
 - 신청 개인정보의 보관·파기 기준이 없다(24장의 민감정보 보관 기간과 같은 미결정 영역). 이번 Phase는 파기 없이 보관하고 24장에 남겼다(ADR-054). 운영자가 제공하는 동의 문구의 보유 기간 안내는 이 상태와 맞아야 한다.
-- 1.2장·10장·17장·19장·20장·20-1.4·21장은 이번 결정에 맞춰 갱신했다. 2.1장과 AGENTS.md Domain Naming은 PLAN에서 entity 이름을 확정한 뒤 갱신한다.
+- 1.2장·10장·17장·19장·20장·20-1.4·21장은 이번 결정에 맞춰 갱신했다. 2.1장과 AGENTS.md Domain Naming은 PLAN에서 확정한 이름(ReservationApplication, ReservationApplicationLink)으로 갱신했다.
 
 ### Open Questions
 없음. 남았던 4건은 사용자가 가격 미표시, 완료 화면의 입금 금액·기한·입금자명·취소·환불 안내 미표시, 파기 없이 보관, 선택 동의가 기존 이력과 다르면 철회 기록으로 확정했다(ADR-052/054).

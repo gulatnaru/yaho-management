@@ -16,6 +16,8 @@
 - Payment: 결제 1건. 결제자(보호자 또는 기관) 기준
 - PaymentItem: 결제에 포함된 예약별 금액 명세 + 환불 누계(refundedAmount)
 - Refund: PaymentItem 기준 환불(부분 환불 포함)
+- ReservationApplicationLink: 클래스별 공개 예약 신청 링크(클래스당 1개, 토큰 unique). 중지·재발급 가능 (Phase 18)
+- ReservationApplication: 예약 확정 전 보호자 신청. Reservation 이 아니며 좌석을 점유하지 않는다. ADMIN 이 입금 확인 후 기존 예약 생성 규칙으로 확정한다 (Phase 18, ADR-052~054)
 
 향후 도입 예정(지금은 만들지 않는다):
 - Organization: 어린이집/유치원 등 기관. Child와 ClassSchedule에 nullable FK로 붙인다.
@@ -35,6 +37,10 @@ Child        1:N  ChildConsent
 Payment      1:N  PaymentItem
 PaymentItem  1:1  Reservation
 PaymentItem  1:N  Refund
+ClassSchedule 1:1 ReservationApplicationLink   (링크가 없을 수 있다)
+ClassSchedule 1:N ReservationApplication
+ReservationApplication N:1 Child / Reservation  (확정 시에만 연결, 재예약 때문에 Reservation 쪽은 unique 가 아니다)
+ReservationApplication 1:N ChildConsent        (확정 시 이관된 온라인 동의의 출처)
 ```
 
 ## Enums
@@ -49,6 +55,7 @@ PaymentItem  1:N  Refund
 - ConsentAction: AGREED, REVOKED
 - AttendanceStatus: PRESENT, ABSENT (미기록은 null)
 - RefundReason: PERSONAL, ILLNESS, WEATHER, SCHEDULE, DUPLICATE_PAYMENT, CLASS_CANCELLED, OPERATION, OTHER
+- ReservationApplicationStatus: SUBMITTED(접수·처리 대기), CONFIRMED, REJECTED, CANCELLED
 
 ## Constraints
 DB 레벨에서 강제한다.
@@ -63,6 +70,9 @@ DB 레벨에서 강제한다.
 - ChildSafetyInfo: `unique(childId)`
 - ChildConsent: unique 제약 없음. 동의/철회마다 행을 쌓는 append-only 구조
 - ClassSchedule: 보험 가입 여부 / 보험사 / 증권번호 컬럼 보유
+- ReservationApplicationLink: `unique(classScheduleId)`, `unique(token)`, 토큰 길이 32자 이상
+- ReservationApplication: 필수 동의 2종(개인정보, 사진 촬영·공유)은 항상 true, 입금 확인 시각·처리자는 함께 존재, 상태별 필수 컬럼 일관성(SUBMITTED는 처리 정보 없음, CONFIRMED는 입금 확인·아이·예약 있음, REJECTED/CANCELLED는 사유 있음)을 CHECK로 보장한다. `reservationId`는 ADR-024 재예약 때문에 unique가 아니다
+- ChildConsent.reservationApplicationId: 온라인 신청에서 받은 동의의 출처. 확정 시에만 채워진다
 
 ## Payment 구조 주석
 현재는 결제 1건에 PaymentItem 1건만 생성된다(보호자 개인 결제).
@@ -93,6 +103,11 @@ ChildConsent 는 append-only 다. 기존 행을 수정하거나 삭제하지 않
 
 현재 동의 상태는 해당 consentType 의 `recordedAt` 최신 행으로 판단한다.
 이렇게 해야 "언제 동의했고 언제 철회했는가" 를 나중에 증빙할 수 있다.
+
+예약 신청 확정 시(Phase 18, ADR-054) 신청 동의를 같은 방식으로 추가한다.
+- `recordedAt` = 신청 제출 시각, `recordedById` = 확정한 ADMIN, `reservationApplicationId` = 출처 신청
+- 개인정보·사진 촬영/공유는 AGREED, 홍보 활용은 신청에서 동의했으면 AGREED
+- 홍보 활용에 동의하지 않았고 기존 아이의 현재 상태가 AGREED 이면 REVOKED 를 추가한다
 
 ## 민감정보 취급 규칙
 `ChildSafetyInfo`는 다음을 반드시 지킨다.
