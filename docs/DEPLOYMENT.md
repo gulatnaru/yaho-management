@@ -36,7 +36,9 @@ Vercel 프로젝트 설정의 Environment Variables에 아래를 Production/Prev
 
 - 예약 신청(Phase 18, ADR-052) 설정값 6개는 하나라도 없거나 https가 아니면 공개 신청을 받지 않는다(fail closed). 값을 바꾸면 재배포한다.
 - Preview(`VERCEL_ENV=preview`)는 공유 DB(ADR-030)이므로 설정과 무관하게 공개 신청을 받지 않는다.
-- Production은 `lib/reservation-applications/consent-content.ts`의 동의 문구가 확정 원문(`isPlaceholder: false`)일 때만 공개 신청을 받는다.
+- Production은 `lib/reservation-applications/consent-content.ts`의 동의 문구가 확정 원문(`isPlaceholder: false`)이고 `pendingDecisions`가 비어 있을 때만 공개 신청을 받는다. 2026-09-30 현재 취소·환불규정 확인과 홍보 게시물 처리 결정이 남아 있어 닫혀 있다.
+- Phase 18 migration 두 개(`20260929073840_phase18_reservation_applications`, `20260929150958_phase18_application_consent_retention`)는 같은 release로 적용한다. 두 번째 migration은 `ReservationApplication`이 비어 있지 않으면 스스로 중단한다. 로컬·Preview DB에 Phase 18 테스트 신청이 있으면 그 테스트 데이터를 먼저 지운다(Production은 첫 migration 직후라 비어 있다).
+- 신청 개인정보 보관기간 정리: ADMIN이 주기적으로(예: 월 1회) `/reservation-applications/retention`에서 만료 대상과 먼저 처리가 필요한 대기 신청을 확인하고 파기한다. 자동 배치는 없다(docs/DATABASE.md 참고).
 
 - `AUTH_SECRET`은 Production과 Preview가 같은 값을 쓰지 않는다 — 한쪽이 유출돼도 다른 환경의 세션을 위조할 수 없어야 한다.
 - `NEXTAUTH_URL`은 두 환경 모두 값을 채우지 않고 비워 둔다. Vercel은 요청 헤더로 배포 URL을 자동 감지하므로, 값을 채우면 오히려 PR마다 달라지는 Preview URL과 어긋나 인증이 깨질 수 있다.
