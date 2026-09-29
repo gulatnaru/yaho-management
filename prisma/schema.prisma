@@ -445,6 +445,7 @@ model ReservationApplication {
   programTermsAcknowledged    Boolean // [필수] 프로그램 안전 및 이용사항 확인
   privacyConsentAgreed        Boolean // [필수] 개인정보 수집·이용 동의
   legalGuardianConfirmed      Boolean // [필수] 법정대리인 확인
+  refundTermsAcknowledged     Boolean // [필수] 취소 및 환불규정 확인 (ADR-056)
   photoShareConsentAgreed     Boolean // [선택] 활동 사진·영상 촬영 및 참여 보호자 공유
   photoMarketingConsentAgreed Boolean // [선택] 사진·영상 YAHO 홍보 활용
   consentVersion              String // 제출 당시 보여준 동의 문구 버전
@@ -582,7 +583,9 @@ model Refund {
 // ALTER TABLE "ReservationApplication"
 //   ADD CONSTRAINT "reservation_application_text_not_blank" CHECK (childName/guardianName/guardianPhone/consentVersion 공백 금지),
 //   (20260929073840 의 "reservation_application_required_consents" 는 ADR-055 migration 에서 제거했다 — 사진 공유는 선택)
-//   ADD CONSTRAINT "reservation_application_required_terms" CHECK ("programTermsAcknowledged" AND "privacyConsentAgreed" AND "legalGuardianConfirmed"),
+//   ADD CONSTRAINT "reservation_application_required_terms" CHECK (
+//     "programTermsAcknowledged" AND "privacyConsentAgreed" AND "legalGuardianConfirmed" AND "refundTermsAcknowledged"
+//   ),  -- 20260929155124 에서 환불규정 확인을 추가해 다시 만들었다 (ADR-056)
 //   ADD CONSTRAINT "reservation_application_personal_data_presence" CHECK (
 //     파기 전 ⇒ 아이·보호자·관계 항목 모두 있음, 파기 후 ⇒ 해당 항목·요청사항 모두 NULL + 처리 대기 아님
 //   ),

@@ -76,3 +76,45 @@ describe("Phase 18 consent/retention migration", () => {
     expect(schema).toMatch(/childName\s+String\?/);
   });
 });
+
+describe("Phase 18 refund terms migration", () => {
+  const refundMigration = read(
+    "../../../prisma/migrations/20260929155124_phase18_refund_terms_acknowledgement/migration.sql",
+  );
+
+  it("runs the empty-table preflight before adding the required acknowledgement", () => {
+    const begin = refundMigration.indexOf("BEGIN;");
+    const preflight = refundMigration.indexOf('IF EXISTS (SELECT 1 FROM "ReservationApplication")');
+    const addColumn = refundMigration.indexOf('ADD COLUMN "refundTermsAcknowledged" BOOLEAN NOT NULL');
+    const commit = refundMigration.lastIndexOf("COMMIT;");
+
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(preflight).toBeGreaterThan(begin);
+    expect(addColumn).toBeGreaterThan(preflight);
+    expect(commit).toBeGreaterThan(addColumn);
+  });
+
+  it("recreates the required-terms check with all four required acknowledgements", () => {
+    const drop = refundMigration.indexOf('DROP CONSTRAINT "reservation_application_required_terms"');
+    const add = refundMigration.indexOf('ADD CONSTRAINT "reservation_application_required_terms"');
+    expect(drop).toBeGreaterThan(0);
+    expect(add).toBeGreaterThan(drop);
+    const check = refundMigration.slice(add);
+    for (const column of [
+      "programTermsAcknowledged",
+      "privacyConsentAgreed",
+      "legalGuardianConfirmed",
+      "refundTermsAcknowledged",
+    ]) {
+      expect(check).toContain(`"${column}"`);
+    }
+    expect(check).not.toContain("photoShareConsentAgreed");
+  });
+
+  it("does not touch earlier migrations or rewrite data", () => {
+    expect(refundMigration).not.toMatch(/^\s*(UPDATE|DELETE|INSERT)\s/im);
+    expect(refundMigration).not.toMatch(/DROP\s+(TABLE|COLUMN|TYPE|INDEX)\b/i);
+    expect(migration).not.toContain("refundTermsAcknowledged");
+    expect(schema).toMatch(/refundTermsAcknowledged\s+Boolean/);
+  });
+});
