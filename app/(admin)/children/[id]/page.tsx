@@ -42,8 +42,15 @@ const CONSENT_TYPES: ConsentType[] = [
 const CONSENT_LABEL: Record<ConsentType, string> = {
   PRIVACY: "개인정보 수집·이용",
   SENSITIVE_INFO: "민감정보 수집",
-  PHOTO_SHARE: "활동 사진 보호자 공유",
+  PHOTO_SHARE: "활동 사진·영상 촬영 및 참여 보호자 공유",
   PHOTO_MARKETING: "사진 홍보·마케팅",
+};
+
+// DECLINED: 예약 신청에서 선택 동의를 하지 않음(ADR-055). 철회와 구분해 "미동의"로 보여준다.
+const CONSENT_ACTION_LABEL: Record<"AGREED" | "REVOKED" | "DECLINED", string> = {
+  AGREED: "동의",
+  REVOKED: "철회",
+  DECLINED: "미동의",
 };
 
 type ChildDetailPageProps = {
@@ -251,7 +258,7 @@ export default async function ChildDetailPage({
                 >
                   <span>{CONSENT_LABEL[type]}</span>
                   <Badge variant={record?.action === "AGREED" ? "success" : "secondary"}>
-                    {record?.action === "AGREED" ? "동의" : record ? "철회" : "미기록"}
+                    {record ? CONSENT_ACTION_LABEL[record.action] : "미기록"}
                   </Badge>
                 </div>
               );
@@ -267,7 +274,7 @@ export default async function ChildDetailPage({
                 {consent.history.map((record) => (
                   <li key={record.id}>
                     {CONSENT_LABEL[record.consentType as ConsentType]} ·{" "}
-                    {record.action === "AGREED" ? "동의" : "철회"} ·{" "}
+                    {CONSENT_ACTION_LABEL[record.action]} ·{" "}
                     {formatKstDateTime(record.recordedAt)} · {record.recordedBy?.name ?? "알 수 없음"}
                     {record.reservationApplicationId ? " · 보호자 온라인 동의(예약 신청)" : null}
                   </li>

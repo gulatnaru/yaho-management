@@ -82,16 +82,23 @@ async function expectDenied(page: Page, path: string) {
   }
 }
 
-async function fillApplicationForm(page: Page, childName: string, options?: { marketing?: boolean }) {
+async function fillApplicationForm(
+  page: Page,
+  childName: string,
+  options?: { photoShare?: boolean; marketing?: boolean },
+) {
   await page.getByLabel("아이 이름").fill(childName);
   await page.getByLabel("생년월일").fill("2019-05-01");
   await page.getByLabel("여", { exact: true }).check();
   await page.getByLabel("보호자 이름").fill(`보호자_${marker}`);
   await page.getByLabel("보호자 연락처").fill(guardianPhone);
+  await page.getByLabel("모", { exact: true }).check();
   await page.getByLabel("요청사항").fill("합성 요청사항");
-  await page.getByLabel(/개인정보 수집·이용 동의/).check();
-  await page.getByLabel(/활동 사진 촬영 및 보호자 공유 동의/).check();
-  if (options?.marketing) await page.getByLabel(/활동 사진 홍보·마케팅 활용 동의/).check();
+  await page.getByLabel(/위 안전 및 프로그램 이용사항을 확인하였습니다/).check();
+  await page.getByLabel(/개인정보 수집·이용에 동의합니다/).check();
+  await page.getByLabel(/본인은 위 아동의 법정대리인이며/).check();
+  if (options?.photoShare) await page.getByLabel(/활동 사진·영상 촬영 및 참여 보호자 공유에 동의합니다/).check();
+  if (options?.marketing) await page.getByLabel(/사진·영상 YAHO 홍보 활용에 동의합니다/).check();
 }
 
 async function createClass(input: {
@@ -125,8 +132,10 @@ async function createClass(input: {
 async function createApplication(input: {
   classScheduleId: string;
   childName: string;
+  photoShareConsentAgreed?: boolean;
   photoMarketingConsentAgreed?: boolean;
   depositConfirmed?: boolean;
+  status?: "REJECTED";
 }) {
   return prisma.reservationApplication.create({
     data: {
@@ -136,13 +145,19 @@ async function createApplication(input: {
       childGender: "FEMALE",
       guardianName: `신청보호자_${marker}`,
       guardianPhone,
+      guardianRelationship: "MOTHER",
+      programTermsAcknowledged: true,
       privacyConsentAgreed: true,
-      photoShareConsentAgreed: true,
+      legalGuardianConfirmed: true,
+      photoShareConsentAgreed: input.photoShareConsentAgreed ?? false,
       photoMarketingConsentAgreed: input.photoMarketingConsentAgreed ?? false,
       consentVersion: "e2e",
       submittedAt: new Date(Date.now() - 60 * 60 * 1000),
       ...(input.depositConfirmed
         ? { depositConfirmedAt: new Date(Date.now() - 30 * 60 * 1000), depositConfirmedById: adminUserId }
+        : {}),
+      ...(input.status === "REJECTED"
+        ? { status: "REJECTED" as const, resolvedAt: new Date(), resolvedById: adminUserId, resolutionNote: "합성 반려" }
         : {}),
     },
   });
@@ -293,6 +308,9 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
 
     await expect(page.getByText("생년월일을 입력해주세요")).toBeVisible();
     await expect(page.getByText("성별을 선택해주세요")).toBeVisible();
+    await expect(page.getByText("아이와의 관계를 선택해주세요")).toBeVisible();
+    await expect(page.getByText("프로그램 안전 및 이용사항을 확인해주세요")).toBeVisible();
+    await expect(page.getByText("법정대리인 확인에 동의해주세요")).toBeVisible();
     await expect(page.getByText("전화번호 형식이 올바르지 않습니다 (숫자, 하이픈만 가능)")).toBeVisible();
     await expect(page.getByText("개인정보 수집·이용에 동의해주세요")).toBeVisible();
     await expect(page.getByLabel("아이 이름")).toHaveValue(`검증아이_${marker}`);
@@ -300,7 +318,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     expect(await prisma.reservationApplication.count({ where: { childName: `검증아이_${marker}` } })).toBe(0);
   });
 
-  test("제출하면 신청만 저장되고 완료 화면에 입금 계좌와 채널 링크만 안내한다", async ({ page }) => {
+  test("선택 동의 없이도 제출되고, 신청만 저장되며 완료 화면에 입금 계좌와 채널 링크만 안내한다", async ({ page }) => {
     const childName = `신청아이_${marker}`;
     const reservationsBefore = await prisma.reservation.count({ where: { classScheduleId: openClassId } });
     const [paymentsBefore, consentsBefore] = await Promise.all([prisma.payment.count(), prisma.childConsent.count()]);
@@ -328,12 +346,16 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       classScheduleId: openClassId,
       guardianPhone,
       requestNote: "합성 요청사항",
+      guardianRelationship: "MOTHER",
+      programTermsAcknowledged: true,
       privacyConsentAgreed: true,
-      photoShareConsentAgreed: true,
+      legalGuardianConfirmed: true,
+      photoShareConsentAgreed: false,
       photoMarketingConsentAgreed: true,
       childId: null,
       reservationId: null,
     });
+    expect(application.consentVersion).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(await prisma.child.count({ where: { name: childName } })).toBe(0);
     expect(await prisma.reservation.count({ where: { classScheduleId: openClassId } })).toBe(reservationsBefore);
     expect(await prisma.payment.count()).toBe(paymentsBefore);
@@ -370,6 +392,13 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     });
     await page.goto(`/reservation-applications/${application.id}`);
     await expect(page.getByRole("button", { name: "예약 확정" })).toHaveCount(0);
+    await expect(page.getByText("아이와의 관계")).toBeVisible();
+    const consents = page.getByTestId("application-consents");
+    await expect(consents).toContainText("[필수] 법정대리인 확인");
+    await expect(consents).toContainText("[선택] 사진·영상 촬영 및 참여 보호자 공유");
+    await expect(consents).toContainText("미동의");
+    await expect(consents).toContainText(application.consentVersion);
+    await expect(page.getByTestId("application-retention")).toContainText("수업일로부터 1년");
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "입금 확인 기록" }).click();
@@ -390,19 +419,20 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     expect(reservation.child).toMatchObject({ name: childName, guardianPhone });
     expect(reservation.paymentItem).toBeNull();
 
-    const consents = await prisma.childConsent.findMany({ where: { reservationApplicationId: application.id } });
-    expect(consents.map((row) => `${row.consentType}:${row.action}`).sort()).toEqual([
+    const consentRows = await prisma.childConsent.findMany({ where: { reservationApplicationId: application.id } });
+    expect(consentRows.map((row) => `${row.consentType}:${row.action}`).sort()).toEqual([
       "PHOTO_MARKETING:AGREED",
-      "PHOTO_SHARE:AGREED",
+      "PHOTO_SHARE:DECLINED",
       "PRIVACY:AGREED",
     ]);
-    for (const consent of consents) {
+    for (const consent of consentRows) {
       expect(consent.recordedAt.getTime()).toBe(application.submittedAt.getTime());
       expect(consent.recordedById).toBe(adminUserId);
     }
 
     await page.goto(`/children/${reservation.childId}`);
     await expect(page.getByText(/보호자 온라인 동의\(예약 신청\)/).first()).toBeAttached();
+    await expect(page.getByText("미동의").first()).toBeVisible();
   });
 
   test("기존 아이에 연결하면 아이 정보는 그대로 두고 홍보 동의는 철회로 기록한다", async ({ page }) => {
@@ -489,6 +519,51 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await expect(page.getByRole("button", { name: "신청하기" })).toBeVisible();
   });
 
+  test("보관기간이 지난 반려 신청은 ADMIN 보관기간 관리에서 개인정보만 파기된다", async ({ page }) => {
+    const now = Date.now();
+    const oldClass = await createClass({
+      label: "expired",
+      startsAt: new Date(now - 400 * DAY),
+      endsAt: new Date(now - 400 * DAY + 2 * 60 * 60 * 1000),
+      programId: ids.programs[0]!,
+      teacherId: ids.teachers[0]!,
+    });
+    const childName = `만료아이_${marker}`;
+    const expired = await createApplication({ classScheduleId: oldClass.id, childName, status: "REJECTED" });
+    const pendingName = `만료대기아이_${marker}`;
+    const pending = await createApplication({ classScheduleId: oldClass.id, childName: pendingName });
+
+    await login(page, adminEmail, adminPassword);
+    await page.goto("/reservation-applications/retention");
+    await expect(page.getByTestId("retention-purgeable")).toContainText(childName);
+    await expect(page.getByTestId("retention-expired-pending")).toContainText(pendingName);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "보관기간 지난 개인정보 파기" }).click();
+    await expect(page.getByText(/건의 개인정보를 파기했습니다/)).toBeVisible();
+
+    const purged = await prisma.reservationApplication.findUniqueOrThrow({ where: { id: expired.id } });
+    expect(purged).toMatchObject({
+      status: "REJECTED",
+      childName: null,
+      childBirthDate: null,
+      guardianName: null,
+      guardianPhone: null,
+      guardianRelationship: null,
+      requestNote: null,
+      personalDataPurgedById: adminUserId,
+      privacyConsentAgreed: true,
+      consentVersion: "e2e",
+    });
+    expect(purged.personalDataPurgedAt).not.toBeNull();
+    const stillPending = await prisma.reservationApplication.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(stillPending).toMatchObject({ status: "SUBMITTED", childName: pendingName, personalDataPurgedAt: null });
+
+    await page.goto(`/reservation-applications/${expired.id}`);
+    await expect(page.getByTestId("application-purged")).toBeVisible();
+    expect(await page.content()).not.toContain(guardianPhone);
+  });
+
   test("MANAGER와 TEACHER는 예약 신청 관리와 링크 카드에 접근할 수 없다", async ({ page }) => {
     const currentLink = await prisma.reservationApplicationLink.findUniqueOrThrow({ where: { classScheduleId: openClassId } });
     for (const email of [managerEmail, teacherEmail]) {
@@ -496,6 +571,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       await login(page, email, staffPassword);
       await expect(page.getByRole("link", { name: /예약 신청/ })).toHaveCount(0);
       await expectDenied(page, "/reservation-applications");
+      await expectDenied(page, "/reservation-applications/retention");
       await page.goto(`/classes/${openClassId}`);
       await expect(page.getByTestId("application-link-card")).toHaveCount(0);
       expect(await page.content()).not.toContain(currentLink.token);

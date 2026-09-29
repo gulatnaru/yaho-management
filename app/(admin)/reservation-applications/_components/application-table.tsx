@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatKstDateTime, formatKstDateTimeRange } from "@/lib/classes/datetime";
-import { APPLICATION_STATUS_LABEL } from "@/lib/reservation-applications/constants";
+import { APPLICATION_STATUS_LABEL, PURGED_PERSONAL_DATA_LABEL } from "@/lib/reservation-applications/constants";
 import type { ApplicationListRow } from "@/lib/reservation-applications/queries";
 
 export const APPLICATION_STATUS_VARIANT: Record<ApplicationListRow["status"], NonNullable<BadgeProps["variant"]>> = {
@@ -38,7 +38,7 @@ export function ApplicationTable({ items }: { items: ApplicationListRow[] }) {
           <TableRow data-testid="application-row" key={application.id}>
             <TableCell>
               <Link className="font-medium hover:underline" href={`/reservation-applications/${application.id}`}>
-                {application.childName}
+                {application.childName ?? PURGED_PERSONAL_DATA_LABEL}
               </Link>
               {application.isPossibleDuplicate ? (
                 <Badge className="ml-2" variant="warning">

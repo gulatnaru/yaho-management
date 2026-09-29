@@ -34,6 +34,7 @@ import {
   confirmApplicationDepositCore,
   type ApplicationClosingStatus,
 } from "@/server/reservation-applications/resolve";
+import { purgeExpiredApplicationsCore } from "@/server/reservation-applications/retention";
 
 /**
  * 예약 신청 관리 action 은 모두 ADMIN 전용이다(ADR-053). 입금 확인은 재무정보라 MANAGER 에게 허용하지 않는다.
@@ -242,4 +243,25 @@ export async function cancelReservationApplication(
   formData: FormData,
 ): Promise<ApplicationResolveFormState> {
   return closeApplication(applicationId, "CANCELLED", formData);
+}
+
+export type ApplicationPurgeResult = { error?: string; purgedCount?: number };
+
+/**
+ * 보관기간이 지난 신청의 개인정보를 파기한다(ADR-055). 자동 배치 없이 ADMIN 이 직접 실행한다.
+ * 서버가 실행 시점 기준으로 대상을 다시 계산하므로 화면에서 본 목록과 달라도 만료된 신청만 파기한다.
+ */
+export async function purgeExpiredApplications(): Promise<ApplicationPurgeResult> {
+  const principal = await requireAdminPrincipal();
+  let purgedCount: number;
+  try {
+    const result = await purgeExpiredApplicationsCore(prisma, { actorUserId: principal.userId, now: new Date() });
+    purgedCount = result.purgedCount;
+  } catch (error) {
+    console.error("[reservation-applications] failed to purge expired applications:", describeErrorForLog(error));
+    return { error: "개인정보를 파기하지 못했습니다. 다시 시도해주세요." };
+  }
+  revalidatePath("/reservation-applications");
+  revalidatePath("/reservation-applications/retention");
+  return { purgedCount };
 }

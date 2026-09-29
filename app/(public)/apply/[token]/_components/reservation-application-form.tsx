@@ -12,6 +12,7 @@ import {
   APPLICATION_NAME_MAX_LENGTH,
   APPLICATION_REQUEST_NOTE_GUIDE,
   APPLICATION_REQUEST_NOTE_MAX_LENGTH,
+  GUARDIAN_RELATIONSHIP_OPTIONS,
 } from "@/lib/reservation-applications/constants";
 import type { ApplicationConsentItem } from "@/lib/reservation-applications/consent-content";
 import type { ReservationApplicationFormState } from "../actions";
@@ -146,6 +147,30 @@ export function ReservationApplicationForm({ action, consentItems }: Reservation
           />
           <FieldError id="guardianPhone-error" messages={errors.guardianPhone} />
         </div>
+
+        <fieldset
+          aria-describedby={errors.guardianRelationship ? "guardianRelationship-error" : undefined}
+          className="space-y-2"
+        >
+          <legend className="text-sm font-medium">
+            아이와의 관계 <RequiredMark />
+          </legend>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {GUARDIAN_RELATIONSHIP_OPTIONS.map((option) => (
+              <label className="flex items-center gap-2 text-sm" key={option.value}>
+                <input
+                  className="h-4 w-4"
+                  defaultChecked={values?.guardianRelationship === option.value}
+                  name="guardianRelationship"
+                  type="radio"
+                  value={option.value}
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+          <FieldError id="guardianRelationship-error" messages={errors.guardianRelationship} />
+        </fieldset>
       </fieldset>
 
       <div className="space-y-1.5 rounded-lg border border-slate-200 bg-white p-4">
@@ -165,9 +190,21 @@ export function ReservationApplicationForm({ action, consentItems }: Reservation
       </div>
 
       <fieldset className="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
-        <legend className="px-1 text-base font-semibold">동의</legend>
+        <legend className="px-1 text-base font-semibold">확인 및 동의</legend>
         {consentItems.map((item) => (
           <div className="space-y-2 border-b border-slate-100 pb-3 last:border-b-0 last:pb-0" key={item.key}>
+            <p className="text-sm font-semibold">
+              {item.required ? "[필수]" : "[선택]"} {item.title}
+            </p>
+            <Disclosure summary={<span className="underline">내용 보기</span>}>
+              <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-slate-600">
+                {item.body.map((line) => (
+                  <li className="break-words" key={line}>
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </Disclosure>
             <div className="flex items-start gap-2">
               <Checkbox
                 aria-describedby={errors[item.key] ? `${item.key}-error` : undefined}
@@ -177,12 +214,9 @@ export function ReservationApplicationForm({ action, consentItems }: Reservation
                 name={item.key}
               />
               <Label className="leading-snug" htmlFor={item.key}>
-                {item.required ? "(필수)" : "(선택)"} {item.title}
+                {item.required ? "[필수]" : "[선택]"} {item.checkLabel}
               </Label>
             </div>
-            <Disclosure summary={<span className="underline">내용 보기</span>}>
-              <p className="whitespace-pre-wrap text-xs leading-relaxed text-slate-600">{item.body}</p>
-            </Disclosure>
             <FieldError id={`${item.key}-error`} messages={errors[item.key]} />
           </div>
         ))}

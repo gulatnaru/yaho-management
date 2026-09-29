@@ -12,7 +12,7 @@ export function ConsentForm({ childId }: { childId: string }) {
         <select className="rounded-md border bg-white px-3 py-2 text-sm" defaultValue="PRIVACY" name="consentType">
           <option value="PRIVACY">개인정보 수집·이용</option>
           <option value="SENSITIVE_INFO">민감정보 수집</option>
-          <option value="PHOTO_SHARE">활동 사진 공유</option>
+          <option value="PHOTO_SHARE">활동 사진·영상 촬영 및 참여 보호자 공유</option>
           <option value="PHOTO_MARKETING">사진 홍보·마케팅</option>
         </select>
         <select className="rounded-md border bg-white px-3 py-2 text-sm" defaultValue="AGREED" name="action">

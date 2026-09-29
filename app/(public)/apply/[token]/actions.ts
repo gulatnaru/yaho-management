@@ -23,8 +23,11 @@ export type ReservationApplicationFormFieldKey =
   | "childGender"
   | "guardianName"
   | "guardianPhone"
+  | "guardianRelationship"
   | "requestNote"
+  | "programTerms"
   | "privacyConsent"
+  | "legalGuardianConfirmation"
   | "photoShareConsent"
   | "photoMarketingConsent";
 
@@ -34,8 +37,11 @@ export type ReservationApplicationFormValues = {
   childGender?: string;
   guardianName?: string;
   guardianPhone?: string;
+  guardianRelationship?: string;
   requestNote?: string;
+  programTerms?: boolean;
   privacyConsent?: boolean;
+  legalGuardianConfirmation?: boolean;
   photoShareConsent?: boolean;
   photoMarketingConsent?: boolean;
 };
@@ -54,8 +60,11 @@ function readValues(formData: FormData): ReservationApplicationFormValues {
     childGender: readFormString(formData, "childGender"),
     guardianName: readFormString(formData, "guardianName"),
     guardianPhone: readFormString(formData, "guardianPhone"),
+    guardianRelationship: readFormString(formData, "guardianRelationship"),
     requestNote: readFormString(formData, "requestNote"),
+    programTerms: formData.get("programTerms") === "on",
     privacyConsent: formData.get("privacyConsent") === "on",
+    legalGuardianConfirmation: formData.get("legalGuardianConfirmation") === "on",
     photoShareConsent: formData.get("photoShareConsent") === "on",
     photoMarketingConsent: formData.get("photoMarketingConsent") === "on",
   };
@@ -83,8 +92,11 @@ export async function submitReservationApplication(
     childGender: formData.get("childGender"),
     guardianName: formData.get("guardianName"),
     guardianPhone: formData.get("guardianPhone"),
+    guardianRelationship: formData.get("guardianRelationship"),
     requestNote: formData.get("requestNote"),
+    programTerms: formData.get("programTerms"),
     privacyConsent: formData.get("privacyConsent"),
+    legalGuardianConfirmation: formData.get("legalGuardianConfirmation"),
     photoShareConsent: formData.get("photoShareConsent"),
     photoMarketingConsent: formData.get("photoMarketingConsent"),
   });

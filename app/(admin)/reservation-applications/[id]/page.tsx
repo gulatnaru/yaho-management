@@ -6,8 +6,14 @@ import { WarningBanner } from "@/components/ui/warning-banner";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDate, formatKstDateTime, formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { getClassDisplayStatus } from "@/lib/classes/status";
-import { APPLICATION_GENDER_LABEL, APPLICATION_STATUS_LABEL } from "@/lib/reservation-applications/constants";
 import {
+  APPLICATION_GENDER_LABEL,
+  APPLICATION_STATUS_LABEL,
+  GUARDIAN_RELATIONSHIP_LABEL,
+  PURGED_PERSONAL_DATA_LABEL,
+} from "@/lib/reservation-applications/constants";
+import {
+  getApplicationRetention,
   getReservationApplicationDetail,
   listChildCandidatesForApplication,
 } from "@/lib/reservation-applications/queries";
@@ -20,6 +26,7 @@ import { DepositConfirmButton } from "../_components/deposit-confirm-button";
 export const dynamic = "force-dynamic";
 
 const CLASS_STATUS_LABEL = { SCHEDULED: "예정", CANCELLED: "취소", ENDED: "완료" } as const;
+const RETENTION_BASIS_LABEL = { CLASS_DATE: "수업일로부터 1년", LAST_PROGRAM_USE: "마지막 프로그램 이용일로부터 3년" } as const;
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -30,16 +37,32 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function AgreementBadge({ agreed, agreedLabel = "동의", declinedLabel = "미동의" }: {
+  agreed: boolean;
+  agreedLabel?: string;
+  declinedLabel?: string;
+}) {
+  return <Badge variant={agreed ? "success" : "secondary"}>{agreed ? agreedLabel : declinedLabel}</Badge>;
+}
+
 export default async function ReservationApplicationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requireAdminPrincipal();
   const { id } = await params;
   const application = await getReservationApplicationDetail(id);
   if (!application) notFound();
 
+  const isPurged = application.personalDataPurgedAt !== null;
   const isPending = application.status === "SUBMITTED";
   const canConfirm = isPending && application.depositConfirmedAt !== null;
   const classStatus = getClassDisplayStatus(application.classSchedule);
-  const candidates = canConfirm ? await listChildCandidatesForApplication(application) : [];
+  const retention = await getApplicationRetention(application);
+  const candidates =
+    canConfirm && application.childName && application.guardianPhone
+      ? await listChildCandidatesForApplication({
+          childName: application.childName,
+          guardianPhone: application.guardianPhone,
+        })
+      : [];
   const childOptions: ApplicationChildOption[] = candidates.map((candidate) => ({
     id: candidate.id,
     name: candidate.name,
@@ -61,7 +84,9 @@ export default async function ReservationApplicationDetailPage({ params }: { par
       </Link>
 
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <h1 className="break-words text-2xl font-bold">{application.childName} 예약 신청</h1>
+        <h1 className="break-words text-2xl font-bold">
+          {application.childName ?? PURGED_PERSONAL_DATA_LABEL} 예약 신청
+        </h1>
         <Badge variant={APPLICATION_STATUS_VARIANT[application.status]}>
           {APPLICATION_STATUS_LABEL[application.status]}
         </Badge>
@@ -76,39 +101,60 @@ export default async function ReservationApplicationDetailPage({ params }: { par
           <CardTitle>신청 내용</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <Field label="아이 이름">{application.childName}</Field>
-            <Field label="생년월일">{formatKstDate(application.childBirthDate)}</Field>
-            <Field label="성별">{APPLICATION_GENDER_LABEL[application.childGender]}</Field>
-            <Field label="보호자 이름">{application.guardianName}</Field>
-            <Field label="보호자 연락처">
-              <a className="hover:underline" href={toTelHref(application.guardianPhone)}>
-                {application.guardianPhone}
-              </a>
-            </Field>
-            <Field label="신청 일시">{formatKstDateTime(application.submittedAt)}</Field>
-            <div className="min-w-0 sm:col-span-2">
-              <dt className="text-sm text-slate-500">요청사항</dt>
-              <dd className="whitespace-pre-wrap break-words">{application.requestNote || "없음"}</dd>
-            </div>
-          </dl>
+          {isPurged ? (
+            <p className="text-sm text-slate-600" data-testid="application-purged">
+              보관기간이 지나 개인정보를 파기했습니다.
+            </p>
+          ) : (
+            <dl className="grid gap-4 sm:grid-cols-2">
+              <Field label="아이 이름">{application.childName}</Field>
+              <Field label="생년월일">{application.childBirthDate ? formatKstDate(application.childBirthDate) : "-"}</Field>
+              <Field label="성별">{application.childGender ? APPLICATION_GENDER_LABEL[application.childGender] : "-"}</Field>
+              <Field label="보호자 이름">{application.guardianName}</Field>
+              <Field label="보호자 연락처">
+                {application.guardianPhone ? (
+                  <a className="hover:underline" href={toTelHref(application.guardianPhone)}>
+                    {application.guardianPhone}
+                  </a>
+                ) : (
+                  "-"
+                )}
+              </Field>
+              <Field label="아이와의 관계">
+                {application.guardianRelationship ? GUARDIAN_RELATIONSHIP_LABEL[application.guardianRelationship] : "-"}
+              </Field>
+              <div className="min-w-0 sm:col-span-2">
+                <dt className="text-sm text-slate-500">요청사항</dt>
+                <dd className="whitespace-pre-wrap break-words">{application.requestNote || "없음"}</dd>
+              </div>
+            </dl>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>동의</CardTitle>
+          <CardTitle>확인 및 동의</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <Field label="개인정보 수집·이용">{application.privacyConsentAgreed ? "동의" : "미동의"}</Field>
-            <Field label="활동 사진 촬영 및 보호자 공유">
-              {application.photoShareConsentAgreed ? "동의" : "미동의"}
+          <dl className="grid gap-4 sm:grid-cols-2" data-testid="application-consents">
+            <Field label="[필수] 프로그램 안전 및 이용사항">
+              <AgreementBadge agreed={application.programTermsAcknowledged} agreedLabel="확인" declinedLabel="미확인" />
             </Field>
-            <Field label="활동 사진 홍보·마케팅 활용">
-              {application.photoMarketingConsentAgreed ? "동의" : "미동의"}
+            <Field label="[필수] 개인정보 수집·이용">
+              <AgreementBadge agreed={application.privacyConsentAgreed} />
+            </Field>
+            <Field label="[필수] 법정대리인 확인">
+              <AgreementBadge agreed={application.legalGuardianConfirmed} agreedLabel="확인" declinedLabel="미확인" />
+            </Field>
+            <Field label="[선택] 사진·영상 촬영 및 참여 보호자 공유">
+              <AgreementBadge agreed={application.photoShareConsentAgreed} />
+            </Field>
+            <Field label="[선택] 사진·영상 YAHO 홍보 활용">
+              <AgreementBadge agreed={application.photoMarketingConsentAgreed} />
             </Field>
             <Field label="동의 문구 버전">{application.consentVersion}</Field>
+            <Field label="신청 일시">{formatKstDateTime(application.submittedAt)}</Field>
           </dl>
         </CardContent>
       </Card>
@@ -165,6 +211,31 @@ export default async function ReservationApplicationDetailPage({ params }: { par
               </Link>
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>개인정보 보관</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm" data-testid="application-retention">
+          <p>
+            기준: {RETENTION_BASIS_LABEL[retention.basis]} (기준일 {retention.basisDate})
+          </p>
+          <p>보관 만료일: {retention.retainUntil}</p>
+          {application.personalDataPurgedAt ? (
+            <p>
+              파기: {formatKstDateTime(application.personalDataPurgedAt)} ·{" "}
+              {application.personalDataPurgedBy?.name ?? "-"}
+            </p>
+          ) : null}
+          <p className="text-xs text-slate-500">
+            확정되면 아이의 마지막 프로그램 이용일에 따라 만료일이 늦춰집니다. 파기는{" "}
+            <Link className="underline" href="/reservation-applications/retention">
+              보관기간 관리
+            </Link>
+            에서 합니다.
+          </p>
         </CardContent>
       </Card>
 

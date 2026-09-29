@@ -33,11 +33,16 @@ export default async function ReservationApplicationsPage({ searchParams }: Rese
 
   return (
     <section className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold">예약 신청</h1>
-        <p className="text-sm text-slate-500">
-          신청은 아직 예약이 아닙니다. 입금을 확인한 뒤 신청 상세에서 예약으로 확정합니다.
-        </p>
+      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold">예약 신청</h1>
+          <p className="text-sm text-slate-500">
+            신청은 아직 예약이 아닙니다. 입금을 확인한 뒤 신청 상세에서 예약으로 확정합니다.
+          </p>
+        </div>
+        <Link className="text-sm text-slate-600 hover:underline" href="/reservation-applications/retention">
+          개인정보 보관기간 관리
+        </Link>
       </div>
 
       <ApplicationStatusFilter status={status} />
