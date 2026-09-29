@@ -27,6 +27,16 @@ Vercel 프로젝트 설정의 Environment Variables에 아래를 Production/Prev
 | `NEXTAUTH_URL` | 비워 둔다 | 비워 둔다 |
 | `ADMIN_EMAIL` | 운영 관리자 계정 | Preview 전용 관리자 계정 |
 | `ADMIN_PASSWORD` | 운영 전용 값 | Preview 전용 값 |
+| `RESERVATION_APPLICATION_BANK_NAME` | 입금 은행명 | 등록하지 않아도 된다 |
+| `RESERVATION_APPLICATION_BANK_ACCOUNT_NUMBER` | 입금 계좌번호 | 등록하지 않아도 된다 |
+| `RESERVATION_APPLICATION_BANK_ACCOUNT_HOLDER` | 예금주 | 등록하지 않아도 된다 |
+| `YAHO_BLOG_URL` | YAHO 블로그 https URL | 등록하지 않아도 된다 |
+| `YAHO_INSTAGRAM_URL` | YAHO Instagram https URL | 등록하지 않아도 된다 |
+| `YAHO_KAKAO_CHANNEL_URL` | YAHO 카카오톡 채널 https URL | 등록하지 않아도 된다 |
+
+- 예약 신청(Phase 18, ADR-052) 설정값 6개는 하나라도 없거나 https가 아니면 공개 신청을 받지 않는다(fail closed). 값을 바꾸면 재배포한다.
+- Preview(`VERCEL_ENV=preview`)는 공유 DB(ADR-030)이므로 설정과 무관하게 공개 신청을 받지 않는다.
+- Production은 `lib/reservation-applications/consent-content.ts`의 동의 문구가 확정 원문(`isPlaceholder: false`)일 때만 공개 신청을 받는다.
 
 - `AUTH_SECRET`은 Production과 Preview가 같은 값을 쓰지 않는다 — 한쪽이 유출돼도 다른 환경의 세션을 위조할 수 없어야 한다.
 - `NEXTAUTH_URL`은 두 환경 모두 값을 채우지 않고 비워 둔다. Vercel은 요청 헤더로 배포 URL을 자동 감지하므로, 값을 채우면 오히려 PR마다 달라지는 Preview URL과 어긋나 인증이 깨질 수 있다.

@@ -88,6 +88,7 @@ yaho-management/
 - Reservation: 아이 1명 단위의 예약 및 개인 취소
 - Payment / PaymentItem / Refund: 결제, 예약별 청구 명세, 환불
 - Revenue: 결제/할인/환불 기반 매출 집계(읽기 전용 도메인)
+- ReservationApplication: 예약 확정 전 보호자 신청과 클래스별 공개 신청 링크(Phase 18). 비로그인 공개 화면은 `app/(public)`, 확정은 기존 예약 생성 코어를 트랜잭션 안에서 재사용한다
 
 ## 5. Data Flow
 ```text
