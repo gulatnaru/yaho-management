@@ -95,10 +95,13 @@ describe("buildApplicationAvailabilityContext", () => {
     });
   });
 
-  it("closes Production while consent decisions are still pending", () => {
+  it("opens Production once the finalized consent text has no pending decisions and config is complete", () => {
     const productionContext = buildApplicationAvailabilityContext(NOW, { ...completeEnv, VERCEL_ENV: "production" });
-    expect(productionContext.environmentAllowed).toBe(true);
-    expect(productionContext.consentReady).toBe(false);
+    expect(productionContext).toEqual({ now: NOW, environmentAllowed: true, configReady: true, consentReady: true });
+  });
+
+  it("keeps Production closed without the deposit/channel configuration", () => {
+    expect(buildApplicationAvailabilityContext(NOW, { VERCEL_ENV: "production" }).configReady).toBe(false);
   });
 
   it("closes Preview and incomplete configuration", () => {

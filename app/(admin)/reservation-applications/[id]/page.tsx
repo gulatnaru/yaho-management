@@ -26,7 +26,7 @@ import { DepositConfirmButton } from "../_components/deposit-confirm-button";
 export const dynamic = "force-dynamic";
 
 const CLASS_STATUS_LABEL = { SCHEDULED: "예정", CANCELLED: "취소", ENDED: "완료" } as const;
-const RETENTION_BASIS_LABEL = { CLASS_DATE: "수업일로부터 1년", LAST_RESERVED_CLASS_DATE: "마지막 예약 수업일로부터 3년" } as const;
+const RETENTION_BASIS_LABEL = { CLASS_DATE: "수업일로부터 1년", LAST_RESERVED_CLASS_DATE: "마지막 예약 수업일로부터 5년" } as const;
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

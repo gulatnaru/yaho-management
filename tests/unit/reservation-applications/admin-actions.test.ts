@@ -31,7 +31,7 @@ vi.mock("@/server/reservation-applications/resolve", () => ({
   closeReservationApplicationCore: (...args: unknown[]) => closeCoreMock(...args),
 }));
 vi.mock("@/server/reservation-applications/retention", () => ({
-  purgeExpiredApplicationsCore: (...args: unknown[]) => purgeCoreMock(...args),
+  purgeExpiredPersonalDataCore: (...args: unknown[]) => purgeCoreMock(...args),
 }));
 vi.mock("@/server/reservation-applications/links", () => ({
   issueApplicationLinkCore: (...args: unknown[]) => issueCoreMock(...args),
@@ -74,7 +74,7 @@ describe("reservation application admin actions", () => {
       () => actions.confirmReservationApplication("application-1", {}, formData({ childChoice: "NEW" })),
       () => actions.rejectReservationApplication("application-1", {}, formData({ resolutionNote: "사유" })),
       () => actions.cancelReservationApplication("application-1", {}, formData({ resolutionNote: "사유" })),
-      () => actions.purgeExpiredApplications(),
+      () => actions.purgeExpiredPersonalData(),
     ];
     for (const call of calls) {
       await expect(call()).rejects.toThrow("NOT_FOUND");
@@ -210,10 +210,10 @@ describe("reservation application admin actions", () => {
       });
     });
 
-    it("purges expired applications as the current admin and reports the count", async () => {
-      purgeCoreMock.mockResolvedValueOnce({ purgedCount: 2 });
+    it("purges expired applications and customers as the current admin and reports the counts", async () => {
+      purgeCoreMock.mockResolvedValueOnce({ purgedApplicationCount: 2, purgedChildCount: 1 });
 
-      await expect(actions.purgeExpiredApplications()).resolves.toEqual({ purgedCount: 2 });
+      await expect(actions.purgeExpiredPersonalData()).resolves.toEqual({ purgedApplicationCount: 2, purgedChildCount: 1 });
       expect(purgeCoreMock).toHaveBeenCalledWith({}, expect.objectContaining({ actorUserId: "admin-1" }));
     });
 

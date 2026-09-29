@@ -49,6 +49,7 @@ const ids = {
   programs: [] as string[],
   classes: [] as string[],
   children: [] as string[],
+  payments: [] as string[],
 };
 
 const tokens = {
@@ -258,6 +259,8 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     });
     await prisma.reservationApplication.deleteMany({ where: { classScheduleId: { in: ids.classes } } });
     await prisma.reservationApplicationLink.deleteMany({ where: { classScheduleId: { in: ids.classes } } });
+    await prisma.paymentItem.deleteMany({ where: { reservation: { classScheduleId: { in: ids.classes } } } });
+    await prisma.payment.deleteMany({ where: { id: { in: ids.payments } } });
     await prisma.reservation.deleteMany({ where: { classScheduleId: { in: ids.classes } } });
     await prisma.classTeacher.deleteMany({ where: { classScheduleId: { in: ids.classes } } });
     await prisma.classSchedule.deleteMany({ where: { id: { in: ids.classes } } });
@@ -546,7 +549,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "보관기간 지난 개인정보 파기" }).click();
-    await expect(page.getByText(/건의 개인정보를 파기했습니다/)).toBeVisible();
+    await expect(page.getByText(/개인정보를 파기했습니다/)).toBeVisible();
 
     const purged = await prisma.reservationApplication.findUniqueOrThrow({ where: { id: expired.id } });
     expect(purged).toMatchObject({
@@ -568,6 +571,109 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await page.goto(`/reservation-applications/${expired.id}`);
     await expect(page.getByTestId("application-purged")).toBeVisible();
     expect(await page.content()).not.toContain(guardianPhone);
+  });
+
+  test("마지막 예약 수업일로부터 5년이 지난 확정 고객은 비식별화되고 예약·결제 기록은 남는다", async ({ page }) => {
+    const now = Date.now();
+    const sixYearsAgo = await createClass({
+      label: "six-years",
+      startsAt: new Date(now - 6 * 366 * DAY),
+      endsAt: new Date(now - 6 * 366 * DAY + 2 * 60 * 60 * 1000),
+      programId: ids.programs[0]!,
+      teacherId: ids.teachers[0]!,
+    });
+    const recentPast = await createClass({
+      label: "four-years",
+      startsAt: new Date(now - 4 * 366 * DAY),
+      endsAt: new Date(now - 4 * 366 * DAY + 2 * 60 * 60 * 1000),
+      programId: ids.programs[0]!,
+      teacherId: ids.teachers[0]!,
+    });
+    const oldName = `오년경과아이_${marker}`;
+    const keptName = `사년경과아이_${marker}`;
+    const [oldChild, keptChild, sibling] = await Promise.all([
+      prisma.child.create({
+        data: {
+          name: oldName,
+          birthDate: new Date("2015-01-01"),
+          gender: "FEMALE",
+          guardianName: `오래된보호자_${marker}`,
+          guardianPhone: "010-0000-5555",
+          memo: "합성 운영 메모",
+          safetyInfo: { create: { allergies: "합성 알레르기" } },
+        },
+      }),
+      prisma.child.create({ data: { name: keptName, guardianPhone: "010-0000-4444" } }),
+      prisma.child.create({ data: { name: `형제아이_${marker}` } }),
+    ]);
+    ids.children.push(oldChild.id, keptChild.id, sibling.id);
+    const [childAId, childBId] = [oldChild.id, sibling.id].sort();
+    await prisma.relationship.create({ data: { childAId: childAId!, childBId: childBId!, type: "SIBLING" } });
+    await prisma.childConsent.create({
+      data: { childId: oldChild.id, consentType: "PRIVACY", action: "AGREED", recordedById: adminUserId },
+    });
+    const [oldReservation] = await Promise.all([
+      prisma.reservation.create({
+        data: {
+          classScheduleId: sixYearsAgo.id,
+          childId: oldChild.id,
+          status: "COMPLETED",
+          attendance: "PRESENT",
+          memo: "합성 예약 메모",
+        },
+      }),
+      prisma.reservation.create({
+        data: { classScheduleId: recentPast.id, childId: keptChild.id, status: "COMPLETED", attendance: "PRESENT" },
+      }),
+    ]);
+    const payerName = `결제자_${marker}`;
+    const payment = await prisma.payment.create({
+      data: {
+        payerName,
+        method: "TRANSFER",
+        totalAmount: 30_000,
+        items: { create: { reservationId: oldReservation.id, amount: 30_000, paidAmount: 30_000 } },
+      },
+    });
+    ids.payments.push(payment.id);
+
+    await login(page, adminEmail, adminPassword);
+    await page.goto("/reservation-applications/retention");
+    await expect(page.getByTestId("retention-purgeable-children")).toContainText(oldName);
+    await expect(page.getByTestId("retention-purgeable-children")).not.toContainText(keptName);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "보관기간 지난 개인정보 파기" }).click();
+    await expect(page.getByText(/확정 고객 \d+명의 개인정보를 파기했습니다/)).toBeVisible();
+
+    const purged = await prisma.child.findUniqueOrThrow({ where: { id: oldChild.id } });
+    expect(purged).toMatchObject({
+      name: "(파기됨)",
+      birthDate: null,
+      gender: "UNSPECIFIED",
+      guardianName: null,
+      guardianPhone: null,
+      memo: null,
+      isActive: false,
+      personalDataPurgedById: adminUserId,
+    });
+    expect(await prisma.childConsent.count({ where: { childId: oldChild.id } })).toBe(0);
+    expect(await prisma.childSafetyInfo.count({ where: { childId: oldChild.id } })).toBe(0);
+    expect(await prisma.relationship.count({ where: { OR: [{ childAId: oldChild.id }, { childBId: oldChild.id }] } })).toBe(0);
+    const keptReservation = await prisma.reservation.findUniqueOrThrow({
+      where: { id: oldReservation.id },
+      include: { paymentItem: { include: { payment: true } } },
+    });
+    expect(keptReservation).toMatchObject({ status: "COMPLETED", attendance: "PRESENT", memo: null, childId: oldChild.id });
+    expect(keptReservation.paymentItem?.payment).toMatchObject({ payerName, totalAmount: 30_000 });
+    expect(await prisma.child.findUniqueOrThrow({ where: { id: keptChild.id } })).toMatchObject({
+      name: keptName,
+      personalDataPurgedAt: null,
+    });
+
+    await page.goto(`/children/${oldChild.id}`);
+    await expect(page.getByTestId("child-purged")).toBeVisible();
+    await expect(page.getByRole("link", { name: "정보 수정" })).toHaveCount(0);
   });
 
   test("MANAGER와 TEACHER는 예약 신청 관리와 링크 카드에 접근할 수 없다", async ({ page }) => {

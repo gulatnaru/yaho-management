@@ -128,11 +128,25 @@ describe("setChildActive", () => {
     updateMock.mockResolvedValue({});
   });
 
+  it("refuses to reactivate a child whose personal data was purged (ADR-057)", async () => {
+    const { Prisma } = await import("@prisma/client");
+    updateMock.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError("Record to update not found.", { code: "P2025", clientVersion: "test" }),
+    );
+
+    await expect(setChildActive("child-1", true)).resolves.toEqual({
+      error: "보관기간이 지나 개인정보를 파기한 아이는 수정할 수 없습니다.",
+    });
+  });
+
   it("only calls prisma.child.update with isActive, never a delete method", async () => {
     const result = await setChildActive("child-1", false);
 
     expect(result).toEqual({});
-    expect(updateMock).toHaveBeenCalledWith({ where: { id: "child-1" }, data: { isActive: false } });
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "child-1", personalDataPurgedAt: null },
+      data: { isActive: false },
+    });
   });
 });
 

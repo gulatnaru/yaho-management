@@ -52,6 +52,7 @@ describe("consent content", () => {
   it("uses a dated version and finalized (non-placeholder) text", () => {
     expect(APPLICATION_CONSENT_CONTENT.version).toMatch(/^\d{4}-\d{2}-\d{2}(-r\d+)?$/);
     expect(APPLICATION_CONSENT_CONTENT.version).not.toBe("2026-09-30");
+    expect(APPLICATION_CONSENT_CONTENT.version).not.toBe("2026-09-30-r2");
     expect(APPLICATION_CONSENT_CONTENT.isPlaceholder).toBe(false);
   });
 
@@ -61,7 +62,11 @@ describe("consent content", () => {
       expect(privacy).toContain(field);
     }
     expect(privacy).toContain("해당 수업일로부터 1년");
-    expect(privacy).toContain("마지막 예약 수업일로부터 3년");
+    expect(privacy).toContain("마지막 예약 수업일로부터 5년");
+    expect(privacy).toContain("재방문 고객 관리");
+    expect(privacy).toContain("동의 이력도 같은 기간 보관");
+    expect(privacy).toContain("고객 정보 보유기간과 별도로");
+    expect(privacy).not.toContain("3년");
     expect(privacy).not.toContain("프로그램 이용일");
     expect(privacy).toContain("동의를 거부할 권리");
     const allText = items.flatMap((item) => item.body).join("\n");
@@ -100,6 +105,7 @@ describe("consent content", () => {
     expect(isConsentContentReady("production", { isPlaceholder: false, pendingDecisions: ["환불"] })).toBe(false);
     expect(isConsentContentReady("production", { isPlaceholder: false, pendingDecisions: [] })).toBe(true);
     expect(isConsentContentReady(undefined, { isPlaceholder: false, pendingDecisions: ["환불"] })).toBe(true);
-    expect(isConsentContentReady("production")).toBe(APPLICATION_CONSENT_CONTENT.pendingDecisions.length === 0);
+    expect(APPLICATION_CONSENT_CONTENT.pendingDecisions).toEqual([]);
+    expect(isConsentContentReady("production")).toBe(true);
   });
 });

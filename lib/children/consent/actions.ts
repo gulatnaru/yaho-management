@@ -22,9 +22,15 @@ export async function recordChildConsent(
     return { errors: parsed.error.flatten().fieldErrors };
   }
 
-  const child = await prisma.child.findUnique({ where: { id: childId }, select: { id: true } });
+  const child = await prisma.child.findUnique({
+    where: { id: childId },
+    select: { id: true, personalDataPurgedAt: true },
+  });
   if (!child) {
     return { formError: "아이를 찾을 수 없습니다." };
+  }
+  if (child.personalDataPurgedAt) {
+    return { formError: "보관기간이 지나 개인정보를 파기한 아이에게는 동의 이력을 기록할 수 없습니다." };
   }
 
   await prisma.childConsent.create({

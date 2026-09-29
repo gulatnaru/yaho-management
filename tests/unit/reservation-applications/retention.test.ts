@@ -2,21 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import {
   addYearsToKstDate,
   computeApplicationRetention,
+  computeConfirmedCustomerRetention,
+  CONFIRMED_CUSTOMER_RETENTION_YEARS,
   isPurgeableStatus,
   isRetentionExpired,
+  UNCONFIRMED_APPLICATION_RETENTION_YEARS,
 } from "@/lib/reservation-applications/retention";
 import {
-  purgeExpiredApplicationsCore,
+  purgeExpiredPersonalDataCore,
   scanApplicationRetention,
+  scanChildRetention,
 } from "@/server/reservation-applications/retention";
 
 // 2026-10-03 10:00 KST 수업
 const CLASS_STARTS_AT = new Date("2026-10-03T01:00:00.000Z");
 
+describe("retention periods", () => {
+  it("keeps unconfirmed applications 1 year and confirmed customers 5 years", () => {
+    expect(UNCONFIRMED_APPLICATION_RETENTION_YEARS).toBe(1);
+    expect(CONFIRMED_CUSTOMER_RETENTION_YEARS).toBe(5);
+  });
+});
+
 describe("addYearsToKstDate", () => {
   it("keeps the calendar day and clamps leap days", () => {
     expect(addYearsToKstDate("2026-10-03", 1)).toBe("2027-10-03");
-    expect(addYearsToKstDate("2028-02-29", 1)).toBe("2029-02-28");
+    expect(addYearsToKstDate("2028-02-29", 5)).toBe("2033-02-28");
     expect(addYearsToKstDate("2028-02-29", 4)).toBe("2032-02-29");
   });
 });
@@ -43,14 +54,14 @@ describe("computeApplicationRetention", () => {
     expect(retention.basisDate).toBe("2026-10-04");
   });
 
-  it("keeps confirmed applications for three years from the child's last reserved class date", () => {
+  it("keeps confirmed applications for five years from the child's last reserved class date", () => {
     expect(
       computeApplicationRetention({
         status: "CONFIRMED",
         classStartsAt: CLASS_STARTS_AT,
         lastReservedClassAt: new Date("2027-05-01T01:00:00.000Z"),
       }),
-    ).toEqual({ basis: "LAST_RESERVED_CLASS_DATE", basisDate: "2027-05-01", retainUntil: "2030-05-01" });
+    ).toEqual({ basis: "LAST_RESERVED_CLASS_DATE", basisDate: "2027-05-01", retainUntil: "2032-05-01" });
   });
 
   it("uses the latest valid reservation even if it is earlier than the application class", () => {
@@ -60,13 +71,28 @@ describe("computeApplicationRetention", () => {
         classStartsAt: CLASS_STARTS_AT,
         lastReservedClassAt: new Date("2025-01-01T01:00:00.000Z"),
       }),
-    ).toMatchObject({ basisDate: "2025-01-01", retainUntil: "2028-01-01" });
+    ).toMatchObject({ basisDate: "2025-01-01", retainUntil: "2030-01-01" });
   });
 
   it("falls back to the application class date only when there is no valid reservation", () => {
     expect(
       computeApplicationRetention({ status: "CONFIRMED", classStartsAt: CLASS_STARTS_AT, lastReservedClassAt: null }),
-    ).toMatchObject({ basis: "LAST_RESERVED_CLASS_DATE", basisDate: "2026-10-03", retainUntil: "2029-10-03" });
+    ).toMatchObject({ basis: "LAST_RESERVED_CLASS_DATE", basisDate: "2026-10-03", retainUntil: "2031-10-03" });
+  });
+});
+
+describe("computeConfirmedCustomerRetention", () => {
+  it("prefers the last reserved class date, then the confirmed application class, else no basis", () => {
+    expect(
+      computeConfirmedCustomerRetention({
+        lastReservedClassAt: new Date("2027-05-01T01:00:00.000Z"),
+        fallbackClassAt: CLASS_STARTS_AT,
+      }),
+    ).toMatchObject({ basisDate: "2027-05-01", retainUntil: "2032-05-01" });
+    expect(
+      computeConfirmedCustomerRetention({ lastReservedClassAt: null, fallbackClassAt: CLASS_STARTS_AT }),
+    ).toMatchObject({ basisDate: "2026-10-03", retainUntil: "2031-10-03" });
+    expect(computeConfirmedCustomerRetention({ lastReservedClassAt: null, fallbackClassAt: null })).toBeNull();
   });
 });
 
@@ -85,67 +111,180 @@ describe("retention expiry", () => {
   });
 });
 
+type ApplicationRow = { id: string; status: string; childId: string | null; childName: string | null; startsAt: Date };
+type ChildRow = { id: string; name: string; confirmedClassDates: Date[] };
+
 function createClient(options: {
-  applications: Array<{ id: string; status: string; childId: string | null; childName: string | null; startsAt: Date }>;
-  lastUse?: Array<{ childId: string; lastReservedClassAt: Date | null }>;
+  applications?: ApplicationRow[];
+  children?: ChildRow[];
+  lastReserved?: Array<{ childId: string; lastReservedClassAt: Date | null }>;
 }) {
-  const findMany = vi.fn(async () =>
-    options.applications.map(({ startsAt, ...rest }) => ({ ...rest, classSchedule: { startsAt } })),
+  const calls: string[] = [];
+  const applicationFindMany = vi.fn(async () =>
+    (options.applications ?? []).map(({ startsAt, ...rest }) => ({ ...rest, classSchedule: { startsAt } })),
   );
-  const queryRaw = vi.fn(async () => options.lastUse ?? []);
-  const updateMany = vi.fn(async (args: { where: { id: { in: string[] } } }) => ({ count: args.where.id.in.length }));
-  const tx = { reservationApplication: { findMany, updateMany }, $queryRaw: queryRaw };
+  const childFindMany = vi.fn(async () =>
+    (options.children ?? []).map(({ confirmedClassDates, ...rest }) => ({
+      ...rest,
+      reservationApplications: confirmedClassDates.map((startsAt) => ({ classSchedule: { startsAt } })),
+    })),
+  );
+  const queryRaw = vi.fn(async () => options.lastReserved ?? []);
+  const record = (name: string, count = 1) =>
+    vi.fn(async (args: { where: Record<string, unknown> }) => {
+      calls.push(name);
+      const ids = (args.where.id as { in?: string[] } | undefined)?.in;
+      return { count: ids ? ids.length : count };
+    });
+  const tx = {
+    $queryRaw: queryRaw,
+    reservationApplication: { findMany: applicationFindMany, updateMany: record("application.update") },
+    child: { findMany: childFindMany, updateMany: record("child.update") },
+    childConsent: { deleteMany: record("consent.delete") },
+    childSafetyInfo: { deleteMany: record("safety.delete") },
+    relationship: { deleteMany: record("relationship.delete") },
+    reservation: { updateMany: record("reservation.update") },
+  };
   const transaction = vi.fn(async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx));
-  return { client: { ...tx, $transaction: transaction } as never, findMany, queryRaw, updateMany };
+  return { client: { ...tx, $transaction: transaction } as never, tx, calls, childFindMany };
 }
 
-describe("application retention scan and purge", () => {
+describe("application retention scan", () => {
   const NOW = new Date("2027-10-10T00:00:00.000Z");
-  const OLD_CLASS = new Date("2026-10-03T01:00:00.000Z"); // 만료일 2027-10-03
+  const OLD_CLASS = new Date("2026-10-03T01:00:00.000Z"); // 미확정 만료일 2027-10-03
   const RECENT_CLASS = new Date("2027-09-01T01:00:00.000Z");
 
-  const applications = [
+  const applications: ApplicationRow[] = [
     { id: "rejected-old", status: "REJECTED", childId: null, childName: "반려아이", startsAt: OLD_CLASS },
     { id: "cancelled-recent", status: "CANCELLED", childId: null, childName: "최근아이", startsAt: RECENT_CLASS },
     { id: "pending-old", status: "SUBMITTED", childId: null, childName: "대기아이", startsAt: OLD_CLASS },
     { id: "confirmed-old", status: "CONFIRMED", childId: "child-1", childName: "확정아이", startsAt: OLD_CLASS },
   ];
 
-  it("separates purgeable applications from expired pending ones and uses the last reserved class date for confirmed", async () => {
-    const { client, findMany, queryRaw } = createClient({
+  it("separates purgeable applications from expired pending ones and keeps confirmed ones 5 years", async () => {
+    const { client } = createClient({
       applications,
-      lastUse: [{ childId: "child-1", lastReservedClassAt: new Date("2027-06-01T01:00:00.000Z") }],
+      lastReserved: [{ childId: "child-1", lastReservedClassAt: new Date("2027-06-01T01:00:00.000Z") }],
     });
 
     const scan = await scanApplicationRetention(client, NOW);
 
-    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { personalDataPurgedAt: null } }));
-    expect(queryRaw).toHaveBeenCalledTimes(1);
     expect(scan.purgeable.map((candidate) => candidate.id)).toEqual(["rejected-old"]);
     expect(scan.expiredPending.map((candidate) => candidate.id)).toEqual(["pending-old"]);
   });
 
-  it("purges confirmed applications once the child's last reserved class date is over three years ago", async () => {
-    const { client } = createClient({
-      applications,
-      lastUse: [{ childId: "child-1", lastReservedClassAt: new Date("2024-06-01T01:00:00.000Z") }],
-    });
+  it("still keeps a confirmed application after 3 years and expires it after 5", async () => {
+    const lastReserved = [{ childId: "child-1", lastReservedClassAt: new Date("2024-06-01T01:00:00.000Z") }];
+    const threeYearsLater = await scanApplicationRetention(
+      createClient({ applications, lastReserved }).client,
+      new Date("2027-06-10T00:00:00.000Z"),
+    );
+    expect(threeYearsLater.purgeable.map((candidate) => candidate.id)).not.toContain("confirmed-old");
 
-    const scan = await scanApplicationRetention(client, new Date("2030-01-01T00:00:00.000Z"));
+    const fiveYearsLater = await scanApplicationRetention(
+      createClient({ applications, lastReserved }).client,
+      new Date("2029-06-02T00:00:00.000Z"),
+    );
+    expect(fiveYearsLater.purgeable.map((candidate) => candidate.id)).toContain("confirmed-old");
+  });
+});
 
-    expect(scan.purgeable.map((candidate) => candidate.id).sort()).toEqual(
-      ["cancelled-recent", "confirmed-old", "rejected-old"].sort(),
+describe("confirmed customer (child) retention scan", () => {
+  const children: ChildRow[] = [
+    { id: "child-old", name: "오래된아이", confirmedClassDates: [] },
+    { id: "child-recent", name: "최근아이", confirmedClassDates: [] },
+    { id: "child-fallback", name: "대체기준아이", confirmedClassDates: [new Date("2020-03-01T01:00:00.000Z")] },
+    { id: "child-no-basis", name: "기준없는아이", confirmedClassDates: [] },
+  ];
+  const lastReserved = [
+    { childId: "child-old", lastReservedClassAt: new Date("2020-01-10T01:00:00.000Z") },
+    { childId: "child-recent", lastReservedClassAt: new Date("2024-01-10T01:00:00.000Z") },
+  ];
+
+  it("targets only unpurged children with reservations or confirmed applications", async () => {
+    const { client, childFindMany } = createClient({ children, lastReserved });
+
+    await scanChildRetention(client, new Date("2026-01-01T00:00:00.000Z"));
+
+    expect(childFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          personalDataPurgedAt: null,
+          OR: [{ reservations: { some: {} } }, { reservationApplications: { some: { status: "CONFIRMED" } } }],
+        },
+      }),
     );
   });
 
-  it("nulls personal fields only for expired, non-pending, not-yet-purged applications", async () => {
-    const { client, updateMany } = createClient({ applications });
+  it("expires children five years after the last reserved class, using the confirmed application only as fallback", async () => {
+    const { client } = createClient({ children, lastReserved });
 
-    await expect(purgeExpiredApplicationsCore(client, { actorUserId: "admin-1", now: NOW })).resolves.toEqual({
-      purgedCount: 1,
+    const candidates = await scanChildRetention(client, new Date("2026-01-01T00:00:00.000Z"));
+
+    expect(candidates.map((candidate) => [candidate.id, candidate.retention.retainUntil])).toEqual([
+      ["child-old", "2025-01-10"],
+      ["child-fallback", "2025-03-01"],
+    ]);
+  });
+});
+
+describe("purgeExpiredPersonalDataCore", () => {
+  const NOW = new Date("2026-01-01T00:00:00.000Z");
+  const actor = { actorUserId: "admin-1", now: NOW };
+
+  it("anonymizes expired children in place and deletes only consent, safety and relationship rows", async () => {
+    const { client, tx, calls } = createClient({
+      children: [{ id: "child-old", name: "오래된아이", confirmedClassDates: [] }],
+      lastReserved: [{ childId: "child-old", lastReservedClassAt: new Date("2020-01-10T01:00:00.000Z") }],
     });
 
-    expect(updateMany).toHaveBeenCalledWith({
+    await expect(purgeExpiredPersonalDataCore(client, actor)).resolves.toEqual({
+      purgedApplicationCount: 1,
+      purgedChildCount: 1,
+    });
+
+    const childIds = { in: ["child-old"] };
+    expect(tx.childConsent.deleteMany).toHaveBeenCalledWith({ where: { childId: childIds } });
+    expect(tx.childSafetyInfo.deleteMany).toHaveBeenCalledWith({ where: { childId: childIds } });
+    expect(tx.relationship.deleteMany).toHaveBeenCalledWith({
+      where: { OR: [{ childAId: childIds }, { childBId: childIds }] },
+    });
+    expect(tx.reservation.updateMany).toHaveBeenCalledWith({
+      where: { childId: childIds },
+      data: { memo: null, cancelDetail: null },
+    });
+    expect(tx.child.updateMany).toHaveBeenCalledWith({
+      where: { id: childIds, personalDataPurgedAt: null },
+      data: {
+        name: "(파기됨)",
+        birthDate: null,
+        gender: "UNSPECIFIED",
+        guardianName: null,
+        guardianPhone: null,
+        memo: null,
+        isActive: false,
+        personalDataPurgedAt: NOW,
+        personalDataPurgedById: "admin-1",
+      },
+    });
+    // Child·예약·결제·환불 행은 삭제하지 않는다.
+    expect(calls).not.toContain("child.delete");
+    expect(Object.keys(tx)).not.toContain("payment");
+    expect(Object.keys(tx)).not.toContain("refund");
+  });
+
+  it("purges expired application copies with the admin and time recorded", async () => {
+    const { client, tx } = createClient({
+      applications: [
+        { id: "rejected-old", status: "REJECTED", childId: null, childName: "반려아이", startsAt: new Date("2024-10-03T01:00:00.000Z") },
+      ],
+    });
+
+    await expect(purgeExpiredPersonalDataCore(client, actor)).resolves.toEqual({
+      purgedApplicationCount: 1,
+      purgedChildCount: 0,
+    });
+    expect(tx.reservationApplication.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ["rejected-old"] }, personalDataPurgedAt: null, status: { not: "SUBMITTED" } },
       data: {
         childName: null,
@@ -159,14 +298,19 @@ describe("application retention scan and purge", () => {
         personalDataPurgedById: "admin-1",
       },
     });
+    expect(tx.childConsent.deleteMany).not.toHaveBeenCalled();
   });
 
-  it("does nothing when no application has expired", async () => {
-    const { client, updateMany } = createClient({ applications: [applications[1]] });
-
-    await expect(purgeExpiredApplicationsCore(client, { actorUserId: "admin-1", now: NOW })).resolves.toEqual({
-      purgedCount: 0,
+  it("does nothing when nothing has expired", async () => {
+    const { client, calls } = createClient({
+      children: [{ id: "child-recent", name: "최근아이", confirmedClassDates: [] }],
+      lastReserved: [{ childId: "child-recent", lastReservedClassAt: new Date("2025-06-01T01:00:00.000Z") }],
     });
-    expect(updateMany).not.toHaveBeenCalled();
+
+    await expect(purgeExpiredPersonalDataCore(client, actor)).resolves.toEqual({
+      purgedApplicationCount: 0,
+      purgedChildCount: 0,
+    });
+    expect(calls).toEqual([]);
   });
 });

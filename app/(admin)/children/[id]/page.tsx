@@ -104,18 +104,27 @@ export default async function ChildDetailPage({
 
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <h1 className="break-words text-2xl font-bold">{child.name}</h1>
-        <div className="flex flex-wrap gap-2">
-          {child.isActive ? (
-            <Link className={cn(buttonVariants())} href={`/reservations/new?childId=${child.id}`}>
-              예약 추가
+        {child.personalDataPurgedAt ? null : (
+          <div className="flex flex-wrap gap-2">
+            {child.isActive ? (
+              <Link className={cn(buttonVariants())} href={`/reservations/new?childId=${child.id}`}>
+                예약 추가
+              </Link>
+            ) : null}
+            <Link className={cn(buttonVariants())} href={`/children/${child.id}/edit`}>
+              정보 수정
             </Link>
-          ) : null}
-          <Link className={cn(buttonVariants())} href={`/children/${child.id}/edit`}>
-            정보 수정
-          </Link>
-          <ChildStatusToggle id={child.id} isActive={child.isActive} />
-        </div>
+            <ChildStatusToggle id={child.id} isActive={child.isActive} />
+          </div>
+        )}
       </div>
+
+      {child.personalDataPurgedAt ? (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600" data-testid="child-purged">
+          마지막 예약 수업일로부터 5년 보관기간이 지나 개인정보를 파기했습니다({formatKstDateTime(child.personalDataPurgedAt)}).
+          예약·출결·결제 기록만 남아 있습니다.
+        </p>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -231,15 +240,17 @@ export default async function ChildDetailPage({
           ) : (
             <p className="text-sm text-slate-500">등록된 안전 정보가 없습니다.</p>
           )}
-          <Link
-            className={cn(
-              buttonVariants(),
-              "bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100",
-            )}
-            href={`/children/${id}/safety`}
-          >
-            안전 정보 수정
-          </Link>
+          {child.personalDataPurgedAt ? null : (
+            <Link
+              className={cn(
+                buttonVariants(),
+                "bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100",
+              )}
+              href={`/children/${id}/safety`}
+            >
+              안전 정보 수정
+            </Link>
+          )}
         </CardContent>
       </Card>
 
@@ -264,7 +275,7 @@ export default async function ChildDetailPage({
               );
             })}
           </div>
-          <ConsentForm childId={id} />
+          {child.personalDataPurgedAt ? null : <ConsentForm childId={id} />}
           {consent.history.length > 0 ? (
             <details>
               <summary className="cursor-pointer text-sm font-medium">
