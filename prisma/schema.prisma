@@ -57,6 +57,14 @@ enum ConsentType {
 enum ConsentAction {
   AGREED
   REVOKED
+  DECLINED // 예약 신청에서 선택 동의를 하지 않음. 철회(REVOKED)와 구분한다 (ADR-055)
+}
+
+// 예약 신청서의 아이와의 관계(법정대리인 확인, ADR-055)
+enum GuardianRelationship {
+  FATHER
+  MOTHER
+  OTHER_LEGAL_GUARDIAN
 }
 
 enum ReservationApplicationStatus {
@@ -172,6 +180,7 @@ model User {
   issuedApplicationLinks       ReservationApplicationLink[] @relation("ApplicationLinkIssuedBy")
   depositConfirmedApplications ReservationApplication[]     @relation("ApplicationDepositConfirmedBy")
   resolvedApplications         ReservationApplication[]     @relation("ApplicationResolvedBy")
+  purgedApplications           ReservationApplication[]     @relation("ApplicationPersonalDataPurgedBy")
 }
 
 model UserAccountChange {
@@ -425,15 +434,19 @@ model ReservationApplication {
   id                          String                       @id @default(cuid())
   classScheduleId             String
   status                      ReservationApplicationStatus @default(SUBMITTED)
-  childName                   String
-  childBirthDate              DateTime                     @db.Date
-  childGender                 Gender
-  guardianName                String
-  guardianPhone               String
+  // 개인정보 항목은 보관기간 만료 후 파기(NULL)될 수 있다. 파기 전에는 CHECK 로 모두 필수다 (ADR-055)
+  childName                   String?
+  childBirthDate              DateTime?                    @db.Date
+  childGender                 Gender?
+  guardianName                String?
+  guardianPhone               String?
+  guardianRelationship        GuardianRelationship?
   requestNote                 String?
-  privacyConsentAgreed        Boolean
-  photoShareConsentAgreed     Boolean
-  photoMarketingConsentAgreed Boolean
+  programTermsAcknowledged    Boolean // [필수] 프로그램 안전 및 이용사항 확인
+  privacyConsentAgreed        Boolean // [필수] 개인정보 수집·이용 동의
+  legalGuardianConfirmed      Boolean // [필수] 법정대리인 확인
+  photoShareConsentAgreed     Boolean // [선택] 활동 사진·영상 촬영 및 참여 보호자 공유
+  photoMarketingConsentAgreed Boolean // [선택] 사진·영상 YAHO 홍보 활용
   consentVersion              String // 제출 당시 보여준 동의 문구 버전
   submittedAt                 DateTime                     @default(now())
   depositConfirmedAt          DateTime?
@@ -443,12 +456,15 @@ model ReservationApplication {
   resolutionNote              String? // 반려·취소 사유
   childId                     String? // 확정 시 연결한 아이
   reservationId               String? // 확정 시 생성·재활성화한 예약. ADR-024 재예약 때문에 unique 가 아니다
+  personalDataPurgedAt        DateTime? // 보관기간 만료로 개인정보를 파기한 시각 (ADR-055)
+  personalDataPurgedById      String?
   createdAt                   DateTime                     @default(now())
   updatedAt                   DateTime                     @updatedAt
 
-  classSchedule      ClassSchedule  @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
-  depositConfirmedBy User?          @relation("ApplicationDepositConfirmedBy", fields: [depositConfirmedById], references: [id], onDelete: Restrict)
-  resolvedBy         User?          @relation("ApplicationResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+  classSchedule        ClassSchedule  @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
+  depositConfirmedBy   User?          @relation("ApplicationDepositConfirmedBy", fields: [depositConfirmedById], references: [id], onDelete: Restrict)
+  resolvedBy           User?          @relation("ApplicationResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+  personalDataPurgedBy User?          @relation("ApplicationPersonalDataPurgedBy", fields: [personalDataPurgedById], references: [id], onDelete: Restrict)
   child              Child?         @relation(fields: [childId], references: [id], onDelete: Restrict)
   reservation        Reservation?   @relation(fields: [reservationId], references: [id], onDelete: Restrict)
   consents           ChildConsent[]
@@ -457,6 +473,7 @@ model ReservationApplication {
   @@index([classScheduleId, status])
   @@index([childId])
   @@index([reservationId])
+  @@index([personalDataPurgedAt])
 }
 
 // ─────────────────────────────────────────────
@@ -564,7 +581,11 @@ model Refund {
 //
 // ALTER TABLE "ReservationApplication"
 //   ADD CONSTRAINT "reservation_application_text_not_blank" CHECK (childName/guardianName/guardianPhone/consentVersion 공백 금지),
-//   ADD CONSTRAINT "reservation_application_required_consents" CHECK ("privacyConsentAgreed" AND "photoShareConsentAgreed"),
+//   (20260929073840 의 "reservation_application_required_consents" 는 ADR-055 migration 에서 제거했다 — 사진 공유는 선택)
+//   ADD CONSTRAINT "reservation_application_required_terms" CHECK ("programTermsAcknowledged" AND "privacyConsentAgreed" AND "legalGuardianConfirmed"),
+//   ADD CONSTRAINT "reservation_application_personal_data_presence" CHECK (
+//     파기 전 ⇒ 아이·보호자·관계 항목 모두 있음, 파기 후 ⇒ 해당 항목·요청사항 모두 NULL + 처리 대기 아님
+//   ),
 //   ADD CONSTRAINT "reservation_application_deposit_pair" CHECK (입금 확인 시각과 처리자는 함께 존재),
 //   ADD CONSTRAINT "reservation_application_status_consistency" CHECK (
 //     SUBMITTED ⇒ 처리 정보·아이·예약 없음,
