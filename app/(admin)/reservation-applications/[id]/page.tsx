@@ -26,7 +26,7 @@ import { DepositConfirmButton } from "../_components/deposit-confirm-button";
 export const dynamic = "force-dynamic";
 
 const CLASS_STATUS_LABEL = { SCHEDULED: "예정", CANCELLED: "취소", ENDED: "완료" } as const;
-const RETENTION_BASIS_LABEL = { CLASS_DATE: "수업일로부터 1년", LAST_PROGRAM_USE: "마지막 프로그램 이용일로부터 3년" } as const;
+const RETENTION_BASIS_LABEL = { CLASS_DATE: "수업일로부터 1년", LAST_RESERVED_CLASS_DATE: "마지막 예약 수업일로부터 3년" } as const;
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -153,6 +153,9 @@ export default async function ReservationApplicationDetailPage({ params }: { par
             <Field label="[선택] 사진·영상 YAHO 홍보 활용">
               <AgreementBadge agreed={application.photoMarketingConsentAgreed} />
             </Field>
+            <Field label="[필수] 취소 및 환불규정">
+              <AgreementBadge agreed={application.refundTermsAcknowledged} agreedLabel="확인" declinedLabel="미확인" />
+            </Field>
             <Field label="동의 문구 버전">{application.consentVersion}</Field>
             <Field label="신청 일시">{formatKstDateTime(application.submittedAt)}</Field>
           </dl>
@@ -230,7 +233,7 @@ export default async function ReservationApplicationDetailPage({ params }: { par
             </p>
           ) : null}
           <p className="text-xs text-slate-500">
-            확정되면 아이의 마지막 프로그램 이용일에 따라 만료일이 늦춰집니다. 파기는{" "}
+            확정되면 아이의 마지막 예약 수업일에 따라 만료일이 늦춰집니다. 파기는{" "}
             <Link className="underline" href="/reservation-applications/retention">
               보관기간 관리
             </Link>

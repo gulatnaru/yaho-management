@@ -25,7 +25,7 @@ describe("computeApplicationRetention", () => {
   it.each(["SUBMITTED", "REJECTED", "CANCELLED"] as const)(
     "keeps %s applications for one year from the class date (KST)",
     (status) => {
-      expect(computeApplicationRetention({ status, classStartsAt: CLASS_STARTS_AT, lastProgramUseAt: null })).toEqual({
+      expect(computeApplicationRetention({ status, classStartsAt: CLASS_STARTS_AT, lastReservedClassAt: null })).toEqual({
         basis: "CLASS_DATE",
         basisDate: "2026-10-03",
         retainUntil: "2027-10-03",
@@ -38,27 +38,35 @@ describe("computeApplicationRetention", () => {
     const retention = computeApplicationRetention({
       status: "REJECTED",
       classStartsAt: new Date("2026-10-03T23:30:00.000Z"),
-      lastProgramUseAt: null,
+      lastReservedClassAt: null,
     });
     expect(retention.basisDate).toBe("2026-10-04");
   });
 
-  it("keeps confirmed applications for three years from the child's last program use", () => {
+  it("keeps confirmed applications for three years from the child's last reserved class date", () => {
     expect(
       computeApplicationRetention({
         status: "CONFIRMED",
         classStartsAt: CLASS_STARTS_AT,
-        lastProgramUseAt: new Date("2027-05-01T01:00:00.000Z"),
+        lastReservedClassAt: new Date("2027-05-01T01:00:00.000Z"),
       }),
-    ).toEqual({ basis: "LAST_PROGRAM_USE", basisDate: "2027-05-01", retainUntil: "2030-05-01" });
+    ).toEqual({ basis: "LAST_RESERVED_CLASS_DATE", basisDate: "2027-05-01", retainUntil: "2030-05-01" });
   });
 
-  it("falls back to the application class date when the child has no later use", () => {
-    for (const lastProgramUseAt of [null, new Date("2025-01-01T01:00:00.000Z")]) {
-      expect(
-        computeApplicationRetention({ status: "CONFIRMED", classStartsAt: CLASS_STARTS_AT, lastProgramUseAt }),
-      ).toMatchObject({ basisDate: "2026-10-03", retainUntil: "2029-10-03" });
-    }
+  it("uses the latest valid reservation even if it is earlier than the application class", () => {
+    expect(
+      computeApplicationRetention({
+        status: "CONFIRMED",
+        classStartsAt: CLASS_STARTS_AT,
+        lastReservedClassAt: new Date("2025-01-01T01:00:00.000Z"),
+      }),
+    ).toMatchObject({ basisDate: "2025-01-01", retainUntil: "2028-01-01" });
+  });
+
+  it("falls back to the application class date only when there is no valid reservation", () => {
+    expect(
+      computeApplicationRetention({ status: "CONFIRMED", classStartsAt: CLASS_STARTS_AT, lastReservedClassAt: null }),
+    ).toMatchObject({ basis: "LAST_RESERVED_CLASS_DATE", basisDate: "2026-10-03", retainUntil: "2029-10-03" });
   });
 });
 
@@ -79,7 +87,7 @@ describe("retention expiry", () => {
 
 function createClient(options: {
   applications: Array<{ id: string; status: string; childId: string | null; childName: string | null; startsAt: Date }>;
-  lastUse?: Array<{ childId: string; lastUseAt: Date | null }>;
+  lastUse?: Array<{ childId: string; lastReservedClassAt: Date | null }>;
 }) {
   const findMany = vi.fn(async () =>
     options.applications.map(({ startsAt, ...rest }) => ({ ...rest, classSchedule: { startsAt } })),
@@ -103,10 +111,10 @@ describe("application retention scan and purge", () => {
     { id: "confirmed-old", status: "CONFIRMED", childId: "child-1", childName: "확정아이", startsAt: OLD_CLASS },
   ];
 
-  it("separates purgeable applications from expired pending ones and uses last program use for confirmed", async () => {
+  it("separates purgeable applications from expired pending ones and uses the last reserved class date for confirmed", async () => {
     const { client, findMany, queryRaw } = createClient({
       applications,
-      lastUse: [{ childId: "child-1", lastUseAt: new Date("2027-06-01T01:00:00.000Z") }],
+      lastUse: [{ childId: "child-1", lastReservedClassAt: new Date("2027-06-01T01:00:00.000Z") }],
     });
 
     const scan = await scanApplicationRetention(client, NOW);
@@ -117,10 +125,10 @@ describe("application retention scan and purge", () => {
     expect(scan.expiredPending.map((candidate) => candidate.id)).toEqual(["pending-old"]);
   });
 
-  it("purges expired confirmed applications once the child's last use is over three years ago", async () => {
+  it("purges confirmed applications once the child's last reserved class date is over three years ago", async () => {
     const { client } = createClient({
       applications,
-      lastUse: [{ childId: "child-1", lastUseAt: new Date("2024-06-01T01:00:00.000Z") }],
+      lastUse: [{ childId: "child-1", lastReservedClassAt: new Date("2024-06-01T01:00:00.000Z") }],
     });
 
     const scan = await scanApplicationRetention(client, new Date("2030-01-01T00:00:00.000Z"));

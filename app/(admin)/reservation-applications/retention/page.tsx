@@ -52,7 +52,7 @@ function CandidateTable({ items, testId }: { items: RetentionCandidate[]; testId
 
 /**
  * 예약 신청 개인정보 보관기간 관리(ADR-055, ADMIN 전용).
- * 미확정·반려·취소는 수업일로부터 1년, 확정은 아이의 마지막 프로그램 이용일로부터 3년 보관한다.
+ * 미확정·반려·취소는 수업일로부터 1년, 확정은 아이의 마지막 예약 수업일로부터 3년 보관한다.
  */
 export default async function ReservationApplicationRetentionPage() {
   await requireAdminPrincipal();
@@ -67,8 +67,8 @@ export default async function ReservationApplicationRetentionPage() {
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">신청 개인정보 보관기간 관리</h1>
         <p className="text-sm text-slate-500">
-          예약이 확정되지 않았거나 반려·취소된 신청은 수업일로부터 1년, 확정된 신청은 아이의 마지막 프로그램
-          이용일로부터 3년 동안 보관합니다. 기간이 지나면 이 화면에서 파기합니다.
+          예약이 확정되지 않았거나 반려·취소된 신청은 수업일로부터 1년, 확정된 신청은 아이의 마지막 예약
+          수업일로부터 3년 동안 보관합니다. 기간이 지나면 이 화면에서 파기합니다.
         </p>
       </div>
 

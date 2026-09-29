@@ -8,7 +8,7 @@ import {
   buildApplicationListWhere,
   type ApplicationListStatus,
 } from "./list";
-import { getLastProgramUseByChildIds } from "./last-program-use";
+import { getLastReservedClassDateByChildIds } from "./last-reserved-class";
 import { normalizePersonName, toPhoneDigits } from "./normalize";
 import { computeApplicationRetention, type ApplicationRetention } from "./retention";
 
@@ -113,6 +113,7 @@ const APPLICATION_DETAIL_SELECT = {
   guardianRelationship: true,
   programTermsAcknowledged: true,
   legalGuardianConfirmed: true,
+  refundTermsAcknowledged: true,
   personalDataPurgedAt: true,
   depositConfirmedBy: { select: { name: true } },
   resolvedBy: { select: { name: true } },
@@ -167,20 +168,20 @@ export async function listChildCandidatesForApplication(application: {
   return rankChildCandidates(rows, application);
 }
 
-/** 신청 상세의 개인정보 보관 만료일(ADR-055). 확정된 신청은 아이의 마지막 프로그램 이용일을 조회한다. */
+/** 신청 상세의 개인정보 보관 만료일(ADR-055/056). 확정된 신청은 아이의 마지막 예약 수업일을 조회한다. */
 export async function getApplicationRetention(application: {
   status: ApplicationDetail["status"];
   childId: string | null;
   classSchedule: { startsAt: Date };
 }): Promise<ApplicationRetention> {
-  const lastUseByChild =
+  const lastReservedByChild =
     application.status === "CONFIRMED" && application.childId
-      ? await getLastProgramUseByChildIds(prisma, [application.childId])
+      ? await getLastReservedClassDateByChildIds(prisma, [application.childId])
       : new Map<string, Date>();
   return computeApplicationRetention({
     status: application.status,
     classStartsAt: application.classSchedule.startsAt,
-    lastProgramUseAt: application.childId ? (lastUseByChild.get(application.childId) ?? null) : null,
+    lastReservedClassAt: application.childId ? (lastReservedByChild.get(application.childId) ?? null) : null,
   });
 }
 

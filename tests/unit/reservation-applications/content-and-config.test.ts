@@ -45,11 +45,13 @@ describe("consent content", () => {
       ["legalGuardianConfirmation", true],
       ["photoShareConsent", false],
       ["photoMarketingConsent", false],
+      ["refundTerms", true],
     ]);
   });
 
   it("uses a dated version and finalized (non-placeholder) text", () => {
-    expect(APPLICATION_CONSENT_CONTENT.version).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(APPLICATION_CONSENT_CONTENT.version).toMatch(/^\d{4}-\d{2}-\d{2}(-r\d+)?$/);
+    expect(APPLICATION_CONSENT_CONTENT.version).not.toBe("2026-09-30");
     expect(APPLICATION_CONSENT_CONTENT.isPlaceholder).toBe(false);
   });
 
@@ -59,7 +61,8 @@ describe("consent content", () => {
       expect(privacy).toContain(field);
     }
     expect(privacy).toContain("해당 수업일로부터 1년");
-    expect(privacy).toContain("마지막 프로그램 이용일로부터 3년");
+    expect(privacy).toContain("마지막 예약 수업일로부터 3년");
+    expect(privacy).not.toContain("프로그램 이용일");
     expect(privacy).toContain("동의를 거부할 권리");
     const allText = items.flatMap((item) => item.body).join("\n");
     for (const indefinite of ["존속하는 기간", "사업이 유지되는 동안", "이의를 제기하지", "법적 책임을 묻지"]) {
@@ -72,7 +75,24 @@ describe("consent content", () => {
     expect(share).toContain("해당 수업에 참여한 아동의 보호자");
     expect(share).toContain("동의하지 않아도 프로그램 참가에 제한이 없습니다");
     expect(share).toContain("삭제할 수 없을 수 있습니다");
-    expect(text("photoMarketingConsent")).toContain("철회");
+    const marketing = text("photoMarketingConsent");
+    expect(marketing).toContain("새로운 홍보물에 사용하지 않습니다");
+    expect(marketing).toContain("삭제하거나 비공개 처리합니다");
+    expect(marketing).toContain("인쇄물은 회수가 어려울 수 있습니다");
+    expect(marketing).toContain("제3자가 이미 저장하거나 공유한");
+    expect(marketing).toContain("홍보 목적이 종료되면 추가로 활용하지 않습니다");
+  });
+
+  it("states the class-date refund schedule without weekday rules, automatic refunds or rescheduling", () => {
+    const refund = text("refundTerms");
+    expect(refund).toContain("수업일 7일 전까지 취소: 전액 환불");
+    expect(refund).toContain("수업일 6일 전부터 4일 전까지 취소: 실제 결제금액(할인 반영 후)의 50% 환불");
+    expect(refund).toContain("수업일 3일 전부터 수업 당일까지 취소: 환불 불가");
+    expect(refund).toContain("모집 인원 미달");
+    expect(refund).toContain("우천 등을 이유로 개별 취소하는 경우: 환불 불가");
+    for (const forbidden of ["화요일", "수요일", "일정 변경", "천재지변", "자동"]) {
+      expect(refund).not.toContain(forbidden);
+    }
   });
 
   it("keeps Production closed while any decision is pending, even with finalized text", () => {

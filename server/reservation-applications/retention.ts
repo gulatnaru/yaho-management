@@ -1,5 +1,5 @@
 import type { PrismaClient, ReservationApplicationStatus } from "@prisma/client";
-import { getLastProgramUseByChildIds } from "@/lib/reservation-applications/last-program-use";
+import { getLastReservedClassDateByChildIds } from "@/lib/reservation-applications/last-reserved-class";
 import {
   computeApplicationRetention,
   isPurgeableStatus,
@@ -41,14 +41,14 @@ export async function scanApplicationRetention(client: RetentionScanClient, now:
   const confirmedChildIds = applications.flatMap((application) =>
     application.status === "CONFIRMED" && application.childId ? [application.childId] : [],
   );
-  const lastUseByChild = await getLastProgramUseByChildIds(client, confirmedChildIds);
+  const lastReservedByChild = await getLastReservedClassDateByChildIds(client, confirmedChildIds);
 
   const scan: RetentionScan = { purgeable: [], expiredPending: [] };
   for (const application of applications) {
     const retention = computeApplicationRetention({
       status: application.status,
       classStartsAt: application.classSchedule.startsAt,
-      lastProgramUseAt: application.childId ? (lastUseByChild.get(application.childId) ?? null) : null,
+      lastReservedClassAt: application.childId ? (lastReservedByChild.get(application.childId) ?? null) : null,
     });
     if (!isRetentionExpired(retention, now)) continue;
 

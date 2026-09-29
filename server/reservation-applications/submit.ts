@@ -60,6 +60,7 @@ export async function submitReservationApplicationCore(
       programTermsAcknowledged: input.data.programTerms,
       privacyConsentAgreed: input.data.privacyConsent,
       legalGuardianConfirmed: input.data.legalGuardianConfirmation,
+      refundTermsAcknowledged: input.data.refundTerms,
       photoShareConsentAgreed: input.data.photoShareConsent,
       photoMarketingConsentAgreed: input.data.photoMarketingConsent,
       consentVersion: input.consentVersion,

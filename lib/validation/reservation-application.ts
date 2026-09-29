@@ -51,7 +51,7 @@ const optionalCheckbox = z.preprocess((value) => value === "on" || value === tru
 /**
  * 비로그인 보호자의 예약 신청서(ADR-054, ADR-055).
  * 필수 입력: 아이 이름·생년월일·성별(선택 안 함 허용)·보호자 이름·보호자 연락처·아이와의 관계, 선택: 요청사항.
- * 필수 확인: 프로그램 안전 및 이용사항, 개인정보 수집·이용, 법정대리인 확인.
+ * 필수 확인: 프로그램 안전 및 이용사항, 개인정보 수집·이용, 법정대리인 확인, 취소 및 환불규정(ADR-056).
  * 선택 동의: 사진·영상 촬영 및 참여 보호자 공유, 사진·영상 홍보 활용.
  * 연락처와 생년월일 규칙은 관리자 아이 등록(lib/validation/child.ts)과 같다.
  */
@@ -94,6 +94,7 @@ export const reservationApplicationSubmissionSchema = z.object({
   legalGuardianConfirmation: agreedCheckbox("법정대리인 확인에 동의해주세요"),
   photoShareConsent: optionalCheckbox,
   photoMarketingConsent: optionalCheckbox,
+  refundTerms: agreedCheckbox("취소 및 환불규정을 확인해주세요"),
 });
 
 export type ReservationApplicationSubmission = z.infer<typeof reservationApplicationSubmissionSchema>;

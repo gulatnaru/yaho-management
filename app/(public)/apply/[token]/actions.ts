@@ -29,7 +29,8 @@ export type ReservationApplicationFormFieldKey =
   | "privacyConsent"
   | "legalGuardianConfirmation"
   | "photoShareConsent"
-  | "photoMarketingConsent";
+  | "photoMarketingConsent"
+  | "refundTerms";
 
 export type ReservationApplicationFormValues = {
   childName?: string;
@@ -44,6 +45,7 @@ export type ReservationApplicationFormValues = {
   legalGuardianConfirmation?: boolean;
   photoShareConsent?: boolean;
   photoMarketingConsent?: boolean;
+  refundTerms?: boolean;
 };
 
 export type ReservationApplicationFormState = {
@@ -67,6 +69,7 @@ function readValues(formData: FormData): ReservationApplicationFormValues {
     legalGuardianConfirmation: formData.get("legalGuardianConfirmation") === "on",
     photoShareConsent: formData.get("photoShareConsent") === "on",
     photoMarketingConsent: formData.get("photoMarketingConsent") === "on",
+    refundTerms: formData.get("refundTerms") === "on",
   };
 }
 
@@ -99,6 +102,7 @@ export async function submitReservationApplication(
     legalGuardianConfirmation: formData.get("legalGuardianConfirmation"),
     photoShareConsent: formData.get("photoShareConsent"),
     photoMarketingConsent: formData.get("photoMarketingConsent"),
+    refundTerms: formData.get("refundTerms"),
   });
   if (!parsed.success) {
     return { errors: parsed.error.flatten().fieldErrors, values };

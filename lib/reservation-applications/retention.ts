@@ -2,9 +2,10 @@ import type { ReservationApplicationStatus } from "@prisma/client";
 import { formatKstDate } from "@/lib/classes/datetime";
 
 /**
- * 예약 신청 개인정보의 보관기간(ADR-055). DB 에 값을 저장하지 않고 조회 시점에 계산한다(ADR-026 과 같은 방식).
+ * 예약 신청 개인정보의 보관기간(ADR-055, ADR-056). DB 에 값을 저장하지 않고 조회 시점에 계산한다(ADR-026 과 같은 방식).
  * - 확정되지 않은(처리 대기·반려·취소) 신청: 해당 수업일(KST)로부터 1년
- * - 확정된 신청: 연결된 아이의 마지막 프로그램 이용일(KST)로부터 3년
+ * - 확정된 신청: 연결된 아이의 마지막 예약 수업일(KST)로부터 3년.
+ *   유효한 예약이 하나도 없으면 신청 대상 클래스의 수업일을 쓴다.
  * 만료일 당일까지 보관하고, 그다음 날부터 파기 대상이다.
  */
 export const UNCONFIRMED_APPLICATION_RETENTION_YEARS = 1;
@@ -19,7 +20,7 @@ export function addYearsToKstDate(kstDate: string, years: number): string {
   return `${String(targetYear).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(targetDay).padStart(2, "0")}`;
 }
 
-export type ApplicationRetentionBasis = "CLASS_DATE" | "LAST_PROGRAM_USE";
+export type ApplicationRetentionBasis = "CLASS_DATE" | "LAST_RESERVED_CLASS_DATE";
 
 export type ApplicationRetention = {
   basis: ApplicationRetentionBasis;
@@ -30,22 +31,18 @@ export type ApplicationRetention = {
 };
 
 /**
- * @param lastProgramUseAt 확정된 신청일 때 연결된 아이의 마지막 프로그램 이용 클래스 시작 시각.
- *   없으면 신청 클래스 시작 시각을 기준으로 삼는다.
+ * @param lastReservedClassAt 확정된 신청일 때 연결된 아이의 마지막 유효 예약 클래스 시작 시각
+ *   (lib/reservation-applications/last-reserved-class.ts). 유효한 예약이 없으면 null 이다.
  */
 export function computeApplicationRetention(input: {
   status: ReservationApplicationStatus;
   classStartsAt: Date;
-  lastProgramUseAt: Date | null;
+  lastReservedClassAt: Date | null;
 }): ApplicationRetention {
   if (input.status === "CONFIRMED") {
-    const basisAt =
-      input.lastProgramUseAt && input.lastProgramUseAt > input.classStartsAt
-        ? input.lastProgramUseAt
-        : input.classStartsAt;
-    const basisDate = formatKstDate(basisAt);
+    const basisDate = formatKstDate(input.lastReservedClassAt ?? input.classStartsAt);
     return {
-      basis: "LAST_PROGRAM_USE",
+      basis: "LAST_RESERVED_CLASS_DATE",
       basisDate,
       retainUntil: addYearsToKstDate(basisDate, CONFIRMED_APPLICATION_RETENTION_YEARS),
     };

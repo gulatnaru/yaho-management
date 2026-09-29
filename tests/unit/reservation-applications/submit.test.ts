@@ -28,6 +28,7 @@ const data: ReservationApplicationSubmission = {
   legalGuardianConfirmation: true,
   photoShareConsent: false,
   photoMarketingConsent: false,
+  refundTerms: true,
 };
 const openLink = {
   isActive: true,
@@ -69,6 +70,7 @@ describe("submitReservationApplicationCore", () => {
         programTermsAcknowledged: true,
         privacyConsentAgreed: true,
         legalGuardianConfirmed: true,
+        refundTermsAcknowledged: true,
         photoShareConsentAgreed: false,
         photoMarketingConsentAgreed: false,
         consentVersion: "v-test",

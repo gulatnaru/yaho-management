@@ -3,19 +3,21 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 type RawQueryClient = Pick<PrismaClient, "$queryRaw">;
 
 /**
- * 아이별 마지막 프로그램 이용일(보관기간 기준, ADR-055).
- * "이용"은 기존 운영 예약 기준(ADR-040/042)을 재사용한다 — 수업 전에 출결 없이 취소된 예약과
- * 취소된 클래스의 예약은 제외하고, RESERVED/COMPLETED/NO_SHOW 와 출결 후 취소된 예약을 포함한다.
+ * 아이별 마지막 예약 수업일(보관기간 기준, ADR-056).
+ * - 예약(Reservation)의 클래스 시작 시각 중 가장 늦은 값을 쓴다(예정 예약 포함).
+ * - 수업 전에 취소된 예약(CANCELLED 이고 출결 기록 없음 — ADR-027 로 종료 후 RESERVED 취소는 불가)은 제외한다.
+ * - 취소된 클래스(ClassSchedule CANCELLED)의 예약은 제외한다.
+ * - NO_SHOW 와 출결 후 취소된 예약(ADR-033)은 예약 이력이 있으므로 포함한다.
  */
-export async function getLastProgramUseByChildIds(
+export async function getLastReservedClassDateByChildIds(
   client: RawQueryClient,
   childIds: string[],
 ): Promise<Map<string, Date>> {
   const uniqueIds = [...new Set(childIds)];
   if (uniqueIds.length === 0) return new Map();
 
-  const rows = await client.$queryRaw<Array<{ childId: string; lastUseAt: Date | null }>>(Prisma.sql`
-    SELECT r."childId" AS "childId", MAX(c."startsAt") AS "lastUseAt"
+  const rows = await client.$queryRaw<Array<{ childId: string; lastReservedClassAt: Date | null }>>(Prisma.sql`
+    SELECT r."childId" AS "childId", MAX(c."startsAt") AS "lastReservedClassAt"
     FROM "Reservation" r
     JOIN "ClassSchedule" c ON c."id" = r."classScheduleId"
     WHERE r."childId" IN (${Prisma.join(uniqueIds)})
@@ -26,7 +28,7 @@ export async function getLastProgramUseByChildIds(
 
   const map = new Map<string, Date>();
   for (const row of rows) {
-    if (row.lastUseAt) map.set(row.childId, row.lastUseAt);
+    if (row.lastReservedClassAt) map.set(row.childId, row.lastReservedClassAt);
   }
   return map;
 }

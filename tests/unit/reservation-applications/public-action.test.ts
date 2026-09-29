@@ -38,6 +38,7 @@ function formData(overrides: Record<string, string | null> = {}) {
     legalGuardianConfirmation: "on",
     photoShareConsent: null,
     photoMarketingConsent: null,
+    refundTerms: "on",
     ...overrides,
   };
   const data = new FormData();
@@ -68,6 +69,7 @@ describe("submitReservationApplication (public action)", () => {
         guardianPhone: "abc",
         guardianRelationship: null,
         legalGuardianConfirmation: null,
+        refundTerms: null,
         photoShareConsent: "on",
         photoMarketingConsent: "on",
       }),
@@ -76,6 +78,7 @@ describe("submitReservationApplication (public action)", () => {
     expect(state.errors?.guardianPhone?.[0]).toBeDefined();
     expect(state.errors?.guardianRelationship?.[0]).toBe("아이와의 관계를 선택해주세요");
     expect(state.errors?.legalGuardianConfirmation?.[0]).toBe("법정대리인 확인에 동의해주세요");
+    expect(state.errors?.refundTerms?.[0]).toBe("취소 및 환불규정을 확인해주세요");
     expect(state.errors?.photoShareConsent).toBeUndefined();
     expect(state.values).toMatchObject({
       childName: CHILD_NAME,
@@ -85,6 +88,7 @@ describe("submitReservationApplication (public action)", () => {
       legalGuardianConfirmation: false,
       photoShareConsent: true,
       photoMarketingConsent: true,
+      refundTerms: false,
     });
     expect(submitCoreMock).not.toHaveBeenCalled();
   });
@@ -138,6 +142,7 @@ describe("submitReservationApplication (public action)", () => {
       legalGuardianConfirmation: true,
       photoShareConsent: false,
       photoMarketingConsent: false,
+      refundTerms: true,
     });
   });
 });

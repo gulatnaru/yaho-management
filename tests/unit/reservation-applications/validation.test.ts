@@ -21,6 +21,7 @@ function formInput(overrides: Record<string, unknown> = {}) {
     legalGuardianConfirmation: "on",
     photoShareConsent: null,
     photoMarketingConsent: null,
+    refundTerms: "on",
     ...overrides,
   };
 }
@@ -49,6 +50,7 @@ describe("reservation application submission schema", () => {
       legalGuardianConfirmation: true,
       photoShareConsent: false,
       photoMarketingConsent: false,
+      refundTerms: true,
     });
     expect(result.data.requestNote).toBeUndefined();
   });
@@ -111,6 +113,7 @@ describe("reservation application submission schema", () => {
     expect(fieldErrors({ legalGuardianConfirmation: null }).legalGuardianConfirmation?.[0]).toBe(
       "법정대리인 확인에 동의해주세요",
     );
+    expect(fieldErrors({ refundTerms: null }).refundTerms?.[0]).toBe("취소 및 환불규정을 확인해주세요");
   });
 
   it("accepts submissions without photo sharing or marketing consent", () => {

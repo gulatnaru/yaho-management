@@ -42,6 +42,7 @@ describe("public application link query", () => {
       "personalDataPurgedAt",
       "programTermsAcknowledged",
       "legalGuardianConfirmed",
+      "refundTermsAcknowledged",
       "retention",
     ]) {
       expect(keys).not.toContain(forbidden);
