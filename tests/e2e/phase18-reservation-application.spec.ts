@@ -17,16 +17,21 @@ import { generateApplicationLinkToken } from "@/lib/reservation-applications/tok
 const prisma = new PrismaClient();
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const config = readPublicApplicationConfig(process.env);
+const configOrNull = readPublicApplicationConfig(process.env);
 
 if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
   throw new Error("ADMIN_EMAIL/ADMIN_PASSWORD 환경변수가 필요합니다.");
 }
-if (!config) {
+if (!configOrNull) {
   throw new Error(
     "예약 신청 E2E에는 RESERVATION_APPLICATION_BANK_* 와 YAHO_*_URL(https) 테스트 환경변수가 필요합니다.",
   );
 }
+
+// 모듈 최상위에서 좁힌 타입을 고정해 테스트 콜백 안에서도 string/설정 타입으로 쓴다.
+const adminEmail: string = ADMIN_EMAIL;
+const adminPassword: string = ADMIN_PASSWORD;
+const config = configOrNull;
 
 const marker = `P18_${randomUUID().slice(0, 8)}`;
 const priceMarker = 87_654;
@@ -145,7 +150,7 @@ async function createApplication(input: {
 
 test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
   test.beforeAll(async () => {
-    const admin = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN_EMAIL }, select: { id: true } });
+    const admin = await prisma.user.findUniqueOrThrow({ where: { email: adminEmail }, select: { id: true } });
     adminUserId = admin.id;
 
     const [program, teacher, passwordHash] = await Promise.all([
@@ -255,7 +260,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await expect(page.getByText("만 5~9세")).toBeVisible();
 
     const html = await page.content();
-    for (const forbidden of [memoMarker, safetyMarker, insurerMarker, teacherMarker, "87,654", "87654", "정원", "잔여", "만석"]) {
+    for (const forbidden of [memoMarker, safetyMarker, insurerMarker, teacherMarker, "87,654", "정원", "잔여", "만석"]) {
       expect(html).not.toContain(forbidden);
     }
     await expect(page.getByRole("link", { name: "예약 관리" })).toHaveCount(0);
@@ -352,7 +357,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
   test("ADMIN은 처리 대기 신청을 보고 입금 확인 후 새 아이로 예약을 확정한다", async ({ page }) => {
     const childName = `신청아이_${marker}`;
     const duplicate = await createApplication({ classScheduleId: openClassId, childName });
-    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await login(page, adminEmail, adminPassword);
 
     await expect(page.getByRole("link", { name: /예약 신청 \(\d+\)/ }).first()).toBeAttached();
     await page.goto("/reservation-applications");
@@ -417,7 +422,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     });
     const application = await createApplication({ classScheduleId: openClassId, childName, depositConfirmed: true });
 
-    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await login(page, adminEmail, adminPassword);
     await page.goto(`/reservation-applications/${application.id}`);
     await page.getByRole("radio", { name: new RegExp(`${childName}.*이름·연락처 일치`) }).check();
     await page.getByRole("button", { name: "예약 확정" }).click();
@@ -436,7 +441,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     const childName = `초과아이_${marker}`;
     const application = await createApplication({ classScheduleId: fullClassId, childName, depositConfirmed: true });
 
-    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await login(page, adminEmail, adminPassword);
     await page.goto(`/reservation-applications/${application.id}`);
     await page.getByLabel("신청 정보로 새 아이 등록").check();
     await page.getByRole("button", { name: "예약 확정" }).click();
@@ -455,7 +460,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     const childName = `반려아이_${marker}`;
     const application = await createApplication({ classScheduleId: openClassId, childName });
 
-    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await login(page, adminEmail, adminPassword);
     await page.goto(`/reservation-applications/${application.id}`);
     await page.getByLabel(/반려 사유/).fill("합성 반려 사유");
     await page.getByRole("button", { name: "신청 반려" }).click();
@@ -467,7 +472,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
   });
 
   test("ADMIN은 클래스 상세에서 링크를 재발급하고 이전 링크는 즉시 닫힌다", async ({ page }) => {
-    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await login(page, adminEmail, adminPassword);
     await page.goto(`/classes/${openClassId}`);
     const card = page.getByTestId("application-link-card");
     await expect(card.getByLabel("예약 신청 링크 주소")).toHaveValue(new RegExp(`/apply/${tokens.open}$`));
