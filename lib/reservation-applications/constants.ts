@@ -26,6 +26,22 @@ export const APPLICATION_GENDER_OPTIONS = [
   { value: "UNSPECIFIED", label: "선택 안 함" },
 ] as const;
 
+/** 아이와의 관계(법정대리인 확인, ADR-055). */
+export const GUARDIAN_RELATIONSHIP_OPTIONS = [
+  { value: "FATHER", label: "부" },
+  { value: "MOTHER", label: "모" },
+  { value: "OTHER_LEGAL_GUARDIAN", label: "기타 법정대리인" },
+] as const;
+
+export const GUARDIAN_RELATIONSHIP_LABEL: Record<"FATHER" | "MOTHER" | "OTHER_LEGAL_GUARDIAN", string> = {
+  FATHER: "부",
+  MOTHER: "모",
+  OTHER_LEGAL_GUARDIAN: "기타 법정대리인",
+};
+
+/** 보관기간 만료로 파기된 신청의 개인정보 자리 표시. */
+export const PURGED_PERSONAL_DATA_LABEL = "(파기됨)";
+
 export const APPLICATION_GENDER_LABEL: Record<"MALE" | "FEMALE" | "UNSPECIFIED", string> = {
   MALE: "남",
   FEMALE: "여",

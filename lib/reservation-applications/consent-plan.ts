@@ -3,26 +3,37 @@ import type { ConsentAction, ConsentType } from "@prisma/client";
 export type PlannedConsentRecord = { consentType: ConsentType; action: ConsentAction };
 
 /**
- * 신청을 확정할 때 해당 아이의 ChildConsent 에 추가할 행을 계산한다(ADR-054, append-only).
- * - 개인정보 수집·이용, 활동 사진 촬영·공유는 신청 필수 동의이므로 항상 AGREED.
- * - 홍보 활용은 신청에서 동의했으면 AGREED.
- * - 홍보 활용에 동의하지 않았고 기존 아이의 현재 상태가 AGREED 이면 REVOKED 를 추가한다.
- *   현재 상태는 기존 규칙대로 가장 최근 기록으로 판단한다(20-1.4).
+ * 선택 동의 한 종류의 기록 행동(ADR-055).
+ * - 신청에서 동의 → AGREED
+ * - 동의하지 않았고 기존 현재 상태가 AGREED → REVOKED(기존 동의 철회, ADR-054)
+ * - 동의하지 않았고 기존 동의가 없거나 이미 철회·미동의 → DECLINED(미동의)
+ * 현재 상태는 기존 규칙대로 가장 최근 기록으로 판단한다(20-1.4).
+ */
+export function planOptionalConsentAction(agreed: boolean, currentAction: ConsentAction | null): ConsentAction {
+  if (agreed) return "AGREED";
+  return currentAction === "AGREED" ? "REVOKED" : "DECLINED";
+}
+
+/**
+ * 신청을 확정할 때 해당 아이의 ChildConsent 에 추가할 행(append-only, ADR-054/055).
+ * 개인정보 수집·이용은 필수 동의라 항상 AGREED 이고, 선택 동의 두 종류는 동의·미동의를 모두 기록한다.
+ * 프로그램 이용사항·법정대리인 확인은 동의 이력이 아니라 신청의 확인 기록으로 남는다.
  */
 export function planApplicationConsentRecords(input: {
+  photoShareConsentAgreed: boolean;
   photoMarketingConsentAgreed: boolean;
+  currentPhotoShareAction: ConsentAction | null;
   currentPhotoMarketingAction: ConsentAction | null;
 }): PlannedConsentRecord[] {
-  const records: PlannedConsentRecord[] = [
+  return [
     { consentType: "PRIVACY", action: "AGREED" },
-    { consentType: "PHOTO_SHARE", action: "AGREED" },
+    {
+      consentType: "PHOTO_SHARE",
+      action: planOptionalConsentAction(input.photoShareConsentAgreed, input.currentPhotoShareAction),
+    },
+    {
+      consentType: "PHOTO_MARKETING",
+      action: planOptionalConsentAction(input.photoMarketingConsentAgreed, input.currentPhotoMarketingAction),
+    },
   ];
-
-  if (input.photoMarketingConsentAgreed) {
-    records.push({ consentType: "PHOTO_MARKETING", action: "AGREED" });
-  } else if (input.currentPhotoMarketingAction === "AGREED") {
-    records.push({ consentType: "PHOTO_MARKETING", action: "REVOKED" });
-  }
-
-  return records;
 }

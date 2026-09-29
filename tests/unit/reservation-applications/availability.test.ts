@@ -86,7 +86,7 @@ describe("admin link state", () => {
 });
 
 describe("buildApplicationAvailabilityContext", () => {
-  it("is ready locally with complete configuration and placeholder consent text", () => {
+  it("is ready locally with complete configuration", () => {
     expect(buildApplicationAvailabilityContext(NOW, completeEnv)).toEqual({
       now: NOW,
       environmentAllowed: true,
@@ -95,7 +95,7 @@ describe("buildApplicationAvailabilityContext", () => {
     });
   });
 
-  it("closes Production while the consent text is still a placeholder", () => {
+  it("closes Production while consent decisions are still pending", () => {
     const productionContext = buildApplicationAvailabilityContext(NOW, { ...completeEnv, VERCEL_ENV: "production" });
     expect(productionContext.environmentAllowed).toBe(true);
     expect(productionContext.consentReady).toBe(false);

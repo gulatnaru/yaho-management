@@ -28,7 +28,7 @@ export type ConfirmReservationApplicationInput = {
  * 1. 신청 행을 잠그고 처리 대기·입금 확인을 다시 확인
  * 2. 새 아이 등록 또는 기존 아이 확인(기존 아이 정보는 바꾸지 않는다)
  * 3. createReservationInTransaction — 클래스 잠금·중복·비활성 아이·취소/종료 클래스·정원 초과 확인 그대로
- * 4. 신청 동의를 ChildConsent 에 append-only 로 추가(동의 일시 = 신청 제출 시각)
+ * 4. 신청 동의를 ChildConsent 에 append-only 로 추가(동의 일시 = 신청 제출 시각). 선택 동의의 미동의도 기록한다(ADR-055)
  * 5. 신청을 CONFIRMED 로 갱신
  * Payment 는 만들지 않는다.
  *
@@ -55,22 +55,23 @@ export async function confirmReservationApplicationCore(
         childGender: true,
         guardianName: true,
         guardianPhone: true,
+        photoShareConsentAgreed: true,
         photoMarketingConsentAgreed: true,
         submittedAt: true,
       },
     });
+    const { childName, childBirthDate, childGender, guardianName, guardianPhone } = application;
+    // 파기된 신청은 처리 대기일 수 없지만(CHECK), 개인정보가 없으면 확정하지 않는다.
+    if (!childName || !childBirthDate || !childGender || !guardianName || !guardianPhone) {
+      throw new ApplicationNotPendingError();
+    }
 
     let childId: string;
+    let currentPhotoShareAction: ConsentAction | null = null;
     let currentPhotoMarketingAction: ConsentAction | null = null;
     if (input.childChoice.type === "NEW") {
       const child = await tx.child.create({
-        data: {
-          name: application.childName,
-          birthDate: application.childBirthDate,
-          gender: application.childGender,
-          guardianName: application.guardianName,
-          guardianPhone: application.guardianPhone,
-        },
+        data: { name: childName, birthDate: childBirthDate, gender: childGender, guardianName, guardianPhone },
         select: { id: true },
       });
       childId = child.id;
@@ -81,11 +82,16 @@ export async function confirmReservationApplicationCore(
       });
       if (!child) throw new ChildNotFoundError();
       childId = child.id;
-      const latestMarketingConsent = await tx.childConsent.findFirst({
-        where: { childId, consentType: "PHOTO_MARKETING" },
-        orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
-        select: { action: true },
-      });
+      const [latestShareConsent, latestMarketingConsent] = await Promise.all(
+        (["PHOTO_SHARE", "PHOTO_MARKETING"] as const).map((consentType) =>
+          tx.childConsent.findFirst({
+            where: { childId, consentType },
+            orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+            select: { action: true },
+          }),
+        ),
+      );
+      currentPhotoShareAction = latestShareConsent?.action ?? null;
       currentPhotoMarketingAction = latestMarketingConsent?.action ?? null;
     }
 
@@ -103,7 +109,9 @@ export async function confirmReservationApplicationCore(
     });
 
     const consentRecords = planApplicationConsentRecords({
+      photoShareConsentAgreed: application.photoShareConsentAgreed,
       photoMarketingConsentAgreed: application.photoMarketingConsentAgreed,
+      currentPhotoShareAction,
       currentPhotoMarketingAction,
     });
     await tx.childConsent.createMany({

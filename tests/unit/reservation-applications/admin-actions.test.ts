@@ -11,6 +11,7 @@ const depositCoreMock = vi.fn();
 const closeCoreMock = vi.fn();
 const issueCoreMock = vi.fn();
 const stopCoreMock = vi.fn();
+const purgeCoreMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminMock(...args),
@@ -28,6 +29,9 @@ vi.mock("@/server/reservation-applications/confirm", () => ({
 vi.mock("@/server/reservation-applications/resolve", () => ({
   confirmApplicationDepositCore: (...args: unknown[]) => depositCoreMock(...args),
   closeReservationApplicationCore: (...args: unknown[]) => closeCoreMock(...args),
+}));
+vi.mock("@/server/reservation-applications/retention", () => ({
+  purgeExpiredApplicationsCore: (...args: unknown[]) => purgeCoreMock(...args),
 }));
 vi.mock("@/server/reservation-applications/links", () => ({
   issueApplicationLinkCore: (...args: unknown[]) => issueCoreMock(...args),
@@ -52,7 +56,7 @@ function formData(values: Record<string, string>) {
   return data;
 }
 
-const allCores = [confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock];
+const allCores = [confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock];
 
 describe("reservation application admin actions", () => {
   beforeEach(() => {
@@ -70,6 +74,7 @@ describe("reservation application admin actions", () => {
       () => actions.confirmReservationApplication("application-1", {}, formData({ childChoice: "NEW" })),
       () => actions.rejectReservationApplication("application-1", {}, formData({ resolutionNote: "사유" })),
       () => actions.cancelReservationApplication("application-1", {}, formData({ resolutionNote: "사유" })),
+      () => actions.purgeExpiredApplications(),
     ];
     for (const call of calls) {
       await expect(call()).rejects.toThrow("NOT_FOUND");
@@ -203,6 +208,13 @@ describe("reservation application admin actions", () => {
       await expect(actions.confirmApplicationDeposit("application-1")).resolves.toEqual({
         error: "이미 입금 확인되었거나 처리가 끝난 신청입니다.",
       });
+    });
+
+    it("purges expired applications as the current admin and reports the count", async () => {
+      purgeCoreMock.mockResolvedValueOnce({ purgedCount: 2 });
+
+      await expect(actions.purgeExpiredApplications()).resolves.toEqual({ purgedCount: 2 });
+      expect(purgeCoreMock).toHaveBeenCalledWith({}, expect.objectContaining({ actorUserId: "admin-1" }));
     });
 
     it("issues and stops class links as the current admin", async () => {

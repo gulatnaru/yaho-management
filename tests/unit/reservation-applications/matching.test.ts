@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { rankChildCandidates } from "@/lib/reservation-applications/candidates";
-import { planApplicationConsentRecords } from "@/lib/reservation-applications/consent-plan";
+import {
+  planApplicationConsentRecords,
+  planOptionalConsentAction,
+} from "@/lib/reservation-applications/consent-plan";
 import { findDuplicateApplicationIds, toApplicantKey } from "@/lib/reservation-applications/duplicates";
 import {
   buildApplicationListOrderBy,
@@ -14,28 +17,50 @@ import {
 } from "@/lib/reservation-applications/token";
 
 describe("planApplicationConsentRecords", () => {
-  it("always records the two required consents", () => {
+  const none = { currentPhotoShareAction: null, currentPhotoMarketingAction: null };
+
+  it("records privacy agreement and both optional choices, including declines", () => {
     expect(
-      planApplicationConsentRecords({ photoMarketingConsentAgreed: false, currentPhotoMarketingAction: null }),
+      planApplicationConsentRecords({ photoShareConsentAgreed: false, photoMarketingConsentAgreed: false, ...none }),
     ).toEqual([
       { consentType: "PRIVACY", action: "AGREED" },
-      { consentType: "PHOTO_SHARE", action: "AGREED" },
+      { consentType: "PHOTO_SHARE", action: "DECLINED" },
+      { consentType: "PHOTO_MARKETING", action: "DECLINED" },
     ]);
   });
 
-  it("records marketing agreement when the guardian opted in", () => {
+  it("records agreement for opted-in optional consents", () => {
     expect(
-      planApplicationConsentRecords({ photoMarketingConsentAgreed: true, currentPhotoMarketingAction: "REVOKED" }),
-    ).toContainEqual({ consentType: "PHOTO_MARKETING", action: "AGREED" });
+      planApplicationConsentRecords({
+        photoShareConsentAgreed: true,
+        photoMarketingConsentAgreed: true,
+        currentPhotoShareAction: "REVOKED",
+        currentPhotoMarketingAction: "DECLINED",
+      }),
+    ).toEqual([
+      { consentType: "PRIVACY", action: "AGREED" },
+      { consentType: "PHOTO_SHARE", action: "AGREED" },
+      { consentType: "PHOTO_MARKETING", action: "AGREED" },
+    ]);
   });
 
-  it("revokes an existing marketing agreement when the latest application did not opt in", () => {
-    expect(
-      planApplicationConsentRecords({ photoMarketingConsentAgreed: false, currentPhotoMarketingAction: "AGREED" }),
-    ).toContainEqual({ consentType: "PHOTO_MARKETING", action: "REVOKED" });
-    expect(
-      planApplicationConsentRecords({ photoMarketingConsentAgreed: false, currentPhotoMarketingAction: "REVOKED" }),
-    ).toHaveLength(2);
+  it("revokes an existing agreement when the latest application did not opt in", () => {
+    const records = planApplicationConsentRecords({
+      photoShareConsentAgreed: false,
+      photoMarketingConsentAgreed: false,
+      currentPhotoShareAction: "AGREED",
+      currentPhotoMarketingAction: "AGREED",
+    });
+    expect(records).toContainEqual({ consentType: "PHOTO_SHARE", action: "REVOKED" });
+    expect(records).toContainEqual({ consentType: "PHOTO_MARKETING", action: "REVOKED" });
+  });
+
+  it("uses DECLINED, not REVOKED, when there was no current agreement", () => {
+    expect(planOptionalConsentAction(false, null)).toBe("DECLINED");
+    expect(planOptionalConsentAction(false, "REVOKED")).toBe("DECLINED");
+    expect(planOptionalConsentAction(false, "DECLINED")).toBe("DECLINED");
+    expect(planOptionalConsentAction(false, "AGREED")).toBe("REVOKED");
+    expect(planOptionalConsentAction(true, "AGREED")).toBe("AGREED");
   });
 });
 

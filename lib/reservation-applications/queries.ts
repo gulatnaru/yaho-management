@@ -8,7 +8,9 @@ import {
   buildApplicationListWhere,
   type ApplicationListStatus,
 } from "./list";
+import { getLastProgramUseByChildIds } from "./last-program-use";
 import { normalizePersonName, toPhoneDigits } from "./normalize";
+import { computeApplicationRetention, type ApplicationRetention } from "./retention";
 
 /**
  * ADMIN 전용 예약 신청 조회(ADR-053). 호출하는 page/action 이 requireAdminPrincipal() 을 먼저 통과해야 한다.
@@ -35,10 +37,20 @@ async function findDuplicateIdsForClasses(classScheduleIds: string[]): Promise<S
   const uniqueIds = [...new Set(classScheduleIds)];
   if (uniqueIds.length === 0) return new Set();
   const related = await prisma.reservationApplication.findMany({
-    where: { classScheduleId: { in: uniqueIds }, status: { in: ["SUBMITTED", "CONFIRMED"] } },
+    where: {
+      classScheduleId: { in: uniqueIds },
+      status: { in: ["SUBMITTED", "CONFIRMED"] },
+      personalDataPurgedAt: null,
+    },
     select: { id: true, classScheduleId: true, childName: true, guardianPhone: true, status: true },
   });
-  return findDuplicateApplicationIds(related);
+  return findDuplicateApplicationIds(
+    related.flatMap((row) =>
+      row.childName && row.guardianPhone
+        ? [{ ...row, childName: row.childName, guardianPhone: row.guardianPhone }]
+        : [],
+    ),
+  );
 }
 
 export async function listReservationApplications({
@@ -98,8 +110,13 @@ const APPLICATION_DETAIL_SELECT = {
   classScheduleId: true,
   childId: true,
   reservationId: true,
+  guardianRelationship: true,
+  programTermsAcknowledged: true,
+  legalGuardianConfirmed: true,
+  personalDataPurgedAt: true,
   depositConfirmedBy: { select: { name: true } },
   resolvedBy: { select: { name: true } },
+  personalDataPurgedBy: { select: { name: true } },
   child: { select: { id: true, name: true } },
   classSchedule: {
     select: {
@@ -148,6 +165,23 @@ export async function listChildCandidatesForApplication(application: {
   `);
 
   return rankChildCandidates(rows, application);
+}
+
+/** 신청 상세의 개인정보 보관 만료일(ADR-055). 확정된 신청은 아이의 마지막 프로그램 이용일을 조회한다. */
+export async function getApplicationRetention(application: {
+  status: ApplicationDetail["status"];
+  childId: string | null;
+  classSchedule: { startsAt: Date };
+}): Promise<ApplicationRetention> {
+  const lastUseByChild =
+    application.status === "CONFIRMED" && application.childId
+      ? await getLastProgramUseByChildIds(prisma, [application.childId])
+      : new Map<string, Date>();
+  return computeApplicationRetention({
+    status: application.status,
+    classStartsAt: application.classSchedule.startsAt,
+    lastProgramUseAt: application.childId ? (lastUseByChild.get(application.childId) ?? null) : null,
+  });
 }
 
 export async function getApplicationLinkForClass(classScheduleId: string) {

@@ -35,18 +35,51 @@ describe("public application configuration", () => {
 });
 
 describe("consent content", () => {
-  it("defines the three application consents with the required flags", () => {
-    expect(APPLICATION_CONSENT_CONTENT.items.map((item) => [item.key, item.required])).toEqual([
+  const items = APPLICATION_CONSENT_CONTENT.items;
+  const text = (key: string) => items.find((item) => item.key === key)?.body.join("\n") ?? "";
+
+  it("separates program terms and legal guardian confirmation from privacy consent", () => {
+    expect(items.map((item) => [item.key, item.required])).toEqual([
+      ["programTerms", true],
       ["privacyConsent", true],
-      ["photoShareConsent", true],
+      ["legalGuardianConfirmation", true],
+      ["photoShareConsent", false],
       ["photoMarketingConsent", false],
     ]);
   });
 
-  it("blocks Production while the text is a placeholder and allows it once finalized", () => {
-    expect(isConsentContentReady("production", { isPlaceholder: true })).toBe(false);
-    expect(isConsentContentReady("production", { isPlaceholder: false })).toBe(true);
-    expect(isConsentContentReady(undefined, { isPlaceholder: true })).toBe(true);
-    expect(isConsentContentReady("preview", { isPlaceholder: true })).toBe(true);
+  it("uses a dated version and finalized (non-placeholder) text", () => {
+    expect(APPLICATION_CONSENT_CONTENT.version).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(APPLICATION_CONSENT_CONTENT.isPlaceholder).toBe(false);
+  });
+
+  it("lists exactly the collected application fields and fixed retention periods", () => {
+    const privacy = text("privacyConsent");
+    for (const field of ["아동 이름", "아동 생년월일", "아동 성별", "보호자 이름", "보호자 연락처", "아이와의 관계", "예약 요청사항"]) {
+      expect(privacy).toContain(field);
+    }
+    expect(privacy).toContain("해당 수업일로부터 1년");
+    expect(privacy).toContain("마지막 프로그램 이용일로부터 3년");
+    expect(privacy).toContain("동의를 거부할 권리");
+    const allText = items.flatMap((item) => item.body).join("\n");
+    for (const indefinite of ["존속하는 기간", "사업이 유지되는 동안", "이의를 제기하지", "법적 책임을 묻지"]) {
+      expect(allText).not.toContain(indefinite);
+    }
+  });
+
+  it("describes photo sharing as optional and limited to participating guardians", () => {
+    const share = text("photoShareConsent");
+    expect(share).toContain("해당 수업에 참여한 아동의 보호자");
+    expect(share).toContain("동의하지 않아도 프로그램 참가에 제한이 없습니다");
+    expect(share).toContain("삭제할 수 없을 수 있습니다");
+    expect(text("photoMarketingConsent")).toContain("철회");
+  });
+
+  it("keeps Production closed while any decision is pending, even with finalized text", () => {
+    expect(isConsentContentReady("production", { isPlaceholder: true, pendingDecisions: [] })).toBe(false);
+    expect(isConsentContentReady("production", { isPlaceholder: false, pendingDecisions: ["환불"] })).toBe(false);
+    expect(isConsentContentReady("production", { isPlaceholder: false, pendingDecisions: [] })).toBe(true);
+    expect(isConsentContentReady(undefined, { isPlaceholder: false, pendingDecisions: ["환불"] })).toBe(true);
+    expect(isConsentContentReady("production")).toBe(APPLICATION_CONSENT_CONTENT.pendingDecisions.length === 0);
   });
 });

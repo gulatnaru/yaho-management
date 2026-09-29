@@ -3,6 +3,7 @@ import {
   APPLICATION_CLOSED_MESSAGE,
   APPLICATION_RETRY_MESSAGE,
 } from "@/lib/reservation-applications/constants";
+import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
 import { ApplicationClosedError, ApplicationRateLimitedError } from "@/lib/reservation-applications/errors";
 
 const submitCoreMock = vi.fn();
@@ -30,9 +31,12 @@ function formData(overrides: Record<string, string | null> = {}) {
     childGender: "MALE",
     guardianName: "테스트보호자",
     guardianPhone: GUARDIAN_PHONE,
+    guardianRelationship: "FATHER",
     requestNote: "",
+    programTerms: "on",
     privacyConsent: "on",
-    photoShareConsent: "on",
+    legalGuardianConfirmation: "on",
+    photoShareConsent: null,
     photoMarketingConsent: null,
     ...overrides,
   };
@@ -60,16 +64,26 @@ describe("submitReservationApplication (public action)", () => {
     const state = await submitReservationApplication(
       TOKEN,
       {},
-      formData({ guardianPhone: "abc", photoShareConsent: null, photoMarketingConsent: "on" }),
+      formData({
+        guardianPhone: "abc",
+        guardianRelationship: null,
+        legalGuardianConfirmation: null,
+        photoShareConsent: "on",
+        photoMarketingConsent: "on",
+      }),
     );
 
     expect(state.errors?.guardianPhone?.[0]).toBeDefined();
-    expect(state.errors?.photoShareConsent?.[0]).toBe("활동 사진 촬영 및 보호자 공유에 동의해주세요");
+    expect(state.errors?.guardianRelationship?.[0]).toBe("아이와의 관계를 선택해주세요");
+    expect(state.errors?.legalGuardianConfirmation?.[0]).toBe("법정대리인 확인에 동의해주세요");
+    expect(state.errors?.photoShareConsent).toBeUndefined();
     expect(state.values).toMatchObject({
       childName: CHILD_NAME,
       guardianPhone: "abc",
+      programTerms: true,
       privacyConsent: true,
-      photoShareConsent: false,
+      legalGuardianConfirmation: false,
+      photoShareConsent: true,
       photoMarketingConsent: true,
     });
     expect(submitCoreMock).not.toHaveBeenCalled();
@@ -115,6 +129,15 @@ describe("submitReservationApplication (public action)", () => {
     const [, input] = submitCoreMock.mock.calls[0] as [unknown, { token: string; consentVersion: string; data: unknown }];
     expect(input.token).toBe(TOKEN);
     expect(typeof input.consentVersion).toBe("string");
-    expect(input.data).toMatchObject({ childName: CHILD_NAME, privacyConsent: true, photoMarketingConsent: false });
+    expect(input.consentVersion).toBe(APPLICATION_CONSENT_CONTENT.version);
+    expect(input.data).toMatchObject({
+      childName: CHILD_NAME,
+      guardianRelationship: "FATHER",
+      programTerms: true,
+      privacyConsent: true,
+      legalGuardianConfirmation: true,
+      photoShareConsent: false,
+      photoMarketingConsent: false,
+    });
   });
 });

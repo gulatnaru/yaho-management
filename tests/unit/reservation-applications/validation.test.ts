@@ -14,9 +14,12 @@ function formInput(overrides: Record<string, unknown> = {}) {
     childGender: "FEMALE",
     guardianName: "테스트보호자",
     guardianPhone: "010-0000-0000",
+    guardianRelationship: "MOTHER",
     requestNote: "",
+    programTerms: "on",
     privacyConsent: "on",
-    photoShareConsent: "on",
+    legalGuardianConfirmation: "on",
+    photoShareConsent: null,
     photoMarketingConsent: null,
     ...overrides,
   };
@@ -40,8 +43,11 @@ describe("reservation application submission schema", () => {
       childGender: "FEMALE",
       guardianName: "테스트보호자",
       guardianPhone: "010-0000-0000",
+      guardianRelationship: "MOTHER",
+      programTerms: true,
       privacyConsent: true,
-      photoShareConsent: true,
+      legalGuardianConfirmation: true,
+      photoShareConsent: false,
       photoMarketingConsent: false,
     });
     expect(result.data.requestNote).toBeUndefined();
@@ -59,6 +65,7 @@ describe("reservation application submission schema", () => {
       childGender: null,
       guardianName: null,
       guardianPhone: null,
+      guardianRelationship: null,
     });
 
     expect(errors.childName?.[0]).toBe("아이 이름을 입력해주세요");
@@ -66,6 +73,14 @@ describe("reservation application submission schema", () => {
     expect(errors.childGender?.[0]).toBe("성별을 선택해주세요");
     expect(errors.guardianName?.[0]).toBe("보호자 이름을 입력해주세요");
     expect(errors.guardianPhone?.[0]).toBe("보호자 연락처를 입력해주세요");
+    expect(errors.guardianRelationship?.[0]).toBe("아이와의 관계를 선택해주세요");
+  });
+
+  it("accepts every guardian relationship option and rejects unknown values", () => {
+    for (const relationship of ["FATHER", "MOTHER", "OTHER_LEGAL_GUARDIAN"]) {
+      expect(reservationApplicationSubmissionSchema.safeParse(formInput({ guardianRelationship: relationship })).success).toBe(true);
+    }
+    expect(fieldErrors({ guardianRelationship: "UNCLE" }).guardianRelationship?.[0]).toBe("아이와의 관계를 선택해주세요");
   });
 
   it("rejects blank text after trimming", () => {
@@ -90,15 +105,27 @@ describe("reservation application submission schema", () => {
     );
   });
 
-  it("requires the two mandatory consents and keeps marketing optional", () => {
-    const errors = fieldErrors({ privacyConsent: null, photoShareConsent: null });
-    expect(errors.privacyConsent?.[0]).toBe("개인정보 수집·이용에 동의해주세요");
-    expect(errors.photoShareConsent?.[0]).toBe("활동 사진 촬영 및 보호자 공유에 동의해주세요");
-
-    const withMarketing = reservationApplicationSubmissionSchema.safeParse(
-      formInput({ photoMarketingConsent: "on" }),
+  it("requires program terms, privacy consent and legal guardian confirmation", () => {
+    expect(fieldErrors({ programTerms: null }).programTerms?.[0]).toBe("프로그램 안전 및 이용사항을 확인해주세요");
+    expect(fieldErrors({ privacyConsent: null }).privacyConsent?.[0]).toBe("개인정보 수집·이용에 동의해주세요");
+    expect(fieldErrors({ legalGuardianConfirmation: null }).legalGuardianConfirmation?.[0]).toBe(
+      "법정대리인 확인에 동의해주세요",
     );
-    expect(withMarketing.success && withMarketing.data.photoMarketingConsent).toBe(true);
+  });
+
+  it("accepts submissions without photo sharing or marketing consent", () => {
+    const declined = reservationApplicationSubmissionSchema.safeParse(
+      formInput({ photoShareConsent: null, photoMarketingConsent: null }),
+    );
+    expect(declined.success).toBe(true);
+    if (!declined.success) return;
+    expect(declined.data.photoShareConsent).toBe(false);
+    expect(declined.data.photoMarketingConsent).toBe(false);
+
+    const agreed = reservationApplicationSubmissionSchema.safeParse(
+      formInput({ photoShareConsent: "on", photoMarketingConsent: "on" }),
+    );
+    expect(agreed.success && agreed.data.photoShareConsent && agreed.data.photoMarketingConsent).toBe(true);
   });
 
   it("limits free text lengths", () => {

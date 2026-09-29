@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Gender } from "@prisma/client";
+import { Gender, GuardianRelationship } from "@prisma/client";
 import {
   APPLICATION_NAME_MAX_LENGTH,
   APPLICATION_REQUEST_NOTE_MAX_LENGTH,
@@ -49,8 +49,10 @@ function agreedCheckbox(message: string) {
 const optionalCheckbox = z.preprocess((value) => value === "on" || value === true, z.boolean());
 
 /**
- * 비로그인 보호자의 예약 신청서(ADR-054).
- * 필수: 아이 이름·생년월일·성별(선택 안 함 허용)·보호자 이름·보호자 연락처, 선택: 요청사항.
+ * 비로그인 보호자의 예약 신청서(ADR-054, ADR-055).
+ * 필수 입력: 아이 이름·생년월일·성별(선택 안 함 허용)·보호자 이름·보호자 연락처·아이와의 관계, 선택: 요청사항.
+ * 필수 확인: 프로그램 안전 및 이용사항, 개인정보 수집·이용, 법정대리인 확인.
+ * 선택 동의: 사진·영상 촬영 및 참여 보호자 공유, 사진·영상 홍보 활용.
  * 연락처와 생년월일 규칙은 관리자 아이 등록(lib/validation/child.ts)과 같다.
  */
 export const reservationApplicationSubmissionSchema = z.object({
@@ -80,12 +82,17 @@ export const reservationApplicationSubmissionSchema = z.object({
       (value) => (value.match(/[0-9]/g)?.length ?? 0) >= MIN_PHONE_DIGIT_COUNT,
       "전화번호는 숫자를 9자 이상 포함해야 합니다",
     ),
+  guardianRelationship: z.nativeEnum(GuardianRelationship, {
+    errorMap: () => ({ message: "아이와의 관계를 선택해주세요" }),
+  }),
   requestNote: optionalText(
     APPLICATION_REQUEST_NOTE_MAX_LENGTH,
     `요청사항은 ${APPLICATION_REQUEST_NOTE_MAX_LENGTH}자 이하로 입력해주세요`,
   ),
+  programTerms: agreedCheckbox("프로그램 안전 및 이용사항을 확인해주세요"),
   privacyConsent: agreedCheckbox("개인정보 수집·이용에 동의해주세요"),
-  photoShareConsent: agreedCheckbox("활동 사진 촬영 및 보호자 공유에 동의해주세요"),
+  legalGuardianConfirmation: agreedCheckbox("법정대리인 확인에 동의해주세요"),
+  photoShareConsent: optionalCheckbox,
   photoMarketingConsent: optionalCheckbox,
 });
 

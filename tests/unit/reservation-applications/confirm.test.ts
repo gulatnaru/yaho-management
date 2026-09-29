@@ -22,11 +22,14 @@ const CLASS_ENDS_AT = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
 type TxOptions = {
   lock?: Array<{ status: string; depositConfirmedAt: Date | null }>;
+  photoShareConsentAgreed?: boolean;
   photoMarketingConsentAgreed?: boolean;
+  currentShareAction?: "AGREED" | "REVOKED" | "DECLINED" | null;
+  purged?: boolean;
   capacity?: number;
   reservedCount?: number;
   existingChild?: { id: string; isActive: boolean } | null;
-  currentMarketingAction?: "AGREED" | "REVOKED" | null;
+  currentMarketingAction?: "AGREED" | "REVOKED" | "DECLINED" | null;
   existingReservation?: { id: string; status: string } | null;
   applicationUpdateCount?: number;
 };
@@ -44,11 +47,12 @@ function createTx(options: TxOptions = {}) {
     reservationApplication: {
       findUniqueOrThrow: vi.fn(async () => ({
         classScheduleId: "class-1",
-        childName: "테스트아이",
+        childName: options.purged ? null : "테스트아이",
         childBirthDate: new Date("2019-05-01"),
         childGender: "FEMALE",
         guardianName: "테스트보호자",
         guardianPhone: "010-0000-0000",
+        photoShareConsentAgreed: options.photoShareConsentAgreed ?? true,
         photoMarketingConsentAgreed: options.photoMarketingConsentAgreed ?? true,
         submittedAt: SUBMITTED_AT,
       })),
@@ -62,9 +66,10 @@ function createTx(options: TxOptions = {}) {
       }),
     },
     childConsent: {
-      findFirst: vi.fn(async () =>
-        options.currentMarketingAction ? { action: options.currentMarketingAction } : null,
-      ),
+      findFirst: vi.fn(async ({ where }: { where: { consentType: string } }) => {
+        const action = where.consentType === "PHOTO_SHARE" ? options.currentShareAction : options.currentMarketingAction;
+        return action ? { action } : null;
+      }),
       createMany: vi.fn(async () => ({ count: 3 })),
     },
     reservation: {
@@ -159,16 +164,51 @@ describe("confirmReservationApplicationCore", () => {
     });
   });
 
-  it("does not add a marketing row when the child has no current agreement", async () => {
-    const { client, tx } = createTx({ photoMarketingConsentAgreed: false, currentMarketingAction: "REVOKED" });
+  it("records declined optional consents for a new child instead of leaving them unrecorded", async () => {
+    const { client, tx } = createTx({ photoShareConsentAgreed: false, photoMarketingConsentAgreed: false });
+
+    await confirmReservationApplicationCore(client, input());
+
+    expect(tx.childConsent.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ consentType: "PRIVACY", action: "AGREED", childId: "child-new" }),
+        expect.objectContaining({ consentType: "PHOTO_SHARE", action: "DECLINED", childId: "child-new" }),
+        expect.objectContaining({ consentType: "PHOTO_MARKETING", action: "DECLINED", childId: "child-new" }),
+      ],
+    });
+  });
+
+  it("appends a withdrawal for an existing photo sharing agreement and a decline when none existed", async () => {
+    const { client, tx } = createTx({
+      photoShareConsentAgreed: false,
+      photoMarketingConsentAgreed: false,
+      currentShareAction: "AGREED",
+      currentMarketingAction: "REVOKED",
+    });
 
     await confirmReservationApplicationCore(
       client,
       input({ childChoice: { type: "EXISTING", childId: "child-existing" } }),
     );
 
-    const [{ data }] = tx.childConsent.createMany.mock.calls[0] as unknown as [{ data: unknown[] }];
-    expect(data).toHaveLength(2);
+    expect(tx.childConsent.findFirst).toHaveBeenCalledTimes(2);
+    const [{ data }] = tx.childConsent.createMany.mock.calls[0] as unknown as [
+      { data: Array<{ consentType: string; action: string; recordedAt: Date }> },
+    ];
+    expect(data.map((row) => `${row.consentType}:${row.action}`)).toEqual([
+      "PRIVACY:AGREED",
+      "PHOTO_SHARE:REVOKED",
+      "PHOTO_MARKETING:DECLINED",
+    ]);
+    for (const row of data) expect(row.recordedAt).toEqual(SUBMITTED_AT);
+  });
+
+  it("refuses to confirm an application whose personal data is missing", async () => {
+    const { client, tx } = createTx({ purged: true });
+
+    await expect(confirmReservationApplicationCore(client, input())).rejects.toBeInstanceOf(ApplicationNotPendingError);
+    expect(tx.child.create).not.toHaveBeenCalled();
+    expect(tx.reservation.create).not.toHaveBeenCalled();
   });
 
   it.each<[string, Array<{ status: string; depositConfirmedAt: Date | null }>, new () => Error]>([

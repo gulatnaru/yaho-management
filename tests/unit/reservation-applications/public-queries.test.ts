@@ -37,6 +37,12 @@ describe("public application link query", () => {
       "token",
       "applications",
       "id",
+      "consentVersion",
+      "guardianRelationship",
+      "personalDataPurgedAt",
+      "programTermsAcknowledged",
+      "legalGuardianConfirmed",
+      "retention",
     ]) {
       expect(keys).not.toContain(forbidden);
     }
