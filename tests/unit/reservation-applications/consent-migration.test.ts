@@ -118,3 +118,43 @@ describe("Phase 18 refund terms migration", () => {
     expect(schema).toMatch(/refundTermsAcknowledged\s+Boolean/);
   });
 });
+
+describe("Phase 18 child personal data purge migration", () => {
+  const childMigration = read(
+    "../../../prisma/migrations/20260929162100_phase18_child_personal_data_purge/migration.sql",
+  );
+
+  it("only adds nullable columns, a restrictive FK and checks on Child (expand-only)", () => {
+    expect(childMigration).toContain('ADD COLUMN "personalDataPurgedAt" TIMESTAMP(3)');
+    expect(childMigration).toContain('ADD COLUMN "personalDataPurgedById" TEXT');
+    expect(childMigration).not.toMatch(/NOT NULL/);
+    expect(childMigration).toContain(
+      'FOREIGN KEY ("personalDataPurgedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE',
+    );
+    expect(childMigration).not.toMatch(/DROP\s+(TABLE|COLUMN|TYPE|INDEX|CONSTRAINT)\b/i);
+    expect(childMigration).not.toMatch(/^\s*(UPDATE|DELETE|INSERT)\s/im);
+    expect(childMigration).not.toMatch(/ON DELETE CASCADE/i);
+  });
+
+  it("constrains purged children to cleared personal data and leaves unpurged rows unconstrained", () => {
+    expect(childMigration).toContain('("personalDataPurgedAt" IS NULL) = ("personalDataPurgedById" IS NULL)');
+    const cleared = childMigration.slice(childMigration.indexOf('"child_purged_personal_data_cleared"'));
+    expect(cleared).toContain('"personalDataPurgedAt" IS NULL\n    OR (');
+    for (const condition of [
+      `"name" = '(파기됨)'`,
+      '"birthDate" IS NULL',
+      '"guardianName" IS NULL',
+      '"guardianPhone" IS NULL',
+      '"memo" IS NULL',
+      `"gender" = 'UNSPECIFIED'::"Gender"`,
+      '"isActive" = false',
+    ]) {
+      expect(cleared).toContain(condition);
+    }
+  });
+
+  it("matches the Prisma schema and the purge label", () => {
+    expect(schema).toMatch(/personalDataPurgedById String\?\n\s+createdAt/);
+    expect(schema).toContain('@relation("ChildPersonalDataPurgedBy"');
+  });
+});

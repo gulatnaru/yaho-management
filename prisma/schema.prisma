@@ -181,6 +181,7 @@ model User {
   depositConfirmedApplications ReservationApplication[]     @relation("ApplicationDepositConfirmedBy")
   resolvedApplications         ReservationApplication[]     @relation("ApplicationResolvedBy")
   purgedApplications           ReservationApplication[]     @relation("ApplicationPersonalDataPurgedBy")
+  purgedChildren               Child[]                      @relation("ChildPersonalDataPurgedBy")
 }
 
 model UserAccountChange {
@@ -217,9 +218,13 @@ model Child {
   memo          String?
   isActive      Boolean   @default(true)
   registeredAt  DateTime  @default(now())
+  // 마지막 예약 수업일로부터 5년이 지나 개인정보를 비식별화한 시각 (ADR-057). 행은 예약·결제 무결성을 위해 남긴다
+  personalDataPurgedAt   DateTime?
+  personalDataPurgedById String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  personalDataPurgedBy User?            @relation("ChildPersonalDataPurgedBy", fields: [personalDataPurgedById], references: [id], onDelete: Restrict)
   safetyInfo       ChildSafetyInfo?
   consents         ChildConsent[]
   reservations     Reservation[]
@@ -230,6 +235,7 @@ model Child {
   @@index([name])
   @@index([guardianPhone])
   @@index([isActive])
+  @@index([personalDataPurgedAt])
 }
 
 // 민감정보. 목록 조회에 include 하지 않는다 (ADR-006)
@@ -543,6 +549,12 @@ model Refund {
 //
 // ALTER TABLE "Child"
 //   ADD CONSTRAINT "child_name_not_blank" CHECK (btrim("name") <> '');
+//
+// ALTER TABLE "Child"  (ADR-057)
+//   ADD CONSTRAINT "child_purge_pair" CHECK (파기 시각과 처리자는 함께 존재),
+//   ADD CONSTRAINT "child_purged_personal_data_cleared" CHECK (
+//     파기 전이면 제약 없음, 파기 후이면 name = '(파기됨)', 생년월일·보호자·메모 NULL, gender UNSPECIFIED, isActive false
+//   );
 //
 // ALTER TABLE "Teacher"
 //   ADD CONSTRAINT "teacher_name_not_blank" CHECK (btrim("name") <> '');
