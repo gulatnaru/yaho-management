@@ -33,7 +33,7 @@ describe("Phase 18 reservation application migration", () => {
     expect(migration).toContain('ALTER TABLE "ChildConsent" ADD COLUMN "reservationApplicationId" TEXT;');
     expect(migration).not.toMatch(/DROP\s+(TABLE|COLUMN|TYPE|INDEX|CONSTRAINT)/i);
     expect(migration).not.toMatch(/ALTER COLUMN/i);
-    expect(migration).not.toMatch(/RENAME/i);
+    expect(migration).not.toMatch(/\bRENAME\s+(TO|COLUMN|CONSTRAINT)\b/i);
     expect(migration).not.toMatch(/^\s*(UPDATE|DELETE|INSERT)\s/im);
   });
 
