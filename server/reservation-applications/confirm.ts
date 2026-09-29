@@ -1,0 +1,134 @@
+import type { ConsentAction, PrismaClient } from "@prisma/client";
+import { planApplicationConsentRecords } from "@/lib/reservation-applications/consent-plan";
+import {
+  ApplicationDepositNotConfirmedError,
+  ApplicationNotFoundError,
+  ApplicationNotPendingError,
+} from "@/lib/reservation-applications/errors";
+import { ChildNotFoundError } from "@/lib/reservations/errors";
+import {
+  createReservationInTransaction,
+  RESERVATION_TRANSACTION_OPTIONS,
+} from "@/server/reservations/create";
+
+export type ApplicationChildChoice = { type: "EXISTING"; childId: string } | { type: "NEW" };
+
+export type ConfirmReservationApplicationInput = {
+  applicationId: string;
+  childChoice: ApplicationChildChoice;
+  memo?: string;
+  /** (신청 id, 아이 선택)에 묶인 초과 예약 확인이 유효한지. action 이 판정해서 넘긴다. */
+  confirmOverbooking: boolean;
+  actorUserId: string;
+  now: Date;
+};
+
+/**
+ * 입금 확인된 신청을 기존 예약 규칙으로 확정한다(ADR-053/054). 한 트랜잭션에서 다음을 모두 하거나 아무것도 하지 않는다.
+ * 1. 신청 행을 잠그고 처리 대기·입금 확인을 다시 확인
+ * 2. 새 아이 등록 또는 기존 아이 확인(기존 아이 정보는 바꾸지 않는다)
+ * 3. createReservationInTransaction — 클래스 잠금·중복·비활성 아이·취소/종료 클래스·정원 초과 확인 그대로
+ * 4. 신청 동의를 ChildConsent 에 append-only 로 추가(동의 일시 = 신청 제출 시각)
+ * 5. 신청을 CONFIRMED 로 갱신
+ * Payment 는 만들지 않는다.
+ *
+ * 잠금 순서: 신청 행 → ClassSchedule 행. 다른 경로는 신청 행을 잠그지 않으므로 순환 대기가 생기지 않는다.
+ */
+export async function confirmReservationApplicationCore(
+  client: Pick<PrismaClient, "$transaction">,
+  input: ConfirmReservationApplicationInput,
+): Promise<{ reservationId: string; childId: string }> {
+  return client.$transaction(async (tx) => {
+    const [locked] = await tx.$queryRaw<{ status: string; depositConfirmedAt: Date | null }[]>`
+      SELECT "status", "depositConfirmedAt" FROM "ReservationApplication" WHERE "id" = ${input.applicationId} FOR UPDATE
+    `;
+    if (!locked) throw new ApplicationNotFoundError();
+    if (locked.status !== "SUBMITTED") throw new ApplicationNotPendingError();
+    if (!locked.depositConfirmedAt) throw new ApplicationDepositNotConfirmedError();
+
+    const application = await tx.reservationApplication.findUniqueOrThrow({
+      where: { id: input.applicationId },
+      select: {
+        classScheduleId: true,
+        childName: true,
+        childBirthDate: true,
+        childGender: true,
+        guardianName: true,
+        guardianPhone: true,
+        photoMarketingConsentAgreed: true,
+        submittedAt: true,
+      },
+    });
+
+    let childId: string;
+    let currentPhotoMarketingAction: ConsentAction | null = null;
+    if (input.childChoice.type === "NEW") {
+      const child = await tx.child.create({
+        data: {
+          name: application.childName,
+          birthDate: application.childBirthDate,
+          gender: application.childGender,
+          guardianName: application.guardianName,
+          guardianPhone: application.guardianPhone,
+        },
+        select: { id: true },
+      });
+      childId = child.id;
+    } else {
+      const child = await tx.child.findUnique({
+        where: { id: input.childChoice.childId },
+        select: { id: true },
+      });
+      if (!child) throw new ChildNotFoundError();
+      childId = child.id;
+      const latestMarketingConsent = await tx.childConsent.findFirst({
+        where: { childId, consentType: "PHOTO_MARKETING" },
+        orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+        select: { action: true },
+      });
+      currentPhotoMarketingAction = latestMarketingConsent?.action ?? null;
+    }
+
+    const reservation = await createReservationInTransaction(tx, {
+      classScheduleId: application.classScheduleId,
+      childId,
+      memo: input.memo,
+      ...(input.confirmOverbooking
+        ? {
+            confirmOverbooking: "true" as const,
+            confirmedClassScheduleId: application.classScheduleId,
+            confirmedChildId: childId,
+          }
+        : {}),
+    });
+
+    const consentRecords = planApplicationConsentRecords({
+      photoMarketingConsentAgreed: application.photoMarketingConsentAgreed,
+      currentPhotoMarketingAction,
+    });
+    await tx.childConsent.createMany({
+      data: consentRecords.map((record) => ({
+        childId,
+        consentType: record.consentType,
+        action: record.action,
+        recordedAt: application.submittedAt,
+        recordedById: input.actorUserId,
+        reservationApplicationId: input.applicationId,
+      })),
+    });
+
+    const updated = await tx.reservationApplication.updateMany({
+      where: { id: input.applicationId, status: "SUBMITTED" },
+      data: {
+        status: "CONFIRMED",
+        childId,
+        reservationId: reservation.id,
+        resolvedAt: input.now,
+        resolvedById: input.actorUserId,
+      },
+    });
+    if (updated.count === 0) throw new ApplicationNotPendingError();
+
+    return { reservationId: reservation.id, childId };
+  }, RESERVATION_TRANSACTION_OPTIONS);
+}
