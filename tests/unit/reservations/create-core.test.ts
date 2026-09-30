@@ -8,14 +8,18 @@ import { OverbookingConfirmationRequiredError } from "@/lib/reservations/errors"
 
 function createTx(options?: { reservedCount?: number; capacity?: number }) {
   return {
-    $queryRaw: vi.fn(async () => [
-      {
-        status: "SCHEDULED",
-        capacity: options?.capacity ?? 8,
-        endsAt: new Date(Date.now() + 60 * 60 * 1000),
-      },
-    ]),
-    child: { findUnique: vi.fn(async () => ({ isActive: true })) },
+    // ClassSchedule FOR UPDATE 잠금 → Child FOR SHARE 잠금(ADR-058) 순서로 응답한다.
+    $queryRaw: vi.fn(async (strings: TemplateStringsArray) =>
+      strings.join("?").includes('FROM "Child"')
+        ? [{ isActive: true, personalDataPurgedAt: null }]
+        : [
+            {
+              status: "SCHEDULED",
+              capacity: options?.capacity ?? 8,
+              endsAt: new Date(Date.now() + 60 * 60 * 1000),
+            },
+          ],
+    ),
     reservation: {
       findUnique: vi.fn(async () => null),
       count: vi.fn(async () => options?.reservedCount ?? 0),

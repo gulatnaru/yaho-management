@@ -133,7 +133,7 @@ describe("getReservationDetail", () => {
         cancelReason: true,
         cancelDetail: true,
         cancelledById: true,
-        child: { select: { id: true, name: true, isActive: true } },
+        child: { select: { id: true, name: true, isActive: true, personalDataPurgedAt: true } },
         cancelledBy: { select: { id: true, name: true } },
       }),
     );

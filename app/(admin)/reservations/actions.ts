@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
+import { lockChildForShare } from "@/lib/children/lock";
 import { readFormString } from "@/lib/forms/form-data";
 import { canCancelReservation } from "@/lib/reservations/cancellation";
 import {
@@ -24,6 +26,10 @@ import { createReservationCore } from "@/server/reservations/create";
 // "use server" 파일은 async 함수만 export 할 수 있어, createReservationCore 가 던지는 에러
 // 클래스들은 lib/reservations/errors.ts 에 정의하고 여기서는 가져와서만 쓴다(재수출하지 않는다).
 class ReservationNotCancellableError extends Error {}
+class PurgedChildCancelDetailError extends Error {}
+
+const PURGED_CHILD_CANCEL_DETAIL_MESSAGE =
+  "파기된 아이의 예약에는 상세 사유를 기록할 수 없습니다. 사유 코드만 선택해주세요.";
 
 export type ReservationFormFieldKey = "classScheduleId" | "childId" | "memo";
 
@@ -84,6 +90,12 @@ export async function createReservation(
     if (error instanceof ClassNotScheduledError) {
       return {
         formError: "취소되었거나 완료된 클래스에는 예약할 수 없습니다.",
+        values: readReservationFormValues(formData),
+      };
+    }
+    if (error instanceof ChildPersonalDataPurgedError) {
+      return {
+        formError: "보관기간이 지나 개인정보를 파기한 아이에게는 예약할 수 없습니다.",
         values: readReservationFormValues(formData),
       };
     }
@@ -166,7 +178,7 @@ export async function cancelReservation(
 
   const current = await prisma.reservation.findUnique({
     where: { id },
-    select: { status: true, classSchedule: { select: { status: true, endsAt: true } } },
+    select: { status: true, childId: true, classSchedule: { select: { status: true, endsAt: true } } },
   });
 
   if (!current) {
@@ -192,32 +204,47 @@ export async function cancelReservation(
     };
   }
 
+  const { cancelReason, cancelDetail } = result.data;
   try {
-    const cancelledAt = new Date();
-    const updateResult = await prisma.reservation.updateMany({
-      where: {
-        id,
-        OR: [
-          {
-            status: "RESERVED",
-            classSchedule: { status: "SCHEDULED", endsAt: { gte: cancelledAt } },
-          },
-          { status: { in: ["COMPLETED", "NO_SHOW"] } },
-        ],
-      },
-      data: {
-        status: "CANCELLED",
-        cancelledAt,
-        cancelReason: result.data.cancelReason,
-        cancelDetail: result.data.cancelDetail || null,
-        cancelledById: principal.userId,
-      },
-    });
+    await prisma.$transaction(async (tx) => {
+      // ADR-058: 개인정보 파기와 같은 Child 행 잠금으로 직렬화한다. 파기된 아이의 예약에는 자유 입력 상세사유를
+      // 다시 쓰지 않는다(취소 자체는 ADR-033 대로 허용한다).
+      const child = await lockChildForShare(tx, current.childId);
+      const childPurged = Boolean(child?.personalDataPurgedAt);
+      if (childPurged && cancelDetail) throw new PurgedChildCancelDetailError();
 
-    if (updateResult.count === 0) {
-      throw new ReservationNotCancellableError();
-    }
+      const cancelledAt = new Date();
+      const updateResult = await tx.reservation.updateMany({
+        where: {
+          id,
+          OR: [
+            {
+              status: "RESERVED",
+              classSchedule: { status: "SCHEDULED", endsAt: { gte: cancelledAt } },
+            },
+            { status: { in: ["COMPLETED", "NO_SHOW"] } },
+          ],
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt,
+          cancelReason,
+          cancelDetail: childPurged ? null : cancelDetail || null,
+          cancelledById: principal.userId,
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new ReservationNotCancellableError();
+      }
+    });
   } catch (error) {
+    if (error instanceof PurgedChildCancelDetailError) {
+      return {
+        errors: { cancelDetail: [PURGED_CHILD_CANCEL_DETAIL_MESSAGE] },
+        values: readCancelReservationFormValues(formData),
+      };
+    }
     if (error instanceof ReservationNotCancellableError) {
       return {
         formError: "이미 취소되었거나 취소할 수 없는 예약입니다.",

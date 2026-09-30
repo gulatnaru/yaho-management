@@ -1,6 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { getCapacityState } from "@/lib/classes/capacity";
 import { getClassDisplayStatus } from "@/lib/classes/status";
+import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
+import { lockChildForShare } from "@/lib/children/lock";
 import { resolveReservationWriteMode } from "@/lib/reservations/capacity";
 import {
   ChildNotActiveError,
@@ -13,6 +15,7 @@ import {
 } from "@/lib/reservations/errors";
 
 // ADR-023: ClassSchedule 행 잠금 때문에 같은 클래스의 동시 요청은 커밋 순서대로 대기한다.
+// ADR-058: 이어서 Child 행을 FOR SHARE 로 잠가 개인정보 파기와 직렬화한다(잠금 순서 ClassSchedule → Child).
 export const RESERVATION_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 };
 
 export type CreateReservationCoreInput = {
@@ -42,11 +45,11 @@ export async function createReservationInTransaction(
     throw new ClassNotScheduledError();
   }
 
-  const child = await tx.child.findUnique({
-    where: { id: input.childId },
-    select: { isActive: true },
-  });
+  // ADR-058: 보관기간 만료 파기와 같은 Child 행을 두고 직렬화한다. 잠금을 얻은 뒤의 값으로 파기·비활성 여부를 판정해
+  // "미래 예약이 있는 파기된 아이"가 생기지 않게 한다.
+  const child = await lockChildForShare(tx, input.childId);
   if (!child) throw new ChildNotFoundError();
+  if (child.personalDataPurgedAt) throw new ChildPersonalDataPurgedError();
   if (!child.isActive) throw new ChildNotActiveError();
 
   const existing = await tx.reservation.findUnique({

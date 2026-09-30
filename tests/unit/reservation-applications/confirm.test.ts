@@ -13,6 +13,7 @@ import {
   confirmReservationApplicationCore,
   type ConfirmReservationApplicationInput,
 } from "@/server/reservation-applications/confirm";
+import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
 
 const NOW = new Date("2026-10-01T00:00:00.000Z");
 const SUBMITTED_AT = new Date("2026-09-30T01:00:00.000Z");
@@ -28,19 +29,41 @@ type TxOptions = {
   purged?: boolean;
   capacity?: number;
   reservedCount?: number;
-  existingChild?: { id: string; isActive: boolean } | null;
+  existingChild?: { id: string; isActive: boolean; personalDataPurgedAt?: Date | null } | null;
+  /** 잠금 전 조회 뒤 파기가 커밋되어, Child 잠금이 파기된 행을 돌려주는 경우 */
+  purgedBeforeChildLock?: boolean;
   currentMarketingAction?: "AGREED" | "REVOKED" | "DECLINED" | null;
   existingReservation?: { id: string; status: string } | null;
   applicationUpdateCount?: number;
 };
 
 function createTx(options: TxOptions = {}) {
-  const queryRaw = vi
-    .fn()
-    .mockResolvedValueOnce(options.lock ?? [{ status: "SUBMITTED", depositConfirmedAt: DEPOSIT_AT }])
-    .mockResolvedValueOnce([{ status: "SCHEDULED", capacity: options.capacity ?? 8, endsAt: CLASS_ENDS_AT }]);
+  const existingChild =
+    options.existingChild === undefined
+      ? { id: "child-existing", isActive: true, personalDataPurgedAt: null }
+      : options.existingChild;
+  const rawSqlLog: string[] = [];
 
-  const existingChild = options.existingChild === undefined ? { id: "child-existing", isActive: true } : options.existingChild;
+  // 신청 행 잠금 → ClassSchedule 잠금 → Child FOR SHARE 잠금(ADR-058)을 SQL 로 구분해 응답한다.
+  const queryRaw = vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    rawSqlLog.push(sql);
+    if (sql.includes('FROM "ReservationApplication"')) {
+      return options.lock ?? [{ status: "SUBMITTED", depositConfirmedAt: DEPOSIT_AT }];
+    }
+    if (sql.includes('FROM "ClassSchedule"')) {
+      return [{ status: "SCHEDULED", capacity: options.capacity ?? 8, endsAt: CLASS_ENDS_AT }];
+    }
+    if (sql.includes('FROM "Child"')) {
+      const [childId] = values;
+      if (childId === "child-new") return [{ isActive: true, personalDataPurgedAt: null }];
+      if (!existingChild || existingChild.id !== childId) return [];
+      return options.purgedBeforeChildLock
+        ? [{ isActive: false, personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") }]
+        : [{ isActive: existingChild.isActive, personalDataPurgedAt: existingChild.personalDataPurgedAt ?? null }];
+    }
+    throw new Error(`unexpected raw query: ${sql}`);
+  });
 
   const tx = {
     $queryRaw: queryRaw,
@@ -80,7 +103,7 @@ function createTx(options: TxOptions = {}) {
     },
   };
   const transaction = vi.fn(async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx));
-  return { client: { $transaction: transaction } as never, tx };
+  return { client: { $transaction: transaction } as never, tx, rawSqlLog };
 }
 
 function input(overrides: Partial<ConfirmReservationApplicationInput> = {}): ConfirmReservationApplicationInput {
@@ -265,6 +288,42 @@ describe("confirmReservationApplicationCore", () => {
       ),
     ).rejects.toBeInstanceOf(ChildNotActiveError);
     expect(inactive.tx.childConsent.createMany).not.toHaveBeenCalled();
+  });
+
+  it("locks the application, then the class, then the child row (ADR-058)", async () => {
+    const { client, rawSqlLog } = createTx();
+
+    await confirmReservationApplicationCore(client, input({ childChoice: { type: "EXISTING", childId: "child-existing" } }));
+
+    expect(rawSqlLog).toHaveLength(3);
+    expect(rawSqlLog[0]).toMatch(/FROM "ReservationApplication" WHERE "id" = \? FOR UPDATE/);
+    expect(rawSqlLog[1]).toMatch(/FROM "ClassSchedule" WHERE "id" = \? FOR UPDATE/);
+    expect(rawSqlLog[2]).toMatch(/FROM "Child" WHERE "id" = \? FOR SHARE/);
+  });
+
+  it("refuses a purged existing child with its own error before any write (MSG-1)", async () => {
+    const { client, tx } = createTx({
+      existingChild: { id: "child-purged", isActive: false, personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") },
+    });
+
+    await expect(
+      confirmReservationApplicationCore(client, input({ childChoice: { type: "EXISTING", childId: "child-purged" } })),
+    ).rejects.toBeInstanceOf(ChildPersonalDataPurgedError);
+    expect(tx.reservation.create).not.toHaveBeenCalled();
+    expect(tx.childConsent.createMany).not.toHaveBeenCalled();
+    expect(tx.reservationApplication.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("re-checks the child under the row lock when a purge commits after the first read (CONC-1)", async () => {
+    const { client, tx } = createTx({ purgedBeforeChildLock: true });
+
+    await expect(
+      confirmReservationApplicationCore(client, input({ childChoice: { type: "EXISTING", childId: "child-existing" } })),
+    ).rejects.toBeInstanceOf(ChildPersonalDataPurgedError);
+    expect(tx.reservation.create).not.toHaveBeenCalled();
+    expect(tx.reservation.update).not.toHaveBeenCalled();
+    expect(tx.childConsent.createMany).not.toHaveBeenCalled();
+    expect(tx.reservationApplication.updateMany).not.toHaveBeenCalled();
   });
 
   it("fails closed if another request processed the application first", async () => {

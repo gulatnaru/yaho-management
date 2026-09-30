@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const requireAdminMock = vi.fn();
 const transactionMock = vi.fn();
 const queryRawMock = vi.fn();
-const childFindUniqueMock = vi.fn();
+const childLockMock = vi.fn();
 const reservationFindUniqueTxMock = vi.fn();
 const reservationCountMock = vi.fn();
 const reservationCreateMock = vi.fn();
@@ -11,16 +11,31 @@ const reservationUpdateMock = vi.fn();
 const reservationFindUniqueMock = vi.fn();
 const reservationUpdateManyMock = vi.fn();
 
+// 트랜잭션 안의 raw 쿼리 순서(ClassSchedule 잠금 → Child 잠금, ADR-058)를 기록한다.
+const rawSqlLog: string[] = [];
+
+function sqlText(args: unknown[]): string {
+  const [first] = args;
+  return Array.isArray(first) ? first.join("?") : String(first);
+}
+
 const txMock = {
-  $queryRaw: (...args: unknown[]) => queryRawMock(...args),
-  child: {
-    findUnique: (...args: unknown[]) => childFindUniqueMock(...args),
+  // Child FOR SHARE 잠금(lib/children/lock.ts)은 childLockMock 이 돌려주는 아이 상태로 응답한다.
+  $queryRaw: async (...args: unknown[]) => {
+    const sql = sqlText(args);
+    rawSqlLog.push(sql);
+    if (sql.includes('FROM "Child"')) {
+      const row = (await childLockMock(...args)) as Record<string, unknown> | null | undefined;
+      return row ? [{ personalDataPurgedAt: null, ...row }] : [];
+    }
+    return queryRawMock(...args);
   },
   reservation: {
     findUnique: (...args: unknown[]) => reservationFindUniqueTxMock(...args),
     count: (...args: unknown[]) => reservationCountMock(...args),
     create: (...args: unknown[]) => reservationCreateMock(...args),
     update: (...args: unknown[]) => reservationUpdateMock(...args),
+    updateMany: (...args: unknown[]) => reservationUpdateManyMock(...args),
   },
 };
 
@@ -61,6 +76,7 @@ const {
   OverbookingConfirmationRequiredError,
   TerminalReservationError,
 } = await import("@/lib/reservations/errors");
+const { ChildPersonalDataPurgedError } = await import("@/lib/children/errors");
 
 function validFormData(overrides: Record<string, string> = {}) {
   const formData = new FormData();
@@ -149,7 +165,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     transactionMock.mockReset();
     transactionMock.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
     queryRawMock.mockReset();
-    childFindUniqueMock.mockReset();
+    childLockMock.mockReset();
     reservationFindUniqueTxMock.mockReset();
     reservationCountMock.mockReset();
     reservationCreateMock.mockReset();
@@ -164,7 +180,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(8);
 
@@ -183,7 +199,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(8);
     reservationCreateMock.mockResolvedValue({ id: "reservation-overbooked" });
@@ -203,7 +219,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(9);
     reservationCreateMock.mockResolvedValue({ id: "reservation-overbooked" });
@@ -223,7 +239,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(8);
 
@@ -241,7 +257,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
 
   it("정원 미달(reservedCount === capacity - 1)이면 마지막 한 자리를 예약할 수 있다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(7);
     reservationCreateMock.mockResolvedValue({ id: "reservation-new" });
@@ -267,7 +283,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
         confirmedChildId: "child-1",
       }),
     ).rejects.toBeInstanceOf(ClassNotScheduledError);
-    expect(childFindUniqueMock).not.toHaveBeenCalled();
+    expect(childLockMock).not.toHaveBeenCalled();
     expect(reservationCreateMock).not.toHaveBeenCalled();
   });
 
@@ -289,7 +305,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     await expect(
       createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-1" }),
     ).rejects.toBeInstanceOf(ClassNotScheduledError);
-    expect(childFindUniqueMock).not.toHaveBeenCalled();
+    expect(childLockMock).not.toHaveBeenCalled();
     expect(reservationCreateMock).not.toHaveBeenCalled();
   });
 
@@ -297,7 +313,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 8, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(0);
     reservationCreateMock.mockResolvedValue({ id: "reservation-new" });
@@ -320,7 +336,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
 
   it("유효한 초과 확인이 있어도 비활성 아이의 신규 예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: false });
+    childLockMock.mockResolvedValue({ isActive: false });
 
     await expect(
       createReservationCore(prismaLike, {
@@ -337,16 +353,52 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
 
   it("존재하지 않는 아이는 ChildNotFoundError 를 던진다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue(null);
+    childLockMock.mockResolvedValue(null);
 
     await expect(
       createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-missing" }),
     ).rejects.toBeInstanceOf(ChildNotFoundError);
   });
 
+  // ADR-058 (CONC-1): 파기와 같은 Child 행 잠금 규약. ClassSchedule 잠금 다음에 Child 를 FOR SHARE 로 잠그고,
+  // 잠금 뒤에 받은 값으로 파기 여부를 판정한다.
+  it("ClassSchedule 을 잠근 뒤 Child 행을 FOR SHARE 로 잠그고 그 값으로 판정한다", async () => {
+    rawSqlLog.length = 0;
+    queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
+    childLockMock.mockResolvedValue({ isActive: true });
+    reservationFindUniqueTxMock.mockResolvedValue(null);
+    reservationCountMock.mockResolvedValue(0);
+    reservationCreateMock.mockResolvedValue({ id: "reservation-new" });
+
+    await createReservationCore(prismaLike, { classScheduleId: "class-1", childId: "child-1" });
+
+    expect(rawSqlLog).toHaveLength(2);
+    expect(rawSqlLog[0]).toMatch(/FROM "ClassSchedule" WHERE "id" = \? FOR UPDATE/);
+    expect(rawSqlLog[1]).toMatch(/SELECT "isActive", "personalDataPurgedAt" FROM "Child" WHERE "id" = \? FOR SHARE/);
+    expect(childLockMock.mock.calls[0]?.slice(1)).toEqual(["child-1"]);
+  });
+
+  it("잠금 뒤 개인정보가 파기된 아이로 확인되면 비활성 안내 대신 ChildPersonalDataPurgedError 를 던지고 쓰지 않는다", async () => {
+    queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
+    childLockMock.mockResolvedValue({ isActive: false, personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") });
+
+    await expect(
+      createReservationCore(prismaLike, {
+        classScheduleId: "class-1",
+        childId: "child-1",
+        confirmOverbooking: "true",
+        confirmedClassScheduleId: "class-1",
+        confirmedChildId: "child-1",
+      }),
+    ).rejects.toBeInstanceOf(ChildPersonalDataPurgedError);
+    expect(reservationFindUniqueTxMock).not.toHaveBeenCalled();
+    expect(reservationCreateMock).not.toHaveBeenCalled();
+    expect(reservationUpdateMock).not.toHaveBeenCalled();
+  });
+
   it("유효한 초과 확인이 있어도 동일 아이의 동일 클래스 중복 예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "RESERVED" });
 
     await expect(
@@ -364,7 +416,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
 
   it("이미 종료된(COMPLETED) 예약에 대한 재예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "COMPLETED" });
 
     await expect(
@@ -374,7 +426,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
 
   it("이미 종료된(NO_SHOW) 예약에 대한 재예약을 차단한다", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "NO_SHOW" });
 
     await expect(
@@ -384,7 +436,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
 
   it("취소된 기존 예약(CANCELLED)은 새 행을 만들지 않고 기존 행을 RESERVED 로 재활성화한다 (ADR-024)", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "CANCELLED" });
     reservationCountMock.mockResolvedValue(0);
     reservationUpdateMock.mockResolvedValue({ id: "reservation-existing" });
@@ -409,7 +461,7 @@ describe("createReservationCore — 정원/상태/중복 검증 (QA 필수 테�
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 1, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "reservation-existing", status: "CANCELLED" });
     reservationCountMock.mockResolvedValueOnce(1).mockResolvedValueOnce(2);
     reservationUpdateMock.mockResolvedValue({ id: "reservation-existing" });
@@ -458,7 +510,7 @@ describe("createReservation (Server Action) maps core errors to user-facing form
     transactionMock.mockReset();
     transactionMock.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
     queryRawMock.mockReset();
-    childFindUniqueMock.mockReset();
+    childLockMock.mockReset();
     reservationFindUniqueTxMock.mockReset();
     reservationCountMock.mockReset();
     reservationCreateMock.mockReset();
@@ -474,16 +526,26 @@ describe("createReservation (Server Action) maps core errors to user-facing form
 
   it("maps ChildNotActiveError", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: false });
+    childLockMock.mockResolvedValue({ isActive: false });
 
     const result = await createReservation({}, validFormData());
 
     expect(result.formError).toBe("비활성화된 아이는 새로 예약할 수 없습니다.");
   });
 
+  it("maps ChildPersonalDataPurgedError to its own message (MSG-1)", async () => {
+    queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
+    childLockMock.mockResolvedValue({ isActive: false, personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") });
+
+    const result = await createReservation({}, validFormData());
+
+    expect(result.formError).toBe("보관기간이 지나 개인정보를 파기한 아이에게는 예약할 수 없습니다.");
+    expect(result.formError).not.toContain("활성화");
+  });
+
   it("maps DuplicateReservationError", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "r1", status: "RESERVED" });
 
     const result = await createReservation({}, validFormData());
@@ -493,7 +555,7 @@ describe("createReservation (Server Action) maps core errors to user-facing form
 
   it("maps TerminalReservationError", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue({ id: "r1", status: "COMPLETED" });
 
     const result = await createReservation({}, validFormData());
@@ -505,7 +567,7 @@ describe("createReservation (Server Action) maps core errors to user-facing form
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 1, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(1);
 
@@ -527,7 +589,7 @@ describe("createReservation (Server Action) maps core errors to user-facing form
     queryRawMock.mockResolvedValue([
       { status: "SCHEDULED", capacity: 1, endsAt: new Date("2099-01-01T00:00:00Z") },
     ]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(1);
     reservationCreateMock.mockResolvedValue({ id: "reservation-overbooked" });
@@ -561,7 +623,7 @@ describe("createReservation (Server Action) maps core errors to user-facing form
 
   it("redirects to the detail page on success", async () => {
     queryRawMock.mockResolvedValue([{ status: "SCHEDULED", capacity: 8 }]);
-    childFindUniqueMock.mockResolvedValue({ isActive: true });
+    childLockMock.mockResolvedValue({ isActive: true });
     reservationFindUniqueTxMock.mockResolvedValue(null);
     reservationCountMock.mockResolvedValue(0);
     reservationCreateMock.mockResolvedValue({ id: "reservation-new" });
@@ -575,6 +637,72 @@ describe("cancelReservation", () => {
     requireAdminMock.mockReset();
     reservationFindUniqueMock.mockReset();
     reservationUpdateManyMock.mockReset();
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
+    childLockMock.mockReset();
+    childLockMock.mockResolvedValue({ isActive: true });
+  });
+
+  // ADR-058 (PURGE-3): 파기된 아이의 예약에는 자유 입력 상세사유를 다시 쓰지 않는다. 취소 자체는 허용한다.
+  it("locks the child row and rejects a cancel detail for a purged child without writing", async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+    reservationFindUniqueMock.mockResolvedValue({
+      status: "COMPLETED",
+      childId: "child-purged",
+      classSchedule: { status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") },
+    });
+    childLockMock.mockResolvedValue({ isActive: false, personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") });
+
+    const result = await cancelReservation(
+      "reservation-1",
+      {},
+      cancelFormData({ cancelReason: "OTHER", cancelDetail: "보호자 연락처 010-0000-0000" }),
+    );
+
+    expect(result.errors?.cancelDetail).toEqual([
+      "파기된 아이의 예약에는 상세 사유를 기록할 수 없습니다. 사유 코드만 선택해주세요.",
+    ]);
+    expect(result.values).toEqual({ cancelReason: "OTHER", cancelDetail: "보호자 연락처 010-0000-0000" });
+    expect(childLockMock.mock.calls[0]?.slice(1)).toEqual(["child-purged"]);
+    expect(reservationUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("still cancels a purged child's reservation with only the reason code and keeps cancelDetail null", async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+    reservationFindUniqueMock.mockResolvedValue({
+      status: "NO_SHOW",
+      childId: "child-purged",
+      classSchedule: { status: "SCHEDULED", endsAt: new Date("2020-01-01T00:00:00Z") },
+    });
+    childLockMock.mockResolvedValue({ isActive: false, personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") });
+    reservationUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    await expect(
+      cancelReservation("reservation-1", {}, cancelFormData({ cancelReason: "OPERATION", cancelDetail: "" })),
+    ).rejects.toThrow("REDIRECT");
+
+    const [[callArg]] = reservationUpdateManyMock.mock.calls;
+    expect(callArg.data).toMatchObject({ status: "CANCELLED", cancelReason: "OPERATION", cancelDetail: null });
+  });
+
+  it("writes the cancel detail inside the same transaction as the child lock", async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+    reservationFindUniqueMock.mockResolvedValue({
+      status: "RESERVED",
+      childId: "child-1",
+      classSchedule: { status: "SCHEDULED", endsAt: new Date("2099-01-01T00:00:00Z") },
+    });
+    reservationUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    await expect(
+      cancelReservation("reservation-1", {}, cancelFormData({ cancelDetail: "일정 변경" })),
+    ).rejects.toThrow("REDIRECT");
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(childLockMock).toHaveBeenCalledTimes(1);
+    expect(childLockMock.mock.invocationCallOrder[0]).toBeLessThan(
+      reservationUpdateManyMock.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("rejects re-cancelling a reservation that is already CANCELLED", async () => {

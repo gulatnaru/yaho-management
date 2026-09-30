@@ -5,6 +5,7 @@ import {
   ApplicationNotFoundError,
   ApplicationNotPendingError,
 } from "@/lib/reservation-applications/errors";
+import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
 import { ChildNotFoundError } from "@/lib/reservations/errors";
 import {
   createReservationInTransaction,
@@ -32,7 +33,8 @@ export type ConfirmReservationApplicationInput = {
  * 5. 신청을 CONFIRMED 로 갱신
  * Payment 는 만들지 않는다.
  *
- * 잠금 순서: 신청 행 → ClassSchedule 행. 다른 경로는 신청 행을 잠그지 않으므로 순환 대기가 생기지 않는다.
+ * 잠금 순서: 신청 행 → ClassSchedule 행 → Child 행(FOR SHARE, ADR-058). 다른 경로는 처리 대기 신청 행을 잠그지 않고,
+ * 개인정보 파기는 ClassSchedule 을 잠그지 않으므로 순환 대기가 생기지 않는다.
  */
 export async function confirmReservationApplicationCore(
   client: Pick<PrismaClient, "$transaction">,
@@ -78,9 +80,11 @@ export async function confirmReservationApplicationCore(
     } else {
       const child = await tx.child.findUnique({
         where: { id: input.childChoice.childId },
-        select: { id: true },
+        select: { id: true, personalDataPurgedAt: true },
       });
       if (!child) throw new ChildNotFoundError();
+      // 빠른 안내용 확인. 최종 판정은 createReservationInTransaction 의 Child 잠금 뒤에 다시 한다(ADR-058).
+      if (child.personalDataPurgedAt) throw new ChildPersonalDataPurgedError();
       childId = child.id;
       const [latestShareConsent, latestMarketingConsent] = await Promise.all(
         (["PHOTO_SHARE", "PHOTO_MARKETING"] as const).map((consentType) =>
