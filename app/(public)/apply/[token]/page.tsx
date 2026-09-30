@@ -1,9 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { formatTargetAgeRange } from "@/lib/programs/format";
-import { isApplicationLinkOpen } from "@/lib/reservation-applications/availability";
 import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
-import { findPublicApplicationLink } from "@/lib/reservation-applications/public-queries";
+import { loadPublicApplicationView } from "@/lib/reservation-applications/public-queries";
 import { buildApplicationAvailabilityContext } from "@/lib/reservation-applications/runtime";
 import { ApplicationClosedNotice } from "../../_components/application-closed-notice";
 import { ReservationApplicationForm } from "./_components/reservation-application-form";
@@ -14,14 +13,16 @@ export const dynamic = "force-dynamic";
 
 export default async function ReservationApplicationPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const link = await findPublicApplicationLink(token);
+  // 접수 판정용 최소 조회를 먼저 하고, 열린 링크일 때만 클래스 표시 정보를 조회한다.
+  // 닫힌 링크의 응답(HTML·RSC payload)에는 장소·프로그램 정보가 실리지 않는다(ADR-052).
+  const view = await loadPublicApplicationView(token, buildApplicationAvailabilityContext(new Date()));
 
   // 무효·중지·마감·설정 미비를 구분하지 않고 같은 안내만 보여준다(ADR-052).
-  if (!link || !isApplicationLinkOpen(link, buildApplicationAvailabilityContext(new Date()))) {
+  if (!view.open) {
     return <ApplicationClosedNotice />;
   }
 
-  const { classSchedule } = link;
+  const { classSchedule } = view;
   const { program } = classSchedule;
 
   return (

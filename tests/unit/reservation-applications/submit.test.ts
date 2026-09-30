@@ -80,6 +80,21 @@ describe("submitReservationApplicationCore", () => {
     });
   });
 
+  it("re-checks the link at submit time with only the fields needed to decide and store", async () => {
+    const { client, findUnique } = createClient();
+
+    await submitReservationApplicationCore(client, { token: TOKEN, data, consentVersion: "v-test", context });
+
+    expect(findUnique).toHaveBeenCalledWith({
+      where: { token: TOKEN },
+      select: {
+        isActive: true,
+        classScheduleId: true,
+        classSchedule: { select: { status: true, startsAt: true } },
+      },
+    });
+  });
+
   it("rejects malformed tokens without a lookup", async () => {
     const { client, findUnique, create } = createClient();
 
