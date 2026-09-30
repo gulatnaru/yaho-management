@@ -139,7 +139,38 @@ async function createApplication(input: {
   photoMarketingConsentAgreed?: boolean;
   depositConfirmed?: boolean;
   status?: "REJECTED";
+  /** 이미 확정된 신청(ADR-058: 5년 보관 대상은 확정 신청 이력이 있는 아이만)으로 만든다. */
+  confirmed?: { childId: string; reservationId: string };
 }) {
+  if (input.confirmed) {
+    return prisma.reservationApplication.create({
+      data: {
+        classScheduleId: input.classScheduleId,
+        childName: input.childName,
+        childBirthDate: new Date("2019-05-01"),
+        childGender: "FEMALE",
+        guardianName: `신청보호자_${marker}`,
+        guardianPhone,
+        guardianRelationship: "MOTHER",
+        programTermsAcknowledged: true,
+        privacyConsentAgreed: true,
+        legalGuardianConfirmed: true,
+        refundTermsAcknowledged: true,
+        photoShareConsentAgreed: false,
+        photoMarketingConsentAgreed: false,
+        consentVersion: "e2e",
+        submittedAt: new Date(Date.now() - 60 * 60 * 1000),
+        depositConfirmedAt: new Date(Date.now() - 30 * 60 * 1000),
+        depositConfirmedById: adminUserId,
+        status: "CONFIRMED",
+        resolvedAt: new Date(),
+        resolvedById: adminUserId,
+        childId: input.confirmed.childId,
+        reservationId: input.confirmed.reservationId,
+      },
+    });
+  }
+
   return prisma.reservationApplication.create({
     data: {
       classScheduleId: input.classScheduleId,
@@ -560,17 +591,23 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       guardianPhone: null,
       guardianRelationship: null,
       requestNote: null,
+      // ADR-058 (PURGE-2): 반려 사유도 자유 입력이라 함께 지운다. 처리 일시·처리자는 남는다.
+      resolutionNote: null,
+      resolvedById: adminUserId,
       personalDataPurgedById: adminUserId,
       privacyConsentAgreed: true,
       consentVersion: "e2e",
     });
+    expect(purged.resolvedAt).not.toBeNull();
     expect(purged.personalDataPurgedAt).not.toBeNull();
     const stillPending = await prisma.reservationApplication.findUniqueOrThrow({ where: { id: pending.id } });
     expect(stillPending).toMatchObject({ status: "SUBMITTED", childName: pendingName, personalDataPurgedAt: null });
 
     await page.goto(`/reservation-applications/${expired.id}`);
     await expect(page.getByTestId("application-purged")).toBeVisible();
-    expect(await page.content()).not.toContain(guardianPhone);
+    const purgedPage = await page.content();
+    expect(purgedPage).not.toContain(guardianPhone);
+    expect(purgedPage).not.toContain("합성 반려");
   });
 
   test("마지막 예약 수업일로부터 5년이 지난 확정 고객은 비식별화되고 예약·결제 기록은 남는다", async ({ page }) => {
@@ -591,7 +628,8 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     });
     const oldName = `오년경과아이_${marker}`;
     const keptName = `사년경과아이_${marker}`;
-    const [oldChild, keptChild, sibling] = await Promise.all([
+    const legacyName = `기존고객아이_${marker}`;
+    const [oldChild, keptChild, sibling, legacyChild] = await Promise.all([
       prisma.child.create({
         data: {
           name: oldName,
@@ -605,14 +643,26 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       }),
       prisma.child.create({ data: { name: keptName, guardianPhone: "010-0000-4444" } }),
       prisma.child.create({ data: { name: `형제아이_${marker}` } }),
+      // 관리자가 직접 등록하고 기존 예약만 있는 고객 — Phase 18 확정 신청 이력이 없어 파기 대상이 아니다(ADR-058).
+      prisma.child.create({
+        data: {
+          name: legacyName,
+          guardianName: `기존보호자_${marker}`,
+          guardianPhone: "010-0000-3333",
+          safetyInfo: { create: { allergies: "기존 고객 알레르기" } },
+        },
+      }),
     ]);
-    ids.children.push(oldChild.id, keptChild.id, sibling.id);
+    ids.children.push(oldChild.id, keptChild.id, sibling.id, legacyChild.id);
     const [childAId, childBId] = [oldChild.id, sibling.id].sort();
     await prisma.relationship.create({ data: { childAId: childAId!, childBId: childBId!, type: "SIBLING" } });
     await prisma.childConsent.create({
       data: { childId: oldChild.id, consentType: "PRIVACY", action: "AGREED", recordedById: adminUserId },
     });
-    const [oldReservation] = await Promise.all([
+    await prisma.childConsent.create({
+      data: { childId: legacyChild.id, consentType: "PRIVACY", action: "AGREED", recordedById: adminUserId },
+    });
+    const [oldReservation, keptChildReservation, legacyReservation] = await Promise.all([
       prisma.reservation.create({
         data: {
           classScheduleId: sixYearsAgo.id,
@@ -625,7 +675,27 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       prisma.reservation.create({
         data: { classScheduleId: recentPast.id, childId: keptChild.id, status: "COMPLETED", attendance: "PRESENT" },
       }),
+      prisma.reservation.create({
+        data: {
+          classScheduleId: sixYearsAgo.id,
+          childId: legacyChild.id,
+          status: "COMPLETED",
+          attendance: "PRESENT",
+          memo: "기존 고객 예약 메모",
+        },
+      }),
     ]);
+    // 5년 보관 대상은 Phase 18 예약 신청으로 확정된 이력이 있는 아이만이다(ADR-058).
+    const oldApplication = await createApplication({
+      classScheduleId: sixYearsAgo.id,
+      childName: oldName,
+      confirmed: { childId: oldChild.id, reservationId: oldReservation.id },
+    });
+    await createApplication({
+      classScheduleId: recentPast.id,
+      childName: keptName,
+      confirmed: { childId: keptChild.id, reservationId: keptChildReservation.id },
+    });
     const payerName = `결제자_${marker}`;
     const payment = await prisma.payment.create({
       data: {
@@ -641,6 +711,8 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await page.goto("/reservation-applications/retention");
     await expect(page.getByTestId("retention-purgeable-children")).toContainText(oldName);
     await expect(page.getByTestId("retention-purgeable-children")).not.toContainText(keptName);
+    await expect(page.getByTestId("retention-purgeable-children")).not.toContainText(legacyName);
+    await expect(page.getByTestId("retention-scope-note")).toBeVisible();
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "보관기간 지난 개인정보 파기" }).click();
@@ -670,10 +742,45 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       name: keptName,
       personalDataPurgedAt: null,
     });
+    // 확정 신청 사본은 아이와 함께 파기된다.
+    expect(await prisma.reservationApplication.findUniqueOrThrow({ where: { id: oldApplication.id } })).toMatchObject({
+      status: "CONFIRMED",
+      childName: null,
+      guardianPhone: null,
+      childId: oldChild.id,
+      reservationId: oldReservation.id,
+      personalDataPurgedById: adminUserId,
+    });
+    // 확정 신청 이력이 없는 기존 고객은 6년 전 예약만 있어도 그대로 남는다(SCOPE-1).
+    expect(await prisma.child.findUniqueOrThrow({ where: { id: legacyChild.id } })).toMatchObject({
+      name: legacyName,
+      guardianName: `기존보호자_${marker}`,
+      guardianPhone: "010-0000-3333",
+      personalDataPurgedAt: null,
+    });
+    expect(await prisma.childConsent.count({ where: { childId: legacyChild.id } })).toBe(1);
+    expect(await prisma.childSafetyInfo.count({ where: { childId: legacyChild.id } })).toBe(1);
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: legacyReservation.id } })).toMatchObject({
+      memo: "기존 고객 예약 메모",
+    });
 
     await page.goto(`/children/${oldChild.id}`);
     await expect(page.getByTestId("child-purged")).toBeVisible();
     await expect(page.getByRole("link", { name: "정보 수정" })).toHaveCount(0);
+
+    // ADR-058 (PURGE-3): 파기된 아이의 예약은 사유 코드만으로 취소하고 상세 사유를 다시 쓰지 않는다.
+    await page.goto(`/reservations/${oldReservation.id}/cancel`);
+    await expect(page.getByTestId("cancel-detail-purged")).toBeVisible();
+    await expect(page.getByLabel("상세 사유")).toHaveCount(0);
+    await page.locator("#cancelReason").selectOption("OPERATION");
+    await page.getByRole("button", { name: "예약 취소" }).click();
+    await page.waitForURL((url) => url.pathname === `/reservations/${oldReservation.id}`);
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: oldReservation.id } })).toMatchObject({
+      status: "CANCELLED",
+      cancelReason: "OPERATION",
+      cancelDetail: null,
+      attendance: "PRESENT",
+    });
   });
 
   test("MANAGER와 TEACHER는 예약 신청 관리와 링크 카드에 접근할 수 없다", async ({ page }) => {
