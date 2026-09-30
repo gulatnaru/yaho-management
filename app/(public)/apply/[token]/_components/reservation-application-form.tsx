@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Disclosure } from "@/components/ui/disclosure";
@@ -14,6 +14,10 @@ import {
   APPLICATION_REQUEST_NOTE_MAX_LENGTH,
   GUARDIAN_RELATIONSHIP_OPTIONS,
 } from "@/lib/reservation-applications/constants";
+import {
+  openApplicationCompletePage,
+  preventResubmitAfterSuccess,
+} from "@/lib/reservation-applications/complete-navigation";
 import type { ApplicationConsentItem } from "@/lib/reservation-applications/consent-content";
 import type { ReservationApplicationFormState } from "../actions";
 
@@ -42,12 +46,22 @@ function RequiredMark() {
   return <span className="text-red-600">*</span>;
 }
 
-/** 모바일 1열 신청서. 서버 검증 실패 시 입력값과 필드별 오류를 유지한다(UI-GUIDELINES 8). */
+/**
+ * 모바일 1열 신청서. 서버 검증 실패 시 입력값과 필드별 오류를 유지한다(UI-GUIDELINES 8).
+ * 저장에 성공하면 완료 화면으로 전체 문서 이동한다 — 클라이언트 전환이면 이 신청 페이지의 RSC payload 가
+ * 완료 화면 문서에 남는다(lib/reservation-applications/complete-navigation.ts). 성공 뒤에는 다시 제출하지 않는다.
+ */
 export function ReservationApplicationForm({ action, consentItems }: ReservationApplicationFormProps) {
-  const [state, formAction, pending] = useActionState(action, initialState);
+  const guardedAction = useMemo(() => preventResubmitAfterSuccess(action), [action]);
+  const [state, formAction, pending] = useActionState(guardedAction, initialState);
+  const submitted = state.submitted === true;
   const values = state.values;
   const errors = state.errors ?? {};
-  const formKey = values ? JSON.stringify(values) : "initial";
+  const formKey = values ? JSON.stringify(values) : submitted ? "submitted" : "initial";
+
+  useEffect(() => {
+    if (submitted) openApplicationCompletePage();
+  }, [submitted]);
 
   return (
     <form action={formAction} className="space-y-6" key={formKey} noValidate>
@@ -234,8 +248,9 @@ export function ReservationApplicationForm({ action, consentItems }: Reservation
         </p>
       ) : null}
 
-      <Button className="w-full" disabled={pending} type="submit">
-        {pending ? "신청 중..." : "신청하기"}
+      {/* 성공 뒤에는 버튼을 막아 클릭·Enter 로 다시 제출되지 않게 한다(기본 버튼이 비활성이면 암묵적 제출도 막힌다). */}
+      <Button className="w-full" disabled={pending || submitted} type="submit">
+        {submitted ? "완료 화면으로 이동 중..." : pending ? "신청 중..." : "신청하기"}
       </Button>
     </form>
   );

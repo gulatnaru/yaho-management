@@ -80,6 +80,7 @@ describe("submitReservationApplication (public action)", () => {
     expect(state.errors?.legalGuardianConfirmation?.[0]).toBe("법정대리인 확인에 동의해주세요");
     expect(state.errors?.refundTerms?.[0]).toBe("취소 및 환불규정을 확인해주세요");
     expect(state.errors?.photoShareConsent).toBeUndefined();
+    expect(state.submitted).toBeUndefined();
     expect(state.values).toMatchObject({
       childName: CHILD_NAME,
       guardianPhone: "abc",
@@ -110,6 +111,41 @@ describe("submitReservationApplication (public action)", () => {
     expect(state.formError).toBe(APPLICATION_RETRY_MESSAGE);
   });
 
+  it.each<[string, () => void]>([
+    ["closed link", () => submitCoreMock.mockRejectedValueOnce(new ApplicationClosedError())],
+    ["rate limit", () => submitCoreMock.mockRejectedValueOnce(new ApplicationRateLimitedError())],
+    ["save failure", () => submitCoreMock.mockRejectedValueOnce(new Error("insert failed"))],
+  ])("keeps the typed values and does not mark success on a %s", async (_label, arrange) => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    arrange();
+
+    const state = await submitReservationApplication(
+      TOKEN,
+      {},
+      formData({ requestNote: "합성 요청사항", photoMarketingConsent: "on" }),
+    );
+
+    expect(state.submitted).toBeUndefined();
+    expect(state.formError).toEqual(expect.any(String));
+    expect(state.values).toEqual({
+      childName: CHILD_NAME,
+      childBirthDate: "2019-05-01",
+      childGender: "MALE",
+      guardianName: "테스트보호자",
+      guardianPhone: GUARDIAN_PHONE,
+      guardianRelationship: "FATHER",
+      requestNote: "합성 요청사항",
+      programTerms: true,
+      privacyConsent: true,
+      legalGuardianConfirmation: true,
+      photoShareConsent: false,
+      photoMarketingConsent: true,
+      refundTerms: true,
+    });
+    expect(redirectMock).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("logs unexpected failures without personal data", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     submitCoreMock.mockRejectedValueOnce(new Error(`insert failed for ${CHILD_NAME} ${GUARDIAN_PHONE}`));
@@ -124,10 +160,19 @@ describe("submitReservationApplication (public action)", () => {
     consoleError.mockRestore();
   });
 
-  it("saves through the core with the token and consent version, then shows the completion page", async () => {
+  it("saves through the core and returns only a non-sensitive success state instead of redirecting", async () => {
     submitCoreMock.mockResolvedValueOnce({ id: "application-1" });
 
-    await expect(submitReservationApplication(TOKEN, {}, formData())).rejects.toThrow("REDIRECT:/apply/complete");
+    const state = await submitReservationApplication(TOKEN, {}, formData({ requestNote: "합성 요청사항" }));
+
+    // 성공 상태는 Server Action 응답(RSC)으로 브라우저에 전달되므로 입력값·개인정보·신청 id 를 담지 않는다.
+    expect(state).toEqual({ submitted: true });
+    const serialized = JSON.stringify(state);
+    for (const personal of [CHILD_NAME, GUARDIAN_PHONE, "테스트보호자", "2019-05-01", "합성 요청사항", "application-1"]) {
+      expect(serialized).not.toContain(personal);
+    }
+    // 클라이언트 전환(redirect)은 이전 신청 페이지 payload 를 완료 화면 문서에 남기므로 쓰지 않는다.
+    expect(redirectMock).not.toHaveBeenCalled();
 
     expect(submitCoreMock).toHaveBeenCalledTimes(1);
     const [, input] = submitCoreMock.mock.calls[0] as [unknown, { token: string; consentVersion: string; data: unknown }];

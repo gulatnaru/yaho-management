@@ -363,9 +363,16 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
 
     await page.goto(`/apply/${tokens.open}`);
     await fillApplicationForm(page, childName, { marketing: true });
+    // 완료 화면은 전체 문서 이동으로 열려야 한다. 신청 페이지의 JS 상태가 남아 있으면 클라이언트 전환이다.
+    await page.evaluate(() => {
+      (window as unknown as { __applicationFormDocument?: boolean }).__applicationFormDocument = true;
+    });
     await page.getByRole("button", { name: "신청하기" }).click();
 
     await expect(page).toHaveURL(/\/apply\/complete$/);
+    expect(
+      await page.evaluate(() => (window as unknown as { __applicationFormDocument?: boolean }).__applicationFormDocument),
+    ).toBeUndefined();
     await expect(page.getByRole("heading", { name: "신청이 접수되었습니다" })).toBeVisible();
     await expect(page.getByText(config.bankName, { exact: true })).toBeVisible();
     await expect(page.getByText(config.bankAccountNumber, { exact: true })).toBeVisible();
@@ -378,6 +385,8 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
       expect(completeHtml).not.toContain(forbidden);
     }
 
+    // 성공 뒤 중복 제출이 없다.
+    expect(await prisma.reservationApplication.count({ where: { childName } })).toBe(1);
     const application = await prisma.reservationApplication.findFirstOrThrow({ where: { childName } });
     expect(application).toMatchObject({
       status: "SUBMITTED",

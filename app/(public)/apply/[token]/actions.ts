@@ -1,6 +1,5 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { readFormString } from "@/lib/forms/form-data";
 import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
@@ -48,11 +47,23 @@ export type ReservationApplicationFormValues = {
   refundTerms?: boolean;
 };
 
-export type ReservationApplicationFormState = {
+/** 검증·재확인·저장 실패. 입력값과 오류를 돌려줘 화면이 그대로 유지한다. */
+type ReservationApplicationFailureState = {
+  submitted?: false;
   errors?: Partial<Record<ReservationApplicationFormFieldKey, string[]>>;
   formError?: string;
   values?: ReservationApplicationFormValues;
 };
+
+/** 저장 성공. 입력값·개인정보는 담지 않는다 — 브라우저가 완료 화면으로 전체 문서 이동한다. */
+type ReservationApplicationSubmittedState = {
+  submitted: true;
+  errors?: never;
+  formError?: never;
+  values?: never;
+};
+
+export type ReservationApplicationFormState = ReservationApplicationFailureState | ReservationApplicationSubmittedState;
 
 /** 검증·서버 재확인 실패 시 입력값을 돌려준다(docs/UI-GUIDELINES.md 8). 숨은 봇 차단 칸은 돌려주지 않는다. */
 function readValues(formData: FormData): ReservationApplicationFormValues {
@@ -76,6 +87,9 @@ function readValues(formData: FormData): ReservationApplicationFormValues {
 /**
  * 비로그인 보호자의 예약 신청 제출(ADR-052~054). 인증 없이 열리는 Server Action 이므로
  * 모든 판정을 서버에서 다시 한다. 대상 클래스는 링크 토큰으로만 결정한다.
+ *
+ * 성공하면 redirect() 대신 `{ submitted: true }` 만 돌려준다. redirect() 는 클라이언트 전환이라 이전 신청 페이지의
+ * RSC payload 가 완료 화면 문서에 남기 때문에, 신청서가 완료 화면으로 전체 문서 이동한다(complete-navigation.ts).
  */
 export async function submitReservationApplication(
   token: string,
@@ -127,5 +141,5 @@ export async function submitReservationApplication(
     return { formError: "신청을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", values };
   }
 
-  redirect("/apply/complete");
+  return { submitted: true };
 }
