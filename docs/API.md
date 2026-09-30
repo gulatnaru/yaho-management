@@ -73,5 +73,7 @@ GET    /api/revenue/by-class
 
 ## Reservation Applications (Phase 18, Server Actions)
 - 공개(인증 없음): `GET /apply/:token` 신청 화면, `submitReservationApplication(token)` 제출, `GET /apply/complete` 완료 안내. 대상 클래스는 토큰으로만 결정하고, 무효·중지·마감은 같은 문구로 닫는다(ADR-052).
-- ADMIN 전용: `issueApplicationLink` / `stopApplicationLink`(클래스 상세), `confirmApplicationDeposit`, `confirmReservationApplication`, `rejectReservationApplication`, `cancelReservationApplication`(`/reservation-applications`), `purgeExpiredPersonalData`(`/reservation-applications/retention` — 만료 신청과 확정 고객 파기, ADR-055~057). MANAGER·TEACHER는 서버에서 차단한다(ADR-053).
-- 확정은 신청 행 잠금 후 기존 예약 생성 규칙을 같은 트랜잭션에서 실행하고 Payment는 만들지 않는다.
+- ADMIN 전용: `issueApplicationLink` / `stopApplicationLink`(클래스 상세), `confirmApplicationDeposit`, `confirmReservationApplication`, `rejectReservationApplication`, `cancelReservationApplication`(`/reservation-applications`), `purgeExpiredPersonalData`(`/reservation-applications/retention` — 만료된 반려·취소 신청과 Phase 18 확정 신청 이력이 있는 확정 고객 파기, ADR-055~058). MANAGER·TEACHER는 서버에서 차단한다(ADR-053).
+- 확정은 신청 행 잠금 후 기존 예약 생성 규칙(ClassSchedule 잠금 → Child 잠금)을 같은 트랜잭션에서 실행하고 Payment는 만들지 않는다. 파기된 아이를 고르면 "보관기간이 지나 개인정보를 파기한 아이에게는 예약할 수 없습니다. 새 아이로 등록해 확정해주세요."로 거절한다(ADR-058).
+- `purgeExpiredPersonalData` 결과: `{ purgedApplicationCount, purgedChildCount, hasMore }` 또는 `{ error }`. `hasMore` 가 true 면 한 번 실행 한도(신청 500건·고객 100명)를 넘은 대상이 남아 있어 다시 실행해야 한다.
+- 파기된 아이에게는 예약 생성·동의 기록·안전정보 저장이 거절되고, 그 아이의 예약 취소(`cancelReservation`)는 사유 코드만 받는다 — 상세 사유를 보내면 `errors.cancelDetail` 로 거절한다(ADR-058).

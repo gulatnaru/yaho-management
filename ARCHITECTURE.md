@@ -125,6 +125,11 @@ Payment / Refund → Revenue(집계)
 
 예: Phase 4 클래스 취소/수정은 `updateMany({ where: { id, status: "SCHEDULED" }, ... })` 로 상태 레이스를 막는다(Phase 4 코드 리뷰에서 발견, `app/(admin)/classes/actions.ts` 참고). Phase 5 예약 생성의 정원 검증(현재 예약 수 < capacity 확인 후 예약 생성)도 같은 패턴이 필요하다 — 확인만 하고 무조건 생성하면 동시 예약 시 정원을 초과할 수 있다.
 
+조건이 다른 행(다른 테이블)의 상태에 달려 있어 조건부 갱신 하나로 표현할 수 없으면, 트랜잭션 안에서 그 행을 먼저 잠그고 잠금 뒤의 값으로 판정한다.
+- 예약 생성: ClassSchedule 행 `FOR UPDATE` 뒤 최신 RESERVED 수로 정원 재검증(ADR-023).
+- 개인정보 파기(Phase 18, ADR-058): 아이에게 예약·동의·안전정보·취소 상세사유를 쓰는 경로는 Child 행 `FOR SHARE`(`lib/children/lock.ts`) 뒤 파기 여부를 판정하고, 파기는 Child 행을 id 순서로 `FOR UPDATE` 잠근 뒤 만료·예정 예약을 다시 확인한다. 최초 조회 결과만으로 파기하지 않는다.
+- 잠금 순서는 (예약 신청 행 →) ClassSchedule → Child → 아이에게 딸린 행으로 고정한다. 새 경로가 이 순서를 거꾸로 잡으면 교착이 생길 수 있다.
+
 ## 8. Server / Client
 기본은 Server Component.
 브라우저 상호작용이 필요한 경우에만 Client Component를 사용한다.
@@ -150,6 +155,7 @@ Payment / Refund → Revenue(집계)
 - 취소된 클래스 신규 예약 금지
 - 환불금액 > 결제금액 금지, 음수 금액 금지
 - 민감 안전 정보가 목록 조회/로그/외부 전송에 노출되지 않을 것
+- 개인정보 파기와 예약·동의·안전정보 쓰기가 겹쳐도 미래 예약이 있는 파기된 아이, 파기된 아이의 동의·안전정보가 없을 것(Phase 18, ADR-058 — 실제 DB는 로컬 E2E `phase18-retention-concurrency.spec.ts`)
 
 ## 11. Deployment
 Vercel + Supabase PostgreSQL.
