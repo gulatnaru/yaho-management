@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
 import { prisma } from "@/lib/db/prisma";
 import { readFormString } from "@/lib/forms/form-data";
 import { NEW_CHILD_CHOICE } from "@/lib/reservation-applications/constants";
@@ -34,7 +35,10 @@ import {
   confirmApplicationDepositCore,
   type ApplicationClosingStatus,
 } from "@/server/reservation-applications/resolve";
-import { purgeExpiredPersonalDataCore } from "@/server/reservation-applications/retention";
+import {
+  purgeExpiredPersonalDataCore,
+  type PersonalDataPurgeResult,
+} from "@/server/reservation-applications/retention";
 
 /**
  * 예약 신청 관리 action 은 모두 ADMIN 전용이다(ADR-053). 입금 확인은 재무정보라 MANAGER 에게 허용하지 않는다.
@@ -116,6 +120,9 @@ function describeConfirmFailure(error: unknown): string | null {
   }
   if (error instanceof ClassNotFoundError) return "클래스를 찾을 수 없습니다.";
   if (error instanceof ChildNotFoundError) return "선택한 아이를 찾을 수 없습니다.";
+  if (error instanceof ChildPersonalDataPurgedError) {
+    return "보관기간이 지나 개인정보를 파기한 아이에게는 예약할 수 없습니다. 새 아이로 등록해 확정해주세요.";
+  }
   if (error instanceof ChildNotActiveError) {
     return "비활성화된 아이는 새로 예약할 수 없습니다. 아이 상세에서 다시 활성화한 뒤 확정해주세요.";
   }
@@ -245,19 +252,22 @@ export async function cancelReservationApplication(
   return closeApplication(applicationId, "CANCELLED", formData);
 }
 
-export type PersonalDataPurgeResult = {
+export type PersonalDataPurgeActionResult = {
   error?: string;
   purgedApplicationCount?: number;
   purgedChildCount?: number;
+  /** 한 번에 처리하는 개수를 넘어 남은 대상이 있다. 다시 실행하면 이어서 파기한다. */
+  hasMore?: boolean;
 };
 
 /**
- * 보관기간이 지난 신청·확정 고객의 개인정보를 파기한다(ADR-055~057). 자동 배치 없이 ADMIN 이 직접 실행한다.
- * 서버가 실행 시점 기준으로 대상을 다시 계산하므로 화면에서 본 목록과 달라도 만료된 대상만 파기한다.
+ * 보관기간이 지난 신청·확정 고객의 개인정보를 파기한다(ADR-055~058). 자동 배치 없이 ADMIN 이 직접 실행한다.
+ * 서버가 실행 시점 기준으로 대상을 다시 계산하고, 확정 고객은 행을 잠근 뒤 한 번 더 확인하므로
+ * 화면에서 본 목록과 달라도 그 시점에 만료된 대상만 파기한다.
  */
-export async function purgeExpiredPersonalData(): Promise<PersonalDataPurgeResult> {
+export async function purgeExpiredPersonalData(): Promise<PersonalDataPurgeActionResult> {
   const principal = await requireAdminPrincipal();
-  let result: { purgedApplicationCount: number; purgedChildCount: number };
+  let result: PersonalDataPurgeResult;
   try {
     result = await purgeExpiredPersonalDataCore(prisma, { actorUserId: principal.userId, now: new Date() });
   } catch (error) {

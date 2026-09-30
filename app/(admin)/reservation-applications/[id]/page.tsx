@@ -233,7 +233,8 @@ export default async function ReservationApplicationDetailPage({ params }: { par
             </p>
           ) : null}
           <p className="text-xs text-slate-500">
-            확정되면 아이의 마지막 예약 수업일에 따라 만료일이 늦춰집니다. 파기는{" "}
+            확정된 신청은 연결된 아이의 마지막 예약 수업일로부터 5년 보관하고, 그 아이의 개인정보를 파기할 때 함께
+            파기합니다. 반려·취소 신청은 사유까지 함께 지웁니다. 파기는{" "}
             <Link className="underline" href="/reservation-applications/retention">
               보관기간 관리
             </Link>

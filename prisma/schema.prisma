@@ -460,7 +460,7 @@ model ReservationApplication {
   depositConfirmedById        String?
   resolvedAt                  DateTime? // 확정·반려·취소 처리 시각
   resolvedById                String?
-  resolutionNote              String? // 반려·취소 사유
+  resolutionNote              String? // 반려·취소 사유. 보관기간 만료 파기 때 함께 지운다 (ADR-058)
   childId                     String? // 확정 시 연결한 아이
   reservationId               String? // 확정 시 생성·재활성화한 예약. ADR-024 재예약 때문에 unique 가 아니다
   personalDataPurgedAt        DateTime? // 보관기간 만료로 개인정보를 파기한 시각 (ADR-055)
@@ -605,8 +605,9 @@ model Refund {
 //   ADD CONSTRAINT "reservation_application_status_consistency" CHECK (
 //     SUBMITTED ⇒ 처리 정보·아이·예약 없음,
 //     CONFIRMED ⇒ 처리 정보·입금 확인·아이·예약 있음, 사유 없음,
-//     REJECTED/CANCELLED ⇒ 처리 정보·사유 있음, 아이·예약 없음
-//   );
+//     REJECTED/CANCELLED ⇒ 처리 정보 있음, 아이·예약 없음,
+//       파기 전이면 사유 있음(공백 금지), 파기 후이면 사유 NULL
+//   );  -- 20260930043249 에서 파기 후 사유 NULL 을 요구하도록 다시 만들었다 (ADR-058)
 //
 // 서버에서만 검증하는 규칙 (QA 필수 항목)
 // - capacity 는 1~99 정수

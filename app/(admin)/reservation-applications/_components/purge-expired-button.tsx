@@ -14,7 +14,7 @@ export function PurgeExpiredButton({ applicationCount, childCount }: { applicati
   function handleClick() {
     if (
       !window.confirm(
-        `보관기간이 지난 신청 ${applicationCount}건과 확정 고객 ${childCount}명의 개인정보를 파기할까요? 파기하면 되돌릴 수 없습니다.`,
+        `보관기간이 지난 반려·취소 신청 ${applicationCount}건과 확정 고객 ${childCount}명의 개인정보를 파기할까요? 확정 고객은 파기 직전에 다시 확인합니다. 파기하면 되돌릴 수 없습니다.`,
       )
     ) {
       return;
@@ -26,9 +26,10 @@ export function PurgeExpiredButton({ applicationCount, childCount }: { applicati
         setMessage({ tone: "error", text: result.error });
         return;
       }
+      const summary = `신청 ${result.purgedApplicationCount ?? 0}건, 확정 고객 ${result.purgedChildCount ?? 0}명의 개인정보를 파기했습니다.`;
       setMessage({
         tone: "ok",
-        text: `신청 ${result.purgedApplicationCount ?? 0}건, 확정 고객 ${result.purgedChildCount ?? 0}명의 개인정보를 파기했습니다.`,
+        text: result.hasMore ? `${summary} 남은 대상이 있어 한 번 더 실행해주세요.` : summary,
       });
       router.refresh();
     });

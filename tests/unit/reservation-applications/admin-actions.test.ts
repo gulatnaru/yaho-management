@@ -3,7 +3,12 @@ import {
   ApplicationDepositNotConfirmedError,
   ApplicationNotPendingError,
 } from "@/lib/reservation-applications/errors";
-import { OverbookingConfirmationRequiredError } from "@/lib/reservations/errors";
+import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
+import {
+  ChildNotActiveError,
+  ChildNotFoundError,
+  OverbookingConfirmationRequiredError,
+} from "@/lib/reservations/errors";
 
 const requireAdminMock = vi.fn();
 const confirmCoreMock = vi.fn();
@@ -211,10 +216,39 @@ describe("reservation application admin actions", () => {
     });
 
     it("purges expired applications and customers as the current admin and reports the counts", async () => {
-      purgeCoreMock.mockResolvedValueOnce({ purgedApplicationCount: 2, purgedChildCount: 1 });
+      purgeCoreMock.mockResolvedValueOnce({ purgedApplicationCount: 2, purgedChildCount: 1, hasMore: true });
 
-      await expect(actions.purgeExpiredPersonalData()).resolves.toEqual({ purgedApplicationCount: 2, purgedChildCount: 1 });
+      await expect(actions.purgeExpiredPersonalData()).resolves.toEqual({
+        purgedApplicationCount: 2,
+        purgedChildCount: 1,
+        hasMore: true,
+      });
       expect(purgeCoreMock).toHaveBeenCalledWith({}, expect.objectContaining({ actorUserId: "admin-1" }));
+    });
+
+    it("tells a purged child apart from a missing or inactive child when confirming (MSG-1)", async () => {
+      confirmCoreMock.mockRejectedValueOnce(new ChildPersonalDataPurgedError());
+      const purged = await actions.confirmReservationApplication(
+        "application-1",
+        {},
+        formData({ childChoice: "child-purged" }),
+      );
+      expect(purged.formError).toBe(
+        "보관기간이 지나 개인정보를 파기한 아이에게는 예약할 수 없습니다. 새 아이로 등록해 확정해주세요.",
+      );
+      expect(purged.formError).not.toContain("다시 활성화");
+
+      confirmCoreMock.mockRejectedValueOnce(new ChildNotFoundError());
+      const missing = await actions.confirmReservationApplication("application-1", {}, formData({ childChoice: "gone" }));
+      expect(missing.formError).toBe("선택한 아이를 찾을 수 없습니다.");
+
+      confirmCoreMock.mockRejectedValueOnce(new ChildNotActiveError());
+      const inactive = await actions.confirmReservationApplication(
+        "application-1",
+        {},
+        formData({ childChoice: "child-inactive" }),
+      );
+      expect(inactive.formError).toContain("다시 활성화");
     });
 
     it("issues and stops class links as the current admin", async () => {

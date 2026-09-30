@@ -8,9 +8,13 @@ import {
   buildApplicationListWhere,
   type ApplicationListStatus,
 } from "./list";
-import { getLastReservedClassDateByChildIds } from "./last-reserved-class";
+import { loadConfirmedCustomerFacts } from "./last-reserved-class";
 import { normalizePersonName, toPhoneDigits } from "./normalize";
-import { computeApplicationRetention, type ApplicationRetention } from "./retention";
+import {
+  computeApplicationRetention,
+  computeConfirmedCustomerRetention,
+  type ApplicationRetention,
+} from "./retention";
 
 /**
  * ADMIN 전용 예약 신청 조회(ADR-053). 호출하는 page/action 이 requireAdminPrincipal() 을 먼저 통과해야 한다.
@@ -145,7 +149,10 @@ export async function getReservationApplicationDetail(id: string): Promise<Appli
   return { ...application, isPossibleDuplicate: duplicateIds.has(application.id) };
 }
 
-/** 이름 또는 보호자 연락처(숫자 기준)가 같은 기존 아이. ChildSafetyInfo 는 조회하지 않는다. */
+/**
+ * 이름 또는 보호자 연락처(숫자 기준)가 같은 기존 아이. ChildSafetyInfo 는 조회하지 않는다.
+ * 개인정보를 파기한 아이는 예약할 수 없으므로 후보에서 뺀다(ADR-058).
+ */
 export async function listChildCandidatesForApplication(application: {
   childName: string;
   guardianPhone: string;
@@ -160,7 +167,8 @@ export async function listChildCandidatesForApplication(application: {
   const rows = await prisma.$queryRaw<ChildCandidateRow[]>(Prisma.sql`
     SELECT "id", "name", "birthDate", "guardianName", "guardianPhone", "isActive"
     FROM "Child"
-    WHERE btrim("name") = ${name} ${phoneCondition}
+    WHERE "personalDataPurgedAt" IS NULL
+      AND (btrim("name") = ${name} ${phoneCondition})
     ORDER BY "createdAt" DESC, "id" ASC
     LIMIT 20
   `);
@@ -168,20 +176,32 @@ export async function listChildCandidatesForApplication(application: {
   return rankChildCandidates(rows, application);
 }
 
-/** 신청 상세의 개인정보 보관 만료일(ADR-055/056). 확정된 신청은 아이의 마지막 예약 수업일을 조회한다. */
+/**
+ * 신청 상세의 개인정보 보관 만료일(ADR-055~058). 확정된 신청은 연결된 아이(확정 고객)의 기준을 따른다 —
+ * 아이의 마지막 유효 예약 수업일, 없으면 그 아이로 확정된 신청 중 가장 늦은 클래스 날짜.
+ * 이미 파기된 신청도 파기 당시와 같은 기준일을 보여주도록 비식별화된 아이까지 조회한다.
+ */
 export async function getApplicationRetention(application: {
   status: ApplicationDetail["status"];
   childId: string | null;
   classSchedule: { startsAt: Date };
 }): Promise<ApplicationRetention> {
-  const lastReservedByChild =
-    application.status === "CONFIRMED" && application.childId
-      ? await getLastReservedClassDateByChildIds(prisma, [application.childId])
-      : new Map<string, Date>();
+  if (application.status === "CONFIRMED" && application.childId) {
+    const [facts] = await loadConfirmedCustomerFacts(prisma, {
+      now: new Date(),
+      childIds: [application.childId],
+      includePurged: true,
+    });
+    const retention = computeConfirmedCustomerRetention({
+      lastReservedClassAt: facts?.lastReservedClassAt ?? null,
+      fallbackClassAt: facts?.latestConfirmedClassAt ?? application.classSchedule.startsAt,
+    });
+    if (retention) return retention;
+  }
   return computeApplicationRetention({
     status: application.status,
     classStartsAt: application.classSchedule.startsAt,
-    lastReservedClassAt: application.childId ? (lastReservedByChild.get(application.childId) ?? null) : null,
+    lastReservedClassAt: null,
   });
 }
 

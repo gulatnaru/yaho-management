@@ -79,7 +79,26 @@ export function isRetentionExpired(retention: Pick<ApplicationRetention, "retain
   return formatKstDate(now) > retention.retainUntil;
 }
 
-/** 파기 가능한 상태. 처리 대기 신청은 먼저 반려·취소한 뒤에 파기한다. */
+/**
+ * 신청 단독으로(1년 기준) 파기할 수 있는 상태. 처리 대기 신청은 먼저 반려·취소한 뒤에 파기한다.
+ * 확정된 신청은 확정 고객(아이)의 5년 보관기간을 따르며 아이를 비식별화할 때 함께 파기한다(ADR-058).
+ */
 export function isPurgeableStatus(status: ReservationApplicationStatus): boolean {
-  return status !== "SUBMITTED";
+  return status === "REJECTED" || status === "CANCELLED";
+}
+
+/**
+ * DB 에서 파기 후보를 좁힐 때 쓰는 최소 경과 일수(ADR-058). 정확한 판정은 isRetentionExpired(KST 달력)로 다시 한다.
+ * 만료되려면 오늘(KST) > 기준일 + N년 이어야 한다. N년은 윤일 보정(2/29 → 2/28)을 빼도 최소 365·N 일이므로
+ * 만료된 기준 시각은 항상 now 보다 (365·N) 일 넘게 이르다. 여기서 하루를 더 빼 둔 값보다 이른 것만 후보로 읽으면
+ * 만료된 대상을 놓치지 않는다(tests/unit/reservation-applications/retention.test.ts 에서 경계값을 확인한다).
+ */
+export const UNCONFIRMED_APPLICATION_CANDIDATE_MIN_AGE_DAYS = 365 * UNCONFIRMED_APPLICATION_RETENTION_YEARS - 1;
+export const CONFIRMED_CUSTOMER_CANDIDATE_MIN_AGE_DAYS = 365 * CONFIRMED_CUSTOMER_RETENTION_YEARS - 1;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** now 에서 days 일을 뺀 시각. 이 시각보다 이른 기준만 후보로 읽는다. */
+export function retentionCandidateCutoff(now: Date, days: number): Date {
+  return new Date(now.getTime() - days * DAY_MS);
 }

@@ -158,3 +158,55 @@ describe("Phase 18 child personal data purge migration", () => {
     expect(schema).toContain('@relation("ChildPersonalDataPurgedBy"');
   });
 });
+
+describe("Phase 18 resolution note purge migration (ADR-058)", () => {
+  const noteMigration = read(
+    "../../../prisma/migrations/20260930043249_phase18_application_resolution_note_purge/migration.sql",
+  );
+
+  it("drops the old status check before clearing notes on purged rows, then recreates it in one transaction", () => {
+    const begin = noteMigration.indexOf("BEGIN;");
+    const drop = noteMigration.indexOf('DROP CONSTRAINT "reservation_application_status_consistency"');
+    const update = noteMigration.indexOf('UPDATE "ReservationApplication"');
+    const add = noteMigration.indexOf('ADD CONSTRAINT "reservation_application_status_consistency"');
+    const commit = noteMigration.lastIndexOf("COMMIT;");
+
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(drop).toBeGreaterThan(begin);
+    expect(update).toBeGreaterThan(drop);
+    expect(add).toBeGreaterThan(update);
+    expect(commit).toBeGreaterThan(add);
+  });
+
+  it("only clears resolution notes of already purged applications", () => {
+    const update = noteMigration.slice(noteMigration.indexOf('UPDATE "ReservationApplication"'));
+    const statement = update.slice(0, update.indexOf(";"));
+    expect(statement).toContain('SET "resolutionNote" = NULL');
+    expect(statement).toContain('WHERE "personalDataPurgedAt" IS NOT NULL');
+    expect(noteMigration).not.toMatch(/^\s*(DELETE|INSERT)\s/im);
+    expect(noteMigration).not.toMatch(/DROP\s+(TABLE|COLUMN|TYPE|INDEX)\b/i);
+  });
+
+  it("keeps a non-blank reason until purge and requires it to be cleared after purge", () => {
+    const check = noteMigration.slice(noteMigration.indexOf('ADD CONSTRAINT "reservation_application_status_consistency"'));
+    expect(check).toMatch(
+      /"personalDataPurgedAt" IS NULL\s+AND "resolutionNote" IS NOT NULL\s+AND btrim\("resolutionNote"\) <> ''/,
+    );
+    expect(check).toMatch(/"personalDataPurgedAt" IS NOT NULL\s+AND "resolutionNote" IS NULL/);
+    // SUBMITTED·CONFIRMED 조건은 첫 migration 과 같다.
+    for (const condition of [
+      `"status" = 'SUBMITTED'::"ReservationApplicationStatus"`,
+      `"status" = 'CONFIRMED'::"ReservationApplicationStatus"`,
+      '"depositConfirmedAt" IS NOT NULL',
+    ]) {
+      expect(check).toContain(condition);
+      expect(firstMigration).toContain(condition);
+    }
+  });
+
+  it("leaves the first migration's original check untouched", () => {
+    const original = firstMigration.slice(firstMigration.indexOf('"reservation_application_status_consistency"'));
+    expect(original).toContain('AND "resolutionNote" IS NOT NULL\n      AND btrim("resolutionNote") <> \'\'');
+    expect(original).not.toContain("personalDataPurgedAt");
+  });
+});
