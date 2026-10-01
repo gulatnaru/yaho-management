@@ -32,6 +32,7 @@ Retrospective 에이전트의 입력이 되는 기록이다.
 | 38 | - | Phase 17 운영 안정화 3차 | 0 | 0 | 5 | 1 | 3 | TEST |
 | 41 | - | Phase 17 CRLF migration checksum hotfix | 0 | 0 | 1 | 0 | 1 | TEST |
 | 43 | - | YAHO 개발 오케스트레이터 | 0 | 0 | 2 | 0 | 1 | OTHER |
+| 45 | - | Phase 18 예약자용 고객 예약신청 | 1 | 0 | 2 | 1 | 3 | PRIVACY |
 
 ## 원인 분류 코드
 반복 유형을 세기 위해 아래 코드 중 하나로 적는다.
