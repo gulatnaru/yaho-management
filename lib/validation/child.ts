@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { Gender } from "@prisma/client";
 
-const phoneRegex = /^[0-9-]{9,20}$/;
-const MIN_PHONE_DIGIT_COUNT = 9;
+// Phase 18 예약 신청서도 같은 연락처 규칙을 재사용한다.
+export const phoneRegex = /^[0-9-]{9,20}$/;
+export const MIN_PHONE_DIGIT_COUNT = 9;
 
 export const childInputSchema = z.object({
   name: z.string().trim().min(1, "이름을 입력해주세요"),

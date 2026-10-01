@@ -16,6 +16,8 @@
 - Payment: 결제 1건. 결제자(보호자 또는 기관) 기준
 - PaymentItem: 결제에 포함된 예약별 금액 명세 + 환불 누계(refundedAmount)
 - Refund: PaymentItem 기준 환불(부분 환불 포함)
+- ReservationApplicationLink: 클래스별 공개 예약 신청 링크(클래스당 1개, 토큰 unique). 중지·재발급 가능 (Phase 18)
+- ReservationApplication: 예약 확정 전 보호자 신청. Reservation 이 아니며 좌석을 점유하지 않는다. ADMIN 이 입금 확인 후 기존 예약 생성 규칙으로 확정한다 (Phase 18, ADR-052~054)
 
 향후 도입 예정(지금은 만들지 않는다):
 - Organization: 어린이집/유치원 등 기관. Child와 ClassSchedule에 nullable FK로 붙인다.
@@ -35,6 +37,10 @@ Child        1:N  ChildConsent
 Payment      1:N  PaymentItem
 PaymentItem  1:1  Reservation
 PaymentItem  1:N  Refund
+ClassSchedule 1:1 ReservationApplicationLink   (링크가 없을 수 있다)
+ClassSchedule 1:N ReservationApplication
+ReservationApplication N:1 Child / Reservation  (확정 시에만 연결, 재예약 때문에 Reservation 쪽은 unique 가 아니다)
+ReservationApplication 1:N ChildConsent        (확정 시 이관된 온라인 동의의 출처)
 ```
 
 ## Enums
@@ -46,9 +52,11 @@ PaymentItem  1:N  Refund
 - PaymentStatus: PAID, PARTIAL_REFUNDED, REFUNDED, CANCELLED
 - PaymentMethod: CARD, TRANSFER, CASH, OTHER
 - ConsentType: PRIVACY, SENSITIVE_INFO, PHOTO_SHARE, PHOTO_MARKETING
-- ConsentAction: AGREED, REVOKED
+- ConsentAction: AGREED, REVOKED, DECLINED(예약 신청에서 선택 동의를 하지 않음, ADR-055)
+- GuardianRelationship: FATHER, MOTHER, OTHER_LEGAL_GUARDIAN (예약 신청의 아이와의 관계)
 - AttendanceStatus: PRESENT, ABSENT (미기록은 null)
 - RefundReason: PERSONAL, ILLNESS, WEATHER, SCHEDULE, DUPLICATE_PAYMENT, CLASS_CANCELLED, OPERATION, OTHER
+- ReservationApplicationStatus: SUBMITTED(접수·처리 대기), CONFIRMED, REJECTED, CANCELLED
 
 ## Constraints
 DB 레벨에서 강제한다.
@@ -63,6 +71,9 @@ DB 레벨에서 강제한다.
 - ChildSafetyInfo: `unique(childId)`
 - ChildConsent: unique 제약 없음. 동의/철회마다 행을 쌓는 append-only 구조
 - ClassSchedule: 보험 가입 여부 / 보험사 / 증권번호 컬럼 보유
+- ReservationApplicationLink: `unique(classScheduleId)`, `unique(token)`, 토큰 길이 32자 이상
+- ReservationApplication: 필수 확인 4종(프로그램 이용사항, 개인정보, 법정대리인, 취소 및 환불규정)은 항상 true(사진 공유·홍보 활용은 선택, ADR-055/056), 개인정보 항목(아이·보호자·관계)은 파기 전 필수이고 파기 후에는 요청사항과 함께 NULL이며 처리 대기 신청은 파기할 수 없다, 입금 확인 시각·처리자는 함께 존재, 상태별 필수 컬럼 일관성(SUBMITTED는 처리 정보 없음, CONFIRMED는 입금 확인·아이·예약 있음, REJECTED/CANCELLED는 파기 전 사유 있음·파기 후 사유 NULL — ADR-058)을 CHECK로 보장한다. `reservationId`는 ADR-024 재예약 때문에 unique가 아니다
+- ChildConsent.reservationApplicationId: 온라인 신청에서 받은 동의의 출처. 확정 시에만 채워진다
 
 ## Payment 구조 주석
 현재는 결제 1건에 PaymentItem 1건만 생성된다(보호자 개인 결제).
@@ -93,6 +104,44 @@ ChildConsent 는 append-only 다. 기존 행을 수정하거나 삭제하지 않
 
 현재 동의 상태는 해당 consentType 의 `recordedAt` 최신 행으로 판단한다.
 이렇게 해야 "언제 동의했고 언제 철회했는가" 를 나중에 증빙할 수 있다.
+
+예약 신청 확정 시(Phase 18, ADR-054) 신청 동의를 같은 방식으로 추가한다.
+- `recordedAt` = 신청 제출 시각, `recordedById` = 확정한 ADMIN, `reservationApplicationId` = 출처 신청
+- 개인정보는 AGREED
+- 사진 공유·홍보 활용은 동의했으면 AGREED, 동의하지 않았고 기존 아이의 현재 상태가 AGREED 이면 REVOKED, 그 외에는 DECLINED 를 추가한다(ADR-055)
+- 프로그램 이용사항·법정대리인·취소 및 환불규정 확인은 ChildConsent 가 아니라 신청의 확인 기록으로 남는다
+
+## 개인정보 보관·파기 (ADR-055~058)
+- 보관 만료일은 저장하지 않고 조회 시점에 계산한다(`lib/reservation-applications/retention.ts`).
+  - 처리 대기·반려·취소: 신청 클래스의 KST 수업일 + 1년
+  - 확정 고객: Phase 18 예약 신청(ReservationApplication)으로 신청해 CONFIRMED 된 이력이 있는 아이만 대상이다(ADR-058). Phase 18 신청 이력이 없는 기존 아이, 관리자가 직접 등록한 기존 고객, 기존 예약만 있고 CONFIRMED 신청 이력이 없는 아이는 대상이 아니다(기존 고객 전체의 보관정책은 별도 Phase). 기준은 아이의 마지막 예약 수업일(KST) + 5년이다. 수업 전에 취소된 예약(CANCELLED, 출결 없음)과 취소된 클래스의 예약을 뺀 가장 늦은 클래스 날짜이며 NO_SHOW·출결 후 취소는 포함한다. 유효한 예약이 없으면 가장 늦은 확정 신청의 대상 클래스 날짜를 쓴다(`lib/reservation-applications/last-reserved-class.ts` 의 `loadConfirmedCustomerFacts`).
+  - 만료일 당일까지 보관하고 다음 날부터 파기 대상이다.
+  - 후보는 DB 에서 기준 시각으로 먼저 좁히고(신청 364일, 고객 1824일 이상 지난 것 — 만료 대상을 놓치지 않는 여유값), KST 달력 기준으로 다시 판정한다.
+- ADMIN이 `/reservation-applications/retention` 에서 파기한다. 자동 배치는 없다. 한 번 실행에 반려·취소 신청 500건, 확정 고객 100명까지 처리하고 남으면 다시 실행한다. 파기 트랜잭션은 maxWait 10초·timeout 30초다.
+- 반려·취소 신청 파기는 `personalDataPurgedAt/ById` 를 기록하고 아이·보호자 항목, 아이와의 관계, 요청사항, 반려·취소 사유(`resolutionNote`)를 NULL 로 바꾼다(ADR-058). 신청 행과 상태·처리 일시·처리자·동의 여부·문구 버전은 남는다. CHECK `reservation_application_status_consistency` 는 파기 전 REJECTED/CANCELLED 에 사유를 요구하고 파기 후에는 NULL 을 요구한다(`20260930043249`).
+- 처리 대기 신청은 먼저 반려·취소해야 한다. 확정 신청 사본은 단독으로 파기하지 않고 연결된 아이를 비식별화할 때 함께 파기한다.
+- 확정 고객 파기(`server/reservation-applications/retention.ts`, 한 트랜잭션):
+  - 후보를 읽은 뒤 Child 행을 id 순서로 `FOR UPDATE` 잠그고, 새 문장으로 마지막 예약 수업일·예정 예약(RESERVED + 예정 클래스)·만료 여부를 다시 확인한다. 여전히 만료이고 예정 예약이 없는 아이만 파기한다(ADR-058).
+  - Child 는 삭제하지 않고 비식별화한다: name `(파기됨)`, birthDate·guardianName·guardianPhone·memo NULL, gender UNSPECIFIED, isActive false, `personalDataPurgedAt/ById` 기록. CHECK `child_purged_personal_data_cleared` 가 파기된 행의 상태를 보장한다.
+  - ChildConsent·ChildSafetyInfo·Relationship 행을 삭제한다(ChildConsent append-only 의 유일한 예외, ADR-057).
+  - Reservation.memo·cancelDetail 을 NULL 로 바꾸고 해당 아이의 확정 신청 사본도 파기한다.
+  - Reservation·출결·Payment·PaymentItem·Refund 행과 금액·상태·일시는 유지한다. Payment.payerName·memo, Refund.reasonDetail 은 거래기록으로 유지한다(법정 보존, 별도 과제).
+- Child 는 Reservation·ReservationApplication 이, Reservation 은 PaymentItem·Refund 가 RESTRICT 로 참조하므로 cascade delete 를 쓰지 않는다. 비식별화된 아이는 수정·재활성화·동의/안전정보 기록·새 예약이 서버에서 거부되고, 그 아이의 예약은 사유 코드만으로 취소되며 cancelDetail 은 NULL 로 남는다(ADR-058).
+
+## Child 행 잠금 규약 (ADR-058)
+PostgreSQL 기본 READ COMMITTED 에서 Reservation·ChildConsent 의 FK 확인은 Child 에 `FOR KEY SHARE` 만 걸어, Child 비식별화 UPDATE 와 서로 기다리지 않는다. 그래서 파기와 아이에게 쓰는 경로를 명시적으로 잠근다.
+
+| 경로 | Child 잠금 | 잠금 뒤 판정 |
+|------|-----------|-------------|
+| 예약 생성·예약 신청 확정 (`server/reservations/create.ts`) | ClassSchedule `FOR UPDATE` 다음 `FOR SHARE` | 파기됨 → 거절, 비활성 → 거절 |
+| 동의 기록 (`server/children/consent.ts`) | `FOR SHARE` | 파기됨 → 거절 |
+| 안전정보 저장 (`server/children/safety-info.ts`) | `FOR SHARE` | 파기됨 → 거절 |
+| 예약 취소 (`app/(admin)/reservations/actions.ts`) | `FOR SHARE` | 파기됨 → 상세사유 거절·NULL 저장 |
+| 보관기간 만료 파기 | id 순서 `FOR UPDATE` | 만료·예정 예약 재확인 |
+
+- 쓰기 경로는 `lib/children/lock.ts` 의 `lockChildForShare` 로 잠그고 같은 문장이 돌려준 값으로 판정한다(잠금을 기다린 문장은 상대가 커밋한 최신 행을 본다).
+- 잠금 순서는 (신청 행 →) ClassSchedule → Child → 아이에게 딸린 행이다. 파기는 ClassSchedule 을 잠그지 않으므로 순환 대기가 없다.
+- 아이 수정·활성화는 `where: { id, personalDataPurgedAt: null }` 조건부 UPDATE 라 파기와 행 잠금으로 직렬화되고, 파기 후에는 0건(P2025)이 되어 거부된다.
 
 ## 민감정보 취급 규칙
 `ChildSafetyInfo`는 다음을 반드시 지킨다.

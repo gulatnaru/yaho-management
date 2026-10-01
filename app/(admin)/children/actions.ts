@@ -1,11 +1,29 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { readFormString } from "@/lib/forms/form-data";
 import { childInputSchema, type ChildInput } from "@/lib/validation/child";
+
+/** 보관기간 만료로 개인정보를 비식별화한 아이는 다시 수정·활성화하지 않는다(ADR-057). */
+const PURGED_CHILD_MESSAGE = "보관기간이 지나 개인정보를 파기한 아이는 수정할 수 없습니다.";
+const MISSING_CHILD_MESSAGE = "아이를 찾을 수 없습니다.";
+
+function isRecordNotFound(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025";
+}
+
+/**
+ * `where: { id, personalDataPurgedAt: null }` 조건부 update 가 P2025 로 실패한 이유를 구분한다(ADR-058, MSG-1).
+ * 행이 있으면 파기된 아이, 없으면 없는 아이다. 파기는 되돌리지 않으므로 이 조회 사이에 상태가 바뀌지 않는다.
+ */
+async function describeChildUpdateMiss(id: string): Promise<string> {
+  const child = await prisma.child.findUnique({ where: { id }, select: { personalDataPurgedAt: true } });
+  return child?.personalDataPurgedAt ? PURGED_CHILD_MESSAGE : MISSING_CHILD_MESSAGE;
+}
 
 export type ChildFormValues = {
   name?: string;
@@ -93,7 +111,7 @@ export async function updateChild(
 
   try {
     await prisma.child.update({
-      where: { id },
+      where: { id, personalDataPurgedAt: null },
       data: {
         name: result.data.name,
         birthDate: result.data.birthDate ? new Date(result.data.birthDate) : null,
@@ -104,6 +122,9 @@ export async function updateChild(
       },
     });
   } catch (error) {
+    if (isRecordNotFound(error)) {
+      return { formError: await describeChildUpdateMiss(id), values: readChildFormValues(formData) };
+    }
     console.error("[children] failed to update child:", error instanceof Error ? error.message : "unknown error");
     return { formError: "아이 정보 수정에 실패했습니다. 다시 시도해주세요.", values: readChildFormValues(formData) };
   }
@@ -118,10 +139,11 @@ export async function setChildActive(id: string, isActive: boolean): Promise<{ e
 
   try {
     await prisma.child.update({
-      where: { id },
+      where: { id, personalDataPurgedAt: null },
       data: { isActive },
     });
   } catch (error) {
+    if (isRecordNotFound(error)) return { error: await describeChildUpdateMiss(id) };
     console.error("[children] failed to update child status:", error instanceof Error ? error.message : "unknown error");
     return { error: "상태 변경에 실패했습니다." };
   }

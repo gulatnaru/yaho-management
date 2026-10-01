@@ -42,8 +42,15 @@ const CONSENT_TYPES: ConsentType[] = [
 const CONSENT_LABEL: Record<ConsentType, string> = {
   PRIVACY: "개인정보 수집·이용",
   SENSITIVE_INFO: "민감정보 수집",
-  PHOTO_SHARE: "활동 사진 보호자 공유",
+  PHOTO_SHARE: "활동 사진·영상 촬영 및 참여 보호자 공유",
   PHOTO_MARKETING: "사진 홍보·마케팅",
+};
+
+// DECLINED: 예약 신청에서 선택 동의를 하지 않음(ADR-055). 철회와 구분해 "미동의"로 보여준다.
+const CONSENT_ACTION_LABEL: Record<"AGREED" | "REVOKED" | "DECLINED", string> = {
+  AGREED: "동의",
+  REVOKED: "철회",
+  DECLINED: "미동의",
 };
 
 type ChildDetailPageProps = {
@@ -97,18 +104,27 @@ export default async function ChildDetailPage({
 
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <h1 className="break-words text-2xl font-bold">{child.name}</h1>
-        <div className="flex flex-wrap gap-2">
-          {child.isActive ? (
-            <Link className={cn(buttonVariants())} href={`/reservations/new?childId=${child.id}`}>
-              예약 추가
+        {child.personalDataPurgedAt ? null : (
+          <div className="flex flex-wrap gap-2">
+            {child.isActive ? (
+              <Link className={cn(buttonVariants())} href={`/reservations/new?childId=${child.id}`}>
+                예약 추가
+              </Link>
+            ) : null}
+            <Link className={cn(buttonVariants())} href={`/children/${child.id}/edit`}>
+              정보 수정
             </Link>
-          ) : null}
-          <Link className={cn(buttonVariants())} href={`/children/${child.id}/edit`}>
-            정보 수정
-          </Link>
-          <ChildStatusToggle id={child.id} isActive={child.isActive} />
-        </div>
+            <ChildStatusToggle id={child.id} isActive={child.isActive} />
+          </div>
+        )}
       </div>
+
+      {child.personalDataPurgedAt ? (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600" data-testid="child-purged">
+          마지막 예약 수업일로부터 5년 보관기간이 지나 개인정보를 파기했습니다({formatKstDateTime(child.personalDataPurgedAt)}).
+          예약·출결·결제 기록만 남아 있습니다.
+        </p>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -224,15 +240,17 @@ export default async function ChildDetailPage({
           ) : (
             <p className="text-sm text-slate-500">등록된 안전 정보가 없습니다.</p>
           )}
-          <Link
-            className={cn(
-              buttonVariants(),
-              "bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100",
-            )}
-            href={`/children/${id}/safety`}
-          >
-            안전 정보 수정
-          </Link>
+          {child.personalDataPurgedAt ? null : (
+            <Link
+              className={cn(
+                buttonVariants(),
+                "bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100",
+              )}
+              href={`/children/${id}/safety`}
+            >
+              안전 정보 수정
+            </Link>
+          )}
         </CardContent>
       </Card>
 
@@ -251,13 +269,13 @@ export default async function ChildDetailPage({
                 >
                   <span>{CONSENT_LABEL[type]}</span>
                   <Badge variant={record?.action === "AGREED" ? "success" : "secondary"}>
-                    {record?.action === "AGREED" ? "동의" : record ? "철회" : "미기록"}
+                    {record ? CONSENT_ACTION_LABEL[record.action] : "미기록"}
                   </Badge>
                 </div>
               );
             })}
           </div>
-          <ConsentForm childId={id} />
+          {child.personalDataPurgedAt ? null : <ConsentForm childId={id} />}
           {consent.history.length > 0 ? (
             <details>
               <summary className="cursor-pointer text-sm font-medium">
@@ -267,8 +285,9 @@ export default async function ChildDetailPage({
                 {consent.history.map((record) => (
                   <li key={record.id}>
                     {CONSENT_LABEL[record.consentType as ConsentType]} ·{" "}
-                    {record.action === "AGREED" ? "동의" : "철회"} ·{" "}
+                    {CONSENT_ACTION_LABEL[record.action]} ·{" "}
                     {formatKstDateTime(record.recordedAt)} · {record.recordedBy?.name ?? "알 수 없음"}
+                    {record.reservationApplicationId ? " · 보호자 온라인 동의(예약 신청)" : null}
                   </li>
                 ))}
               </ul>

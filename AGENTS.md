@@ -30,6 +30,7 @@ YAHO는 예약, 고객, 친구관계, 프로그램, 일정, 매출 및 운영을
 ## Domain Naming
 Entity 명칭은 REQUIREMENTS.md v2를 따른다.
 User / Child / Relationship / Teacher / Program / ClassSchedule / ClassTeacher / Reservation / Payment / Refund
+/ ReservationApplication(예약 신청) / ReservationApplicationLink(클래스별 신청 링크)
 
 Customer, Schedule, Friendship, ReservationParticipant는 사용하지 않는다.
 

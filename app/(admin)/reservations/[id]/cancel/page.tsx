@@ -47,7 +47,10 @@ export default async function CancelReservationPage({ params }: CancelReservatio
         </p>
       </div>
 
-      <ReservationCancelForm reservationId={id} />
+      <ReservationCancelForm
+        childPersonalDataPurged={reservation.child.personalDataPurgedAt !== null}
+        reservationId={id}
+      />
     </section>
   );
 }

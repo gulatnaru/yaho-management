@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireCurrentPrincipal, type CurrentPrincipal } from "@/lib/auth/authorization";
+import { countPendingReservationApplications } from "@/lib/reservation-applications/queries";
 
 export const dynamic = "force-dynamic";
 import { NavDrawer } from "./_components/nav-drawer";
@@ -13,7 +14,7 @@ const OPERATIONAL_NAV_ITEMS = [
   { href: "/reservations", label: "예약 관리" },
 ];
 
-function getNavigationItems(principal: CurrentPrincipal) {
+function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount: number) {
   if (principal.role === "TEACHER") {
     return [
       { href: "/dashboard", label: "대시보드" },
@@ -27,6 +28,11 @@ function getNavigationItems(principal: CurrentPrincipal) {
     ...OPERATIONAL_NAV_ITEMS,
     ...(principal.role === "ADMIN"
       ? [
+          // 예약 신청 관리는 ADMIN 전용(ADR-053). 자동 알림 대신 처리 대기 건수를 메뉴에 표시한다.
+          {
+            href: "/reservation-applications",
+            label: pendingApplicationCount > 0 ? `예약 신청 (${pendingApplicationCount})` : "예약 신청",
+          },
           { href: "/payments", label: "결제·환불" },
           { href: "/revenue", label: "매출 집계" },
           { href: "/accounts", label: "계정 관리" },
@@ -39,7 +45,8 @@ function getNavigationItems(principal: CurrentPrincipal) {
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const principal = await requireCurrentPrincipal();
   const displayName = principal.name || principal.email;
-  const navigationItems = getNavigationItems(principal);
+  const pendingApplicationCount = principal.role === "ADMIN" ? await countPendingReservationApplications() : 0;
+  const navigationItems = getNavigationItems(principal, pendingApplicationCount);
 
   return (
     <div className="min-h-screen">

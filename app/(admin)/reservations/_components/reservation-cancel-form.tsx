@@ -20,11 +20,13 @@ const CANCEL_REASON_OPTIONS: { value: string; label: string }[] = [
 
 export interface ReservationCancelFormProps {
   reservationId: string;
+  /** 보관기간 만료로 개인정보를 파기한 아이의 예약이면 상세 사유(자유 입력)를 받지 않는다(ADR-058). */
+  childPersonalDataPurged?: boolean;
 }
 
 const initialState: ReservationCancelFormState = {};
 
-export function ReservationCancelForm({ reservationId }: ReservationCancelFormProps) {
+export function ReservationCancelForm({ reservationId, childPersonalDataPurged = false }: ReservationCancelFormProps) {
   const [state, formAction, pending] = useActionState(cancelReservation.bind(null, reservationId), initialState);
 
   return (
@@ -50,20 +52,31 @@ export function ReservationCancelForm({ reservationId }: ReservationCancelFormPr
         ) : null}
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="cancelDetail">상세 사유</Label>
-        <Textarea
-          defaultValue={state.values?.cancelDetail ?? ""}
-          id="cancelDetail"
-          name="cancelDetail"
-          rows={4}
-        />
-        {state.errors?.cancelDetail ? (
-          <p className="text-sm text-red-600" role="alert">
-            {state.errors.cancelDetail[0]}
-          </p>
-        ) : null}
-      </div>
+      {childPersonalDataPurged ? (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600" data-testid="cancel-detail-purged">
+          보관기간이 지나 개인정보를 파기한 아이의 예약이라 상세 사유는 기록하지 않습니다. 취소 사유만 선택해주세요.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          <Label htmlFor="cancelDetail">상세 사유</Label>
+          <Textarea
+            defaultValue={state.values?.cancelDetail ?? ""}
+            id="cancelDetail"
+            name="cancelDetail"
+            rows={4}
+          />
+          {state.errors?.cancelDetail ? (
+            <p className="text-sm text-red-600" role="alert">
+              {state.errors.cancelDetail[0]}
+            </p>
+          ) : null}
+        </div>
+      )}
+      {childPersonalDataPurged && state.errors?.cancelDetail ? (
+        <p className="text-sm text-red-600" role="alert">
+          {state.errors.cancelDetail[0]}
+        </p>
+      ) : null}
 
       {state.formError ? (
         <p aria-live="polite" className="text-sm text-red-600" role="alert">

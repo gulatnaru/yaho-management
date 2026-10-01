@@ -71,7 +71,8 @@ const RESERVATION_OPERATIONAL_DETAIL_SELECT = {
   cancelledById: true,
   createdAt: true,
   updatedAt: true,
-  child: { select: { id: true, name: true, isActive: true } },
+  // personalDataPurgedAt: 파기된 아이의 예약은 취소 상세사유(자유 입력)를 받지 않는다(ADR-058).
+  child: { select: { id: true, name: true, isActive: true, personalDataPurgedAt: true } },
   classSchedule: {
     select: {
       id: true,

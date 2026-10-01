@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const requireAdminMock = vi.fn();
 const createMock = vi.fn();
 const updateMock = vi.fn();
+const findUniqueMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireOperationalPrincipal: (...args: unknown[]) => requireAdminMock(...args),
@@ -13,6 +14,7 @@ vi.mock("@/lib/db/prisma", () => ({
     child: {
       create: (...args: unknown[]) => createMock(...args),
       update: (...args: unknown[]) => updateMock(...args),
+      findUnique: (...args: unknown[]) => findUniqueMock(...args),
     },
   },
 }));
@@ -126,13 +128,57 @@ describe("setChildActive", () => {
     requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
     updateMock.mockReset();
     updateMock.mockResolvedValue({});
+    findUniqueMock.mockReset();
+  });
+
+  it("refuses to reactivate a child whose personal data was purged (ADR-057)", async () => {
+    const { Prisma } = await import("@prisma/client");
+    updateMock.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError("Record to update not found.", { code: "P2025", clientVersion: "test" }),
+    );
+    findUniqueMock.mockResolvedValueOnce({ personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") });
+
+    await expect(setChildActive("child-1", true)).resolves.toEqual({
+      error: "보관기간이 지나 개인정보를 파기한 아이는 수정할 수 없습니다.",
+    });
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "child-1" }, select: { personalDataPurgedAt: true } });
+  });
+
+  // MSG-1: 없는 아이를 "파기된 아이"로 안내하지 않는다.
+  it("reports a missing child as not found instead of purged", async () => {
+    const { Prisma } = await import("@prisma/client");
+    updateMock.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError("Record to update not found.", { code: "P2025", clientVersion: "test" }),
+    );
+    findUniqueMock.mockResolvedValueOnce(null);
+
+    await expect(setChildActive("child-missing", true)).resolves.toEqual({ error: "아이를 찾을 수 없습니다." });
+  });
+
+  it("updateChild distinguishes a purged child from a missing child", async () => {
+    const { Prisma } = await import("@prisma/client");
+    const notFound = () =>
+      new Prisma.PrismaClientKnownRequestError("Record to update not found.", { code: "P2025", clientVersion: "test" });
+
+    updateMock.mockRejectedValueOnce(notFound());
+    findUniqueMock.mockResolvedValueOnce({ personalDataPurgedAt: new Date("2031-01-01T00:00:00Z") });
+    const purged = await updateChild("child-1", {}, formDataWithName("아이"));
+    expect(purged.formError).toBe("보관기간이 지나 개인정보를 파기한 아이는 수정할 수 없습니다.");
+
+    updateMock.mockRejectedValueOnce(notFound());
+    findUniqueMock.mockResolvedValueOnce(null);
+    const missing = await updateChild("child-missing", {}, formDataWithName("아이"));
+    expect(missing.formError).toBe("아이를 찾을 수 없습니다.");
   });
 
   it("only calls prisma.child.update with isActive, never a delete method", async () => {
     const result = await setChildActive("child-1", false);
 
     expect(result).toEqual({});
-    expect(updateMock).toHaveBeenCalledWith({ where: { id: "child-1" }, data: { isActive: false } });
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "child-1", personalDataPurgedAt: null },
+      data: { isActive: false },
+    });
   });
 });
 
