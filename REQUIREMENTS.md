@@ -1142,9 +1142,9 @@ Phase 10 Open Questions: 없음.
 - 기존 REQUIREMENTS와 Accepted ADR의 동작을 회귀 기준으로 사용하며 Phase 11에서 임의로 변경하지 않는다.
 - 새로운 개인정보 항목과 안전정보 정책을 추가하지 않고 기존 수집·노출 범위만 검증한다.
 - 예약과 출결의 기존 상태 의미 및 전환 규칙을 변경하지 않는다.
-- Playwright는 ADR-009에 따라 계속 로컬 수동 검증으로 실행하고 GitHub Actions required check로 추가하지 않는다.
-- 독립 CI 테스트 DB가 제공되기 전에는 Playwright CI 실행을 도입하지 않는다. 향후 도입 시에도 Production DB와 ADR-030의 shared Preview DB를 사용하지 않고, 독립 테스트 DB·결정적인 seed·실행 간 격리·명시적 정리 원칙이 먼저 확정되어야 한다.
-- 운영 DB, Production 데이터 또는 shared Preview 데이터를 자동화 테스트 데이터로 사용하지 않는다.
+- Phase 11 당시 Playwright는 ADR-009에 따라 로컬 수동 검증으로 실행하고 GitHub Actions required check로 추가하지 않는다. Phase 19부터의 수동 Preview E2E 허용 범위는 ADR-059와 Phase 19 요구사항을 따른다.
+- Phase 11 당시 독립 CI 테스트 DB가 제공되기 전에는 Playwright CI 실행을 도입하지 않기로 했다. GitHub Actions 자동 E2E는 Phase 19에도 포함하지 않으며, 향후 DB 전략과 실행 격리·정리 원칙을 별도 Phase에서 결정한다(ADR-059).
+- Production DB와 Production 데이터는 자동화 테스트 데이터로 사용하지 않는다. Phase 11의 shared Preview DB 사용 금지는 Phase 19부터 ADR-059의 조건을 충족한 개발자 수동 E2E에 한해 대체된다.
 - 테스트 데이터와 로그에 실제 개인정보나 secrets를 포함하지 않는다.
 - 추가 E2E는 고정 sleep이나 브라우저별 CSS 문자열 표현에 의존하지 않고, 사용자가 확인할 실제 상태·DOM·layout 조건을 retry 가능한 assertion으로 검증한다.
 - 실제 성능 문제가 재현되지 않으면 성능 관련 제품 코드를 수정하지 않는다.
@@ -1165,7 +1165,7 @@ Phase 10 Open Questions: 없음.
 - GitHub Actions에 Playwright required check 또는 독립 CI DB 구축을 추가하지 않는다.
 
 ### Conflicts
-- 없음. Playwright를 로컬 수동 실행으로 유지하는 결정은 ADR-009와 일치하며, shared Preview DB를 CI 테스트에 사용하지 않는 조건은 ADR-030과 충돌하지 않는다. 상태 기반 UI와 서버 검증의 회귀를 의미 있는 E2E로 보강하는 범위는 ADR-028/ADR-029의 기존 방향을 따른다.
+- Phase 11 당시에는 없음. 로컬 수동 실행은 ADR-009와 일치했고 shared Preview DB를 사용하지 않았다. 이 실행 환경 제한은 Phase 19부터 ADR-059의 조건부 수동 Preview E2E 정책으로 대체된다. 상태 기반 UI와 서버 검증의 회귀를 의미 있는 E2E로 보강하는 범위는 ADR-028/ADR-029의 기존 방향을 따른다.
 
 ### Open Questions
 없음.
@@ -1936,6 +1936,67 @@ Now — 사용자가 다음 Phase로 지정했고 SPEC 질문 13건과 후속 4�
 
 ---
 
+## Phase 19 — Preview 기반 수동 E2E 검증 환경
+
+### Problem
+- 로컬 앱과 로컬 PostgreSQL에 의존하는 Playwright 검증은 Vercel Preview 배포 상태를 직접 확인하지 못한다.
+- ADR-009와 Phase 11의 기존 규칙은 shared Preview DB의 자동화 테스트 사용을 금지한다. Preview DB에는 현재 운영 데이터나 보존해야 할 중요 데이터가 없으며 Preview 환경은 개발·검증용이다.
+
+### Current Process
+- Vercel Preview 배포는 Production과 분리된 Supabase 프로젝트 하나를 모든 PR이 공유하며, Preview migration은 자동 실행하지 않는다(ADR-030).
+- Playwright는 현재 전용 로컬 E2E DB와 로컬 앱만 허용하고 개발자가 수동 실행한다. GitHub Actions에는 E2E 단계가 없다(ADR-009).
+- 기존 E2E 중에는 DB 전체의 만료 대상을 처리하는 개인정보 파기 동시성 테스트와 Preview에서 닫힌 공개 신청 흐름에 의존하는 테스트가 있다.
+
+### User Story
+- 개발자로서 Vercel Preview URL과 Preview DB에 대해 Playwright를 수동 실행해 배포된 앱의 핵심 흐름을 검증하고 싶다.
+- 개발자로서 실행 대상이 Production이 아니며 앱과 테스트 러너가 같은 승인된 Preview DB를 사용하는지 데이터 생성 전에 확인하고 싶다.
+
+### Scope
+- 개발자가 Vercel Preview URL을 Playwright BASE_URL로 지정하고 승인된 Preview DB에 합성 E2E 데이터를 저장하는 수동 실행
+- 배포 앱의 DB와 테스트 러너의 DB가 동일한 승인된 Preview DB인지 실행 전 확인하는 안전 장치
+- Preview DB 단위 동시 E2E 실행 제한, 실행별 데이터 식별·정리, Preview schema의 필요한 migration 상태 확인
+- 기존 E2E를 shared Preview 실행 가능 여부에 따라 분리하고 위험한 테스트를 Preview 실행 대상에서 제외
+- Preview 수동 검증과 E2E의 데이터·일정 충돌을 고려한 실행 정책
+
+### Out of Scope
+- GitHub Actions 자동 E2E 실행과 required check 활성화
+- 독립 E2E DB의 선행 구축, PR별 Preview DB branching, Preview migration 자동 실행
+- Production URL·DB에 대한 E2E
+- 전체 DB reset/truncate, `prisma migrate reset`, `prisma db push`
+- 기능 동작·개인정보 수집 항목·보관기간 정책 변경
+
+### Business Rules
+- Production URL 또는 Production DB가 감지되면 테스트를 즉시 중단한다. URL·DB 식별에 실패하거나 배포 앱과 테스트 러너의 DB가 다르면 데이터 생성 전에 실패한다. 실행자가 지정한 이름이나 로컬 환경변수만으로 배포 앱의 실제 DB 연결을 추정하지 않는다.
+- 승인된 Preview URL과 Preview DB의 조합에서만 실행한다. 테스트 러너의 `DATABASE_URL`과 `DIRECT_URL` 및 배포 앱의 실제 DB 연결 대상이 동일한 승인된 Preview DB임을 확인한다. 확인에 필요한 신원 확인 방식과 비밀정보를 노출하지 않는 결과 표시는 PLAN에서 설계한다.
+- 필요한 Prisma migration이 Preview DB에 적용되지 않았거나 상태를 확인할 수 없으면 E2E를 시작하지 않는다. schema 변경은 기존 Prisma migration 절차를 따르고 Preview 배포에서 migration을 자동 실행하지 않는다(ADR-030).
+- Preview DB 전체에서 동시 E2E 실행은 하나만 허용한다. Playwright 내부 worker 수만으로 다른 개발자·프로세스의 동시 실행을 통제한 것으로 보지 않는다. 수동 검증과 E2E가 같은 데이터를 변경하지 않도록 실행 구간과 테스트 데이터 범위를 구분한다.
+- 각 실행과 테스트가 만든 데이터는 고유 식별자로 추적한다. 종료 또는 실패 후 그 실행이 만든 데이터만 관계 순서에 맞게 정리하고, 실패 시 남은 데이터도 식별 가능해야 한다. 전체 DB 삭제·초기화는 사용하지 않는다.
+- E2E 데이터는 모두 합성 값이며 실제 개인정보를 포함하지 않는다. 개인정보나 DB 연결 문자열·비밀정보를 테스트 결과·로그에 출력하지 않는다.
+- shared Preview DB에서 다른 데이터까지 변경할 수 있거나 Preview의 공개 기능 정책과 맞지 않는 기존 테스트는 Preview 실행 대상에서 제외한다. 특히 DB 전체 만료 대상에 작용하는 Phase 18 파기 동시성 테스트와 Preview에서 닫힌 공개 신청 흐름에 의존하는 E2E는 그대로 실행하지 않는다. 제외된 테스트의 검증 책임과 대체·분리 실행 방법은 PLAN에서 정한다.
+- GitHub Actions 자동 E2E 금지는 이번 Phase에서 유지한다. CI 편입 여부와 그때의 DB·배포·실행 격리 전략은 별도 후속 Phase에서 결정한다.
+
+### Acceptance Criteria
+- 승인된 Vercel Preview URL·Preview DB에서 개발자가 Playwright E2E를 수동 실행할 수 있다.
+- Production URL, Production DB, 미승인 URL·DB, DB 신원 확인 실패, 배포 앱과 러너의 DB 불일치는 모두 데이터 생성 전에 실행을 중단한다.
+- Preview DB의 필요한 migration 상태가 확인되지 않거나 필요한 migration이 미적용이면 E2E를 시작하지 않는다.
+- 같은 Preview DB에 두 번째 E2E 실행이 시작되면 데이터 생성 전에 중단된다. 테스트가 생성한 데이터와 수동 검증 데이터는 충돌하지 않는다.
+- 성공·실패 후 실행별 생성 데이터를 식별할 수 있고, 정리는 해당 데이터에만 적용된다. 기존 Preview 데이터가 삭제·변경되지 않는다.
+- shared Preview DB에서 안전하지 않은 기존 E2E는 Preview 실행 대상에서 제외되며, 제외 목록과 검증 경로가 명시된다.
+- 실제 개인정보·비밀정보가 테스트 데이터나 결과에 남지 않고, reset/truncate 및 `prisma migrate reset`·`prisma db push`가 실행되지 않는다.
+- GitHub Actions CI에는 Playwright 자동 E2E 단계 또는 required check가 추가되지 않는다.
+
+### Conflicts
+- ADR-009의 "Playwright는 로컬에서만 수동 실행" 부분과 Phase 11의 shared Preview DB 사용 금지는 ADR-059에 따라 Phase 19부터 조건부 수동 Preview E2E 허용으로 대체한다.
+- ADR-009의 CI 자동 E2E 금지는 유지한다. ADR-030의 shared Preview DB와 Preview migration 비자동화 정책도 유지한다.
+
+### Open Questions
+없음. GitHub Actions 자동 E2E 도입 여부와 필요한 DB·배포·실행 전략은 이번 Phase의 선행 질문이 아니라 별도 후속 Phase의 미결정 사항으로 관리한다.
+
+### Priority
+Now — Phase 19부터 배포된 Preview 앱을 검증하려면 Production 차단과 shared Preview DB 사용 조건을 먼저 확정해야 한다.
+
+---
+
 # 23. Acceptance Criteria
 
 ### 아이
@@ -2047,7 +2108,7 @@ Now — 사용자가 다음 Phase로 지정했고 SPEC 질문 13건과 후속 4�
 - [ ] 사진 홍보 활용에 동의하지 않은 아이를 외부 공개 대상에서 제외할 수 있다.
 
 ## Definition of Done
-목록 화면의 상태 필터 동작과 상태에 따른 버튼/링크 노출(예: 완료로 표시되는 클래스의 예약 추가/정보 수정/클래스 취소 버튼 숨김, 완료로 표시되는 예약의 취소 버튼 숨김, 재예약 차단 등)은 Playwright E2E 테스트로 검증하고 로컬에서 통과를 확인한 뒤에만 완료로 본다(docs/DECISIONS.md ADR-028 참고). 이 규칙은 Phase 5에 한정되지 않고, 앞으로도 같은 성격의 작업(목록 필터, 상태 기반 UI 노출)에 일반적으로 적용된다.
+목록 화면의 상태 필터 동작과 상태에 따른 버튼/링크 노출(예: 완료로 표시되는 클래스의 예약 추가/정보 수정/클래스 취소 버튼 숨김, 완료로 표시되는 예약의 취소 버튼 숨김, 재예약 차단 등)은 Playwright E2E 테스트로 검증하고 허용된 대상 환경에서 통과를 확인한 뒤에만 완료로 본다(docs/DECISIONS.md ADR-028, ADR-059 참고). Phase 19부터는 안전 조건을 충족한 수동 Preview E2E도 허용된다. 이 규칙은 Phase 5에 한정되지 않고, 앞으로도 같은 성격의 작업(목록 필터, 상태 기반 UI 노출)에 일반적으로 적용된다.
 
 ---
 
@@ -2113,7 +2174,8 @@ Open Questions: 없음.
 - `Child.memo` (운영 메모) 에 길이 제한을 둘지 여부, 둔다면 상한값
 
 ## 테스트 인프라 관련
-- 상태를 가진 UI 컴포넌트(NavDrawer, Disclosure 등)를 자동으로 검증할 렌더/상호작용 테스트 인프라(jsdom, @testing-library/react 등) 도입 여부. 현재는 순수 함수 단위테스트만 존재하고 컴포넌트 자체는 코드 리뷰로만 검증된다. 상태 기반 UI가 계속 늘어날수록 이 공백이 커진다. Playwright e2e를 CI에 편입할지를 다루는 ADR-009 와 함께 검토할 사안(둘 다 "테스트를 어디까지, 어떤 방식으로 자동화할 것인가" 라는 같은 질문에 속한다).
+- GitHub Actions 자동 Playwright E2E 도입 여부와 도입 시 DB·Preview 배포·실행 격리·데이터 정리 전략. Phase 19는 개발자의 수동 Preview E2E만 허용하며 CI 자동 실행과 required check는 추가하지 않는다(ADR-059).
+- 상태를 가진 UI 컴포넌트(NavDrawer, Disclosure 등)를 자동으로 검증할 렌더/상호작용 테스트 인프라(jsdom, @testing-library/react 등) 도입 여부. 현재는 순수 함수 단위테스트만 존재하고 컴포넌트 자체는 코드 리뷰로만 검증된다. 상태 기반 UI가 계속 늘어날수록 이 공백이 커진다. Playwright E2E의 CI 편입을 후속 검토할 때 함께 살펴볼 수 있다.
 
 ## 클래스 화면 관련
 - 클래스 목록의 캘린더 요구는 2026-08-24 실사용 테스트를 통해 Phase 10의 캘린더형 홈 화면 요구로 구체화되었다. 홈 캘린더의 확정 범위와 규칙은 15.4~15.7 및 ADR-042를 따른다. 기존 클래스 목록 뷰를 병행/대체할지는 Phase 10 범위가 아니라 별도 클래스 화면 결정으로 남긴다.

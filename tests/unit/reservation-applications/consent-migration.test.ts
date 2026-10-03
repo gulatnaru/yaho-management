@@ -154,7 +154,7 @@ describe("Phase 18 child personal data purge migration", () => {
   });
 
   it("matches the Prisma schema and the purge label", () => {
-    expect(schema).toMatch(/personalDataPurgedById String\?\n\s+createdAt/);
+    expect(schema).toMatch(/personalDataPurgedById String\?\r?\n\s+createdAt\s+DateTime\s+@default\(now\(\)\)\r?\n\s+updatedAt/);
     expect(schema).toContain('@relation("ChildPersonalDataPurgedBy"');
   });
 });
