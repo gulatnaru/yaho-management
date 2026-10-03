@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
@@ -10,6 +10,8 @@ if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
 }
 
 type TestResources = {
+  runId: string;
+  testId: string;
   marker: string;
   programIds: Set<string>;
   teacherIds: Set<string>;
@@ -21,8 +23,12 @@ type TestResources = {
 };
 
 function createResources(): TestResources {
+  const runId = process.env.YAHO_E2E_RUN_ID ?? `local-${randomUUID()}`;
+  const testId = randomUUID();
   return {
-    marker: `E2E_P11_${randomUUID()}`,
+    runId,
+    testId,
+    marker: `E2E_P11_${runId}_${testId}`,
     programIds: new Set(),
     teacherIds: new Set(),
     classIds: new Set(),
@@ -54,6 +60,7 @@ async function discoverCreatedIds(prisma: PrismaClient, resources: TestResources
           { allergies: { contains: marker } },
           { emergencyNotes: { contains: marker } },
           { emergencyContactName: { contains: marker } },
+          { emergencyContactPhone: { contains: marker } },
         ],
       },
       select: { id: true },
@@ -68,24 +75,26 @@ async function discoverCreatedIds(prisma: PrismaClient, resources: TestResources
   for (const item of reservations) resources.reservationIds.add(item.id);
 
   const classIds = [...resources.classIds];
-  const childIds = [...resources.childIds];
-  const [classTeachers, linkedReservations] = await Promise.all([
+  const [classTeachers] = await Promise.all([
     prisma.classTeacher.findMany({
-      where: { classScheduleId: { in: classIds } },
-      select: { id: true },
-    }),
-    prisma.reservation.findMany({
-      where: {
-        OR: [{ classScheduleId: { in: classIds } }, { childId: { in: childIds } }],
-      },
+      where: { classScheduleId: { in: classIds }, teacherId: { in: [...resources.teacherIds] } },
       select: { id: true },
     }),
   ]);
   for (const item of classTeachers) resources.classTeacherIds.add(item.id);
-  for (const item of linkedReservations) resources.reservationIds.add(item.id);
 }
 
 async function cleanupAndAssert(prisma: PrismaClient, resources: TestResources) {
+  try {
+    await cleanupAndAssertResources(prisma, resources);
+  } catch (error) {
+    // The marker is synthetic and lets an operator locate only this failed run.
+    console.error(`[E2E cleanup] leftover synthetic resources may remain for run ${resources.runId}, test ${resources.testId}`);
+    throw error;
+  }
+}
+
+async function cleanupAndAssertResources(prisma: PrismaClient, resources: TestResources) {
   await discoverCreatedIds(prisma, resources);
   const reservationIds = [...resources.reservationIds];
   const safetyInfoIds = [...resources.safetyInfoIds];
@@ -95,13 +104,29 @@ async function cleanupAndAssert(prisma: PrismaClient, resources: TestResources) 
   const teacherIds = [...resources.teacherIds];
   const programIds = [...resources.programIds];
 
-  await prisma.reservation.deleteMany({ where: { id: { in: reservationIds } } });
-  await prisma.childSafetyInfo.deleteMany({ where: { id: { in: safetyInfoIds } } });
-  await prisma.classTeacher.deleteMany({ where: { id: { in: classTeacherIds } } });
-  await prisma.classSchedule.deleteMany({ where: { id: { in: classIds } } });
-  await prisma.child.deleteMany({ where: { id: { in: childIds } } });
-  await prisma.teacher.deleteMany({ where: { id: { in: teacherIds } } });
-  await prisma.program.deleteMany({ where: { id: { in: programIds } } });
+  await prisma.$transaction(async (transaction) => {
+    for (const [table, rootIds] of [["Program", programIds], ["Teacher", teacherIds], ["ClassSchedule", classIds], ["Child", childIds]] as const) {
+      if (rootIds.length) await transaction.$queryRaw`SELECT id FROM ${Prisma.raw(`"${table}"`)} WHERE id IN (${Prisma.join(rootIds)}) FOR UPDATE`;
+    }
+    const [allClassTeachers, allSafetyInfos, allReservations, consents, relationships] = await Promise.all([
+      transaction.classTeacher.findMany({ where: { classScheduleId: { in: classIds } }, select: { id: true } }),
+      transaction.childSafetyInfo.findMany({ where: { childId: { in: childIds } }, select: { id: true } }),
+      transaction.reservation.findMany({ where: { OR: [{ classScheduleId: { in: classIds } }, { childId: { in: childIds } }] }, select: { id: true } }),
+      transaction.childConsent.findMany({ where: { childId: { in: childIds } }, select: { id: true } }),
+      transaction.relationship.findMany({ where: { OR: [{ childAId: { in: childIds } }, { childBId: { in: childIds } }] }, select: { id: true } }),
+    ]);
+    const isOwned = (rows: Array<{ id: string }>, owned: string[]) => rows.every((row) => owned.includes(row.id));
+    if (!isOwned(allClassTeachers, classTeacherIds) || !isOwned(allSafetyInfos, safetyInfoIds) || !isOwned(allReservations, reservationIds) || consents.length || relationships.length) {
+      throw new Error("Refusing to cascade-delete an unowned dependent from a Phase 11 E2E fixture");
+    }
+    await transaction.reservation.deleteMany({ where: { id: { in: reservationIds } } });
+    await transaction.childSafetyInfo.deleteMany({ where: { id: { in: safetyInfoIds } } });
+    await transaction.classTeacher.deleteMany({ where: { id: { in: classTeacherIds } } });
+    await transaction.classSchedule.deleteMany({ where: { id: { in: classIds } } });
+    await transaction.child.deleteMany({ where: { id: { in: childIds } } });
+    await transaction.teacher.deleteMany({ where: { id: { in: teacherIds } } });
+    await transaction.program.deleteMany({ where: { id: { in: programIds } } });
+  });
 
   const marker = resources.marker;
   const [idCounts, markerCounts] = await Promise.all([

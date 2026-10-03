@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:preview": "tsx scripts/e2e/preview.ts",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:seed": "prisma db seed",
