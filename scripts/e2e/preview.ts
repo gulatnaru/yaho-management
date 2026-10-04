@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadEnvConfig } from "@next/env";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import {
   assertPreviewDatabasePreflight,
   assertDeploymentMatchesRepository,
@@ -15,7 +15,14 @@ import {
   withPreviewDatabaseLock,
 } from "@/lib/e2e/preview-runner";
 import { PreviewE2eSafetyError } from "@/lib/e2e/preview-safety";
-import { cleanupPreviewRun, runWithPreviewCleanup, type PreviewCleanupClient } from "@/lib/e2e/preview-cleanup";
+import {
+  classifyPreviewCleanupError,
+  cleanupPreviewRun,
+  runWithPreviewCleanup,
+  type PreviewCleanupClient,
+} from "@/lib/e2e/preview-cleanup";
+
+let activeRunId: string | undefined;
 
 async function readAppIdentity(baseUrl: string, handshakeSecret: string, bypassSecret: string) {
   const response = await fetch(new URL("/api/e2e/preview-identity", baseUrl), {
@@ -62,6 +69,7 @@ function runPlaywright(environment: NodeJS.ProcessEnv, onChild: (child: ChildPro
 async function main(): Promise<void> {
   loadEnvConfig(process.cwd());
   const configuration = readPreviewE2eConfiguration();
+  activeRunId = configuration.runId;
   const databaseClient = new PrismaClient({ datasourceUrl: configuration.databaseUrl });
   const directClient = new PrismaClient({ datasourceUrl: configuration.directUrl });
   let child: ChildProcess | undefined;
@@ -125,8 +133,8 @@ async function main(): Promise<void> {
             }
           },
           cleanup: () => cleanupPreviewRun(databaseClient as unknown as PreviewCleanupClient, configuration.runId),
-          onCleanupFailure: (report) => {
-            console.error(`[preview-e2e] cleanup failed for synthetic run ${report.runId}`);
+          onCleanupFailure: ({ code, report }) => {
+            console.error(`[preview-e2e] cleanup failed (${code}) for synthetic run ${report.runId}`);
           },
         });
       },
@@ -145,7 +153,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  const code = error instanceof PreviewE2eSafetyError ? error.code : "UNEXPECTED_FAILURE";
-  console.error(`[preview-e2e] failed (${code})`);
+  const code = error instanceof PreviewE2eSafetyError
+    ? error.code
+    : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2028"
+      ? classifyPreviewCleanupError(error)
+      : "UNEXPECTED_FAILURE";
+  const run = activeRunId ? ` for synthetic run ${activeRunId}` : "";
+  console.error(`[preview-e2e] failed (${code})${run}`);
   process.exitCode = 1;
 });

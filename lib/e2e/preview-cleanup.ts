@@ -2,6 +2,20 @@ import { Prisma } from "@prisma/client";
 
 export type PreviewRunCleanupReport = { runId: string; marker: string; remaining: Record<string, number> };
 
+export const PREVIEW_CLEANUP_TRANSACTION_OPTIONS = {
+  maxWait: 10_000,
+  timeout: 60_000,
+} as const;
+
+export const PREVIEW_CLEANUP_FAILURE_CODE = {
+  RESIDUAL_ROWS: "RESIDUAL_ROWS",
+  PRISMA_P2028: "PRISMA_P2028",
+  CLEANUP_FAILED: "CLEANUP_FAILED",
+} as const;
+
+export type PreviewCleanupFailureCode =
+  (typeof PREVIEW_CLEANUP_FAILURE_CODE)[keyof typeof PREVIEW_CLEANUP_FAILURE_CODE];
+
 export class PreviewRunCleanupError extends Error {
   constructor(readonly report: PreviewRunCleanupReport) {
     super("Preview E2E synthetic data cleanup left identifiable rows");
@@ -10,12 +24,17 @@ export class PreviewRunCleanupError extends Error {
 }
 
 type Delegate = { findMany(args: unknown): Promise<Array<{ id: string }>>; deleteMany(args: unknown): Promise<{ count: number }>; };
-type CleanupTransaction = {
+export type PreviewCleanupTransaction = {
   program: Delegate; teacher: Delegate; classSchedule: Delegate; classTeacher: Delegate;
   child: Delegate; childSafetyInfo: Delegate; childConsent: Delegate; relationship: Delegate; reservation: Delegate;
   $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
 };
-export type PreviewCleanupClient = CleanupTransaction & { $transaction<T>(callback: (transaction: CleanupTransaction) => Promise<T>): Promise<T>; };
+export type PreviewCleanupClient = PreviewCleanupTransaction & {
+  $transaction<T>(
+    callback: (transaction: PreviewCleanupTransaction) => Promise<T>,
+    options: typeof PREVIEW_CLEANUP_TRANSACTION_OPTIONS,
+  ): Promise<T>;
+};
 
 function ids(rows: Array<{ id: string }>) { return rows.map((row) => row.id); }
 function markerForRun(runId: string) {
@@ -23,7 +42,7 @@ function markerForRun(runId: string) {
   return `E2E_P11_${runId}_`;
 }
 
-async function discover(client: CleanupTransaction, runId: string) {
+async function discover(client: PreviewCleanupTransaction, runId: string) {
   const marker = markerForRun(runId);
   const [programs, teachers, classes, children] = await Promise.all([
     client.program.findMany({ where: { name: { contains: marker } }, select: { id: true } }),
@@ -57,7 +76,7 @@ function report(runId: string, resources: Awaited<ReturnType<typeof discover>>):
 }
 function hasValues(values: Record<string, number>) { return Object.values(values).some((value) => value > 0); }
 function hasUnowned(values: Record<string, number>) { return Object.entries(values).some(([key, value]) => key.startsWith("unowned") && value > 0); }
-async function lockRoots(client: CleanupTransaction, resources: Awaited<ReturnType<typeof discover>>) {
+async function lockRoots(client: PreviewCleanupTransaction, resources: Awaited<ReturnType<typeof discover>>) {
   const locks: Array<[string, string[]]> = [["Program", ids(resources.programs)], ["Teacher", ids(resources.teachers)], ["ClassSchedule", ids(resources.classes)], ["Child", ids(resources.children)]];
   for (const [table, rootIds] of locks) if (rootIds.length) await client.$queryRaw`SELECT id FROM ${Prisma.raw(`"${table}"`)} WHERE id IN (${Prisma.join(rootIds)}) FOR UPDATE`;
 }
@@ -84,16 +103,32 @@ export async function cleanupPreviewRun(client: PreviewCleanupClient, runId: str
     const after = report(runId, await discover(transaction, runId));
     if (hasValues(after.remaining)) throw new PreviewRunCleanupError(after);
     return after;
-  });
+  }, PREVIEW_CLEANUP_TRANSACTION_OPTIONS);
 }
 
-export async function runWithPreviewCleanup<T>({ runId, run, cleanup, onCleanupFailure }: { runId: string; run: () => Promise<T>; cleanup: () => Promise<PreviewRunCleanupReport>; onCleanupFailure: (report: PreviewRunCleanupReport) => void; }): Promise<T> {
+export function classifyPreviewCleanupError(error: unknown): PreviewCleanupFailureCode {
+  if (error instanceof PreviewRunCleanupError) return PREVIEW_CLEANUP_FAILURE_CODE.RESIDUAL_ROWS;
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2028") {
+    return PREVIEW_CLEANUP_FAILURE_CODE.PRISMA_P2028;
+  }
+  return PREVIEW_CLEANUP_FAILURE_CODE.CLEANUP_FAILED;
+}
+
+export async function runWithPreviewCleanup<T>({ runId, run, cleanup, onCleanupFailure }: {
+  runId: string;
+  run: () => Promise<T>;
+  cleanup: () => Promise<PreviewRunCleanupReport>;
+  onCleanupFailure: (failure: { code: PreviewCleanupFailureCode; report: PreviewRunCleanupReport }) => void;
+}): Promise<T> {
   try { return await run(); } finally {
     try { await cleanup(); } catch (error) {
-      onCleanupFailure(error instanceof PreviewRunCleanupError ? error.report : {
-        runId,
-        marker: markerForRun(runId),
-        remaining: {},
+      onCleanupFailure({
+        code: classifyPreviewCleanupError(error),
+        report: error instanceof PreviewRunCleanupError ? error.report : {
+          runId,
+          marker: markerForRun(runId),
+          remaining: {},
+        },
       });
       throw error;
     }
