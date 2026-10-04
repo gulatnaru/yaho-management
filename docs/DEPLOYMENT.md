@@ -34,6 +34,57 @@ Vercel 프로젝트 설정의 Environment Variables에 아래를 Production/Prev
 | `YAHO_INSTAGRAM_URL` | YAHO Instagram https URL | 등록하지 않아도 된다 |
 | `YAHO_KAKAO_CHANNEL_URL` | YAHO 카카오톡 채널 https URL | 등록하지 않아도 된다 |
 
+## Manual Preview E2E (Phase 19)
+
+Preview E2E is a developer-run command only. It does not run in GitHub Actions and it never starts a local Next.js server or local PostgreSQL.
+
+The ordinary local `npm run test:e2e` route uses only `http://127.0.0.1:3000`; its configuration rejects a supplied `PLAYWRIGHT_BASE_URL` that is any remote, Preview, or Production origin before test specs load.
+
+1. Push the branch and wait for the intended Vercel Preview deployment to become READY.
+2. Set the runner environment values below from the approved Preview deployment and DB configuration, then run `npm run test:e2e:preview`.
+3. If a guard fails, fix the target, deployment, migration state, or configuration and run it again. The command does not apply migrations.
+
+The runner accepts only one exact HTTPS origin from `PREVIEW_E2E_ALLOWED_BASE_URLS`, requires a `.vercel.app` Preview URL, and always rejects `https://yaho-management.vercel.app`. Before any DB connection, it derives the Supabase project ref from both runner URLs and rejects the configured Production project ref. Before Playwright starts, it verifies the deployed app's opaque runtime DB fingerprint, both runner connections' runtime DB fingerprints, the requested deployment SHA, and the complete Prisma migration history. The fingerprint includes the approved project ref as well as `current_database()` and `current_user`; this prevents a `postgres`/`postgres` collision between Supabase projects. It also takes a PostgreSQL transaction advisory lock for the child process lifetime. Connection strings, raw database identity values, credentials, and bypass secrets are not printed.
+
+| Location | Variable | Purpose |
+|---|---|---|
+| Preview deployment | `PREVIEW_E2E_HANDSHAKE_SECRET` | Authenticates the identity handshake endpoint; use a value kept only in Preview and the manual runner environment. |
+| Preview deployment and runner | `PREVIEW_E2E_SUPABASE_PROJECT_REF` | Approved shared Preview Supabase project ref; the deployment and both runner URLs must resolve to it. |
+| Preview deployment and runner | `PREVIEW_E2E_DB_RUNTIME_IDENTITY_SHA256` | Approved opaque fingerprint of the Preview project ref, `current_database()`, and `current_user`. |
+| Manual runner | `PLAYWRIGHT_BASE_URL` | Exact READY Vercel Preview origin. |
+| Manual runner | `PREVIEW_E2E_ALLOWED_BASE_URLS` | Comma-separated explicit origin allowlist containing the same Preview origin. |
+| Manual runner | `PREVIEW_E2E_DEPLOYMENT_SHA` | Commit SHA reported by that Preview deployment. |
+| Manual runner | `DATABASE_URL`, `DIRECT_URL` | Runner connections to the approved shared Preview DB; pooler and direct hosts may differ. |
+| Manual runner | `PRODUCTION_E2E_SUPABASE_PROJECT_REF` | Production Supabase project ref, required so the runner rejects it before opening either DB connection. |
+| Manual runner | `VERCEL_AUTOMATION_BYPASS_SECRET` | Vercel protection-bypass secret sent as `x-vercel-protection-bypass`; never put it in a URL. |
+| Manual runner | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Dedicated Preview administrator credentials used by the Phase 11 flow. |
+
+The Playwright configuration requires an ephemeral proof file made only by `npm run test:e2e:preview`, so a direct `PLAYWRIGHT_PREVIEW_E2E=1 playwright test` fails before specs load. Phase 11 writes only synthetic values containing its Preview run ID and per-test UUID. The wrapper repeats a FK-safe run-ID sweep before it releases the Preview DB advisory lock; cleanup failure reports the synthetic run ID and leaves other runs and existing Preview data untouched. Each cleanup transaction waits up to 10 seconds to start and has a 60-second execution limit, below the 15-minute outer advisory-lock limit.
+
+Generate `PREVIEW_E2E_DB_RUNTIME_IDENTITY_SHA256` for the approved Preview project only. Production denial happens before any database client exists: both runner URLs must parse to the approved Preview project ref and must differ from the required Production project ref. The existing Production release `PRODUCTION_DB_RUNTIME_IDENTITY_SHA256` remains exclusively for release tooling. The exact Preview fingerprint input is the UTF-8 bytes of `JSON.stringify({ projectRef, database, currentUser, currentSchema, prismaSchema })`: its field order is `projectRef`, `database`, `currentUser`, `currentSchema`, then `prismaSchema`, with JavaScript's ordinary compact JSON encoding. `prismaSchema` is the validated Prisma URL `schema` target and Phase 19 supports `public` only. After placing those values in protected process variables named `E2E_FINGERPRINT_PROJECT_REF`, `E2E_FINGERPRINT_DATABASE`, `E2E_FINGERPRINT_CURRENT_USER`, `E2E_FINGERPRINT_CURRENT_SCHEMA`, and `E2E_FINGERPRINT_PRISMA_SCHEMA`, run this command; it prints only the SHA-256 result:
+
+```powershell
+node -e 'const crypto=require("node:crypto"); const {E2E_FINGERPRINT_PROJECT_REF:projectRef,E2E_FINGERPRINT_DATABASE:database,E2E_FINGERPRINT_CURRENT_USER:currentUser,E2E_FINGERPRINT_CURRENT_SCHEMA:currentSchema,E2E_FINGERPRINT_PRISMA_SCHEMA:prismaSchema}=process.env; if(!projectRef||!database||!currentUser||!currentSchema||!prismaSchema) process.exit(1); process.stdout.write(crypto.createHash("sha256").update(JSON.stringify({projectRef,database,currentUser,currentSchema,prismaSchema}),"utf8").digest("hex")+"\n")'
+```
+
+Store only the resulting SHA-256 value in the Preview deployment and runner environment. Do not put the input values, connection strings, query output, handshake secret, or bypass secret in a shell history, ticket, repository file, or CI log. The runner requires the local repository `HEAD` to equal the deployment's full 40-character commit SHA and refuses any changed or untracked `prisma/migrations` path before it checks migrations.
+
+| E2E spec | Preview classification | Verification route |
+|---|---|---|
+| `auth.spec.ts` | Preview-safe | `npm run test:e2e:preview` |
+| `phase6-access.spec.ts` | Preview-safe | `npm run test:e2e:preview` |
+| `phase11-core-operations.spec.ts` | Safe after modification: run/test markers plus test and wrapper cleanup | `npm run test:e2e:preview` |
+| `class-ended-lifecycle.spec.ts` | Preview-forbidden in Phase 19: unscoped fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+| `dashboard.spec.ts` | Preview-forbidden in Phase 19: unscoped fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+| `payment-refund-lifecycle.spec.ts` | Preview-forbidden in Phase 19: payment/refund fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+| `phase12-class-reservation-operations.spec.ts` | Preview-forbidden in Phase 19: unscoped fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+| `phase13-child-history.spec.ts` | Preview-forbidden in Phase 19: unscoped fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+| `phase15-recurring-class-registration.spec.ts` | Preview-forbidden in Phase 19: unscoped fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+| `phase16-account-access.spec.ts` | Preview-forbidden in Phase 19: changes shared account state | `npm run test:e2e` against the dedicated local E2E DB |
+| `phase18-reservation-application.spec.ts` | Preview-forbidden: public application intake is closed in Preview | `npm run test:e2e` against the dedicated local E2E DB |
+| `phase18-retention-concurrency.spec.ts` | Preview-forbidden: retention can affect candidates outside its fixtures | `npm run test:e2e` against the dedicated local E2E DB |
+| `revenue-report.spec.ts` | Preview-forbidden in Phase 19: unscoped payment fixture lifecycle | `npm run test:e2e` against the dedicated local E2E DB |
+
 - 예약 신청(Phase 18, ADR-052) 설정값 6개는 하나라도 없거나 https가 아니면 공개 신청을 받지 않는다(fail closed). 값을 바꾸면 재배포한다.
 - Preview(`VERCEL_ENV=preview`)는 공유 DB(ADR-030)이므로 설정과 무관하게 공개 신청을 받지 않는다.
 - Production은 `lib/reservation-applications/consent-content.ts`의 동의 문구가 확정 원문(`isPlaceholder: false`)이고 `pendingDecisions`가 비어 있을 때만 공개 신청을 받는다. 2026-09-30-r3 기준 pendingDecisions 는 비어 있으므로 아래 환경변수 6개가 등록되면 Production 접수가 열린다.
