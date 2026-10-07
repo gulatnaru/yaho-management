@@ -1,17 +1,51 @@
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import React from "react";
+import { cookies } from "next/headers";
+import { headers } from "next/headers";
+import { unstable_noStore as noStore } from "next/cache";
+import { prisma } from "@/lib/db/prisma";
+import {
+  canShowApplicationCompletionGuide,
+  canShowGenericApplicationCompletionGuide,
+  COMPLETION_COOKIE_NAME,
+  loadApplicationCompletionView,
+} from "@/lib/reservation-applications/completion";
 import { readPublicApplicationConfig } from "@/lib/reservation-applications/config";
+import { reservationApplicationSettingsSchema } from "@/lib/reservation-applications/phase20-validation";
+import { getReservationApplicationSettings } from "@/server/reservation-applications/settings";
 import { cn } from "@/lib/utils";
+import { CompletionGuide } from "./completion-guide";
+import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun, PHASE20_PREVIEW_HEADER } from "@/lib/e2e/phase20-lease";
 
 // 배포 설정(환경변수)을 요청 시점에 읽는다.
 export const dynamic = "force-dynamic";
 
-/**
- * 신청 완료 안내(ADR-052). 확정 전 안내, 무통장 입금 계좌, YAHO 채널 링크만 보여준다.
- * 입금 금액·기한·입금자명·취소·환불 안내와 신청 내용(개인정보)은 표시하지 않는다.
- */
-export default function ReservationApplicationCompletePage() {
-  const config = readPublicApplicationConfig();
+/** A valid Phase 20 capability renders only its own transfer guide; legacy visits retain generic guidance. */
+export default async function ReservationApplicationCompletePage() {
+  noStore();
+  const jar = await cookies();
+  const token = jar.get(COMPLETION_COOKIE_NAME)?.value;
+  const [completion, dbSettings] = await Promise.all([loadApplicationCompletionView(token), getReservationApplicationSettings(prisma)]);
+  const previewAllowed = process.env.VERCEL_ENV !== "preview" || await hasActivePhase20PreviewLease(prisma, { signed: parseAndVerifySignedPreviewRun((await headers()).get(PHASE20_PREVIEW_HEADER), process.env), syntheticRunId: completion?.syntheticRunId ?? null, now: new Date() });
+  const dbConfig = dbSettings ? reservationApplicationSettingsSchema.safeParse(dbSettings) : null;
+  const showCompletionGuide = canShowApplicationCompletionGuide({ completion, vercelEnv: process.env.VERCEL_ENV, previewAllowed });
+  const previewConfig = showCompletionGuide && process.env.VERCEL_ENV === "preview"
+    ? reservationApplicationSettingsSchema.safeParse(completion?.syntheticSettings)
+    : null;
+  // Ordinary Phase 18 visits have no completion capability. The DB singleton
+  // remains authoritative whenever it exists; Preview never falls back to it.
+  const showGenericGuide = canShowGenericApplicationCompletionGuide({ completion, vercelEnv: process.env.VERCEL_ENV });
+  const legacyConfig = showGenericGuide && !dbSettings ? readPublicApplicationConfig() : null;
+  const completionDbConfig = showCompletionGuide && process.env.VERCEL_ENV !== "preview" && dbConfig?.success
+    ? { ...dbConfig.data, bankAccountNumber: dbConfig.data.accountNumber, bankAccountHolder: dbConfig.data.accountHolder }
+    : null;
+  const genericDbConfig = showGenericGuide && dbConfig?.success
+    ? { ...dbConfig.data, bankAccountNumber: dbConfig.data.accountNumber, bankAccountHolder: dbConfig.data.accountHolder }
+    : null;
+  const config = previewConfig?.success
+    ? { ...previewConfig.data, bankAccountNumber: previewConfig.data.accountNumber, bankAccountHolder: previewConfig.data.accountHolder }
+    : completionDbConfig ?? genericDbConfig ?? legacyConfig;
 
   return (
     <section className="space-y-6">
@@ -24,7 +58,9 @@ export default function ReservationApplicationCompletePage() {
         </CardContent>
       </Card>
 
-      {config ? (
+      {showCompletionGuide && completion && config ? (
+        <CompletionGuide accountHolder={config.bankAccountHolder} accountNumber={config.bankAccountNumber} applications={completion.applications} bankName={config.bankName} payerName={completion.declaredPayerName} />
+      ) : config ? (
         <>
           <Card>
             <CardHeader>

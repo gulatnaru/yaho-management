@@ -449,6 +449,58 @@ describe("updateClass never reads status from formData", () => {
   });
 });
 
+describe("updateClass application price authority", () => {
+  beforeEach(() => {
+    classFindUniqueMock.mockReset();
+    classFindUniqueMock.mockResolvedValue({ status: "SCHEDULED", endsAt: new Date("2099-01-01T00:00:00Z"), applicationPrice: 10_000 });
+    programFindUniqueMock.mockReset();
+    programFindUniqueMock.mockResolvedValue({ status: "ACTIVE" });
+    teacherCountMock.mockReset();
+    teacherCountMock.mockResolvedValue(1);
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
+    classTeacherFindManyMock.mockReset();
+    classTeacherFindManyMock.mockResolvedValue([{ teacherId: "teacher-1" }]);
+    classTeacherCreateManyMock.mockReset();
+    classTeacherDeleteManyMock.mockReset();
+    classUpdateManyMock.mockReset();
+    classUpdateManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  it("lets a MANAGER update operational fields after an ADMIN price edit without writing a stale price", async () => {
+    requireAdminMock.mockResolvedValue({ user: { role: "MANAGER" } });
+    let storedApplicationPrice = 20_000; // ADMIN committed this price after the manager's pre-read.
+    classUpdateManyMock.mockImplementation(async ({ data }: { data: { applicationPrice?: number | null } }) => {
+      if (Object.hasOwn(data, "applicationPrice")) storedApplicationPrice = data.applicationPrice ?? 0;
+      return { count: 1 };
+    });
+
+    await expect(updateClass("class-1", {}, validFormData({ memo: "운영 메모" }))).rejects.toThrow("REDIRECT");
+
+    expect(classUpdateManyMock.mock.calls[0]![0].data).not.toHaveProperty("applicationPrice");
+    expect(storedApplicationPrice).toBe(20_000);
+  });
+
+  it("allows an ADMIN to set and clear the application price", async () => {
+    requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
+
+    await expect(updateClass("class-1", {}, validFormData({ applicationPrice: "20000" }))).rejects.toThrow("REDIRECT");
+    expect(classUpdateManyMock.mock.calls[0]![0].data.applicationPrice).toBe(20_000);
+
+    await expect(updateClass("class-1", {}, validFormData({ applicationPrice: "" }))).rejects.toThrow("REDIRECT");
+    expect(classUpdateManyMock.mock.calls[1]![0].data.applicationPrice).toBeNull();
+  });
+
+  it("rejects a MANAGER-supplied application price before any update", async () => {
+    requireAdminMock.mockResolvedValue({ user: { role: "MANAGER" } });
+
+    const result = await updateClass("class-1", {}, validFormData({ applicationPrice: "20000" }));
+
+    expect(result.formError).toBe("신청 최종 금액은 관리자만 설정할 수 있습니다.");
+    expect(classUpdateManyMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("updateClass re-validates program/teachers inside the transaction (rollback)", () => {
   // 2차 코드 리뷰 Minor: updateClass 도 createClass 와 동일하게 isProgramUsable/areTeachersUsable
   // 재확인을 $transaction 내부(tx 클라이언트)에서 실행해야 한다 — 확인과 실제 쓰기 사이의 TOCTOU

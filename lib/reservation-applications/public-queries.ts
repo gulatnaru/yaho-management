@@ -86,7 +86,7 @@ export async function loadPublicApplicationView(
   if (!isApplicationRuntimeReady(context)) return CLOSED_VIEW;
 
   const availability = await findApplicationLinkAvailability(token);
-  if (!isApplicationLinkOpen(availability, context)) return CLOSED_VIEW;
+  if (!availability?.classSchedule || !isApplicationLinkOpen(availability as PublicApplicationLinkAvailability & { classSchedule: NonNullable<PublicApplicationLinkAvailability["classSchedule"]> }, context)) return CLOSED_VIEW;
 
   const classSchedule = await findOpenPublicApplicationClass(token, context.now);
   return classSchedule ? { open: true, classSchedule } : CLOSED_VIEW;

@@ -39,7 +39,7 @@ export async function submitReservationApplicationCore(
       classSchedule: { select: { status: true, startsAt: true } },
     },
   });
-  if (!link || !isApplicationLinkOpen(link, input.context)) throw new ApplicationClosedError();
+  if (!link?.classSchedule || !link.classScheduleId || !isApplicationLinkOpen(link as typeof link & { classSchedule: NonNullable<typeof link.classSchedule>; classScheduleId: string }, input.context)) throw new ApplicationClosedError();
 
   const windowStart = new Date(input.context.now.getTime() - APPLICATION_RATE_LIMIT.windowMs);
   const recentCount = await client.reservationApplication.count({

@@ -37,6 +37,10 @@ const classCommonFields = {
     .min(CLASS_CAPACITY_MIN, `정원은 ${CLASS_CAPACITY_MIN}명 이상이어야 합니다`)
     .max(CLASS_CAPACITY_MAX, `정원은 ${CLASS_CAPACITY_MAX}명을 초과할 수 없습니다`)
     .default(CLASS_CAPACITY_DEFAULT),
+  applicationPrice: z.preprocess(
+    (value) => value === "" || value === null || value === undefined ? undefined : value,
+    z.coerce.number().int("정수를 입력해주세요").positive("신청 금액은 1원 이상이어야 합니다").optional(),
+  ),
   teacherIds: z
     .array(z.string().trim().min(1))
     .transform((ids) => Array.from(new Set(ids)))
@@ -130,6 +134,7 @@ export function getRecurringClassFormInput(formData: FormData) {
     endTime: formData.get("endTime"),
     location: formData.get("location"),
     capacity: formData.get("capacity") || undefined,
+    applicationPrice: formData.get("applicationPrice") || undefined,
     teacherIds: formData
       .getAll("teacherIds")
       .filter((value): value is string => typeof value === "string"),

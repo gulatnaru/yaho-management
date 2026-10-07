@@ -17,11 +17,22 @@ const closeCoreMock = vi.fn();
 const issueCoreMock = vi.fn();
 const stopCoreMock = vi.fn();
 const purgeCoreMock = vi.fn();
+const applicationLookupMock = vi.fn();
+const createGroupCoreMock = vi.fn();
+const updateGroupCoreMock = vi.fn();
+const stopGroupCoreMock = vi.fn();
+const issueGroupCoreMock = vi.fn();
+const upgradeLegacyCoreMock = vi.fn();
+const saveSettingsCoreMock = vi.fn();
+const importSettingsCoreMock = vi.fn();
+const recordDepositCoreMock = vi.fn();
+const recordReturnCoreMock = vi.fn();
+const confirmSubmissionCoreMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminMock(...args),
 }));
-vi.mock("@/lib/db/prisma", () => ({ prisma: {} }));
+vi.mock("@/lib/db/prisma", () => ({ prisma: { reservationApplication: { findUnique: (...args: unknown[]) => applicationLookupMock(...args) } } }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((destination: string) => {
@@ -41,6 +52,26 @@ vi.mock("@/server/reservation-applications/retention", () => ({
 vi.mock("@/server/reservation-applications/links", () => ({
   issueApplicationLinkCore: (...args: unknown[]) => issueCoreMock(...args),
   stopApplicationLinkCore: (...args: unknown[]) => stopCoreMock(...args),
+  upgradeLegacyApplicationLinkCore: (...args: unknown[]) => upgradeLegacyCoreMock(...args),
+}));
+vi.mock("@/server/reservation-applications/groups", () => ({
+  createApplicationGroupCore: (...args: unknown[]) => createGroupCoreMock(...args),
+  updateApplicationGroupCore: (...args: unknown[]) => updateGroupCoreMock(...args),
+  stopApplicationGroupCore: (...args: unknown[]) => stopGroupCoreMock(...args),
+  issueApplicationGroupLinkCore: (...args: unknown[]) => issueGroupCoreMock(...args),
+}));
+vi.mock("@/server/reservation-applications/settings", () => ({
+  getReservationApplicationSettings: vi.fn(),
+  importLegacyReservationApplicationSettingsCore: (...args: unknown[]) => importSettingsCoreMock(...args),
+  isReservationApplicationSettingsReady: vi.fn(),
+  saveReservationApplicationSettingsCore: (...args: unknown[]) => saveSettingsCoreMock(...args),
+}));
+vi.mock("@/server/reservation-applications/finance", () => ({
+  ApplicationSubmissionOverbookingConfirmationError: class extends Error {},
+  closeApplicationWithReturnCore: vi.fn(),
+  confirmApplicationSubmissionCore: (...args: unknown[]) => confirmSubmissionCoreMock(...args),
+  recordApplicationDepositCore: (...args: unknown[]) => recordDepositCoreMock(...args),
+  recordApplicationReturnCore: (...args: unknown[]) => recordReturnCoreMock(...args),
 }));
 
 const actions = await import("@/app/(admin)/reservation-applications/actions");
@@ -61,11 +92,13 @@ function formData(values: Record<string, string>) {
   return data;
 }
 
-const allCores = [confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock];
+const allCores = [confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock, createGroupCoreMock, updateGroupCoreMock, stopGroupCoreMock, issueGroupCoreMock, upgradeLegacyCoreMock, saveSettingsCoreMock, importSettingsCoreMock, recordDepositCoreMock, recordReturnCoreMock, confirmSubmissionCoreMock];
 
 describe("reservation application admin actions", () => {
   beforeEach(() => {
     requireAdminMock.mockReset();
+    applicationLookupMock.mockReset();
+    applicationLookupMock.mockResolvedValue(null);
     for (const core of allCores) core.mockReset();
   });
 
@@ -80,6 +113,16 @@ describe("reservation application admin actions", () => {
       () => actions.rejectReservationApplication("application-1", {}, formData({ resolutionNote: "사유" })),
       () => actions.cancelReservationApplication("application-1", {}, formData({ resolutionNote: "사유" })),
       () => actions.purgeExpiredPersonalData(),
+      () => actions.createApplicationGroup(new FormData()),
+      () => actions.updateApplicationGroup("group-1", new FormData()),
+      () => actions.stopApplicationGroup("group-1"),
+      () => actions.issueApplicationGroupLink("group-1"),
+      () => actions.upgradeLegacyApplicationLink("class-1"),
+      () => actions.saveReservationApplicationSettings(new FormData()),
+      () => actions.importLegacyReservationApplicationSettings(),
+      () => actions.recordApplicationDeposit("submission-1", new FormData()),
+      () => actions.recordApplicationReturn("obligation-1", new FormData()),
+      () => actions.confirmApplicationSubmission(new FormData()),
     ];
     for (const call of calls) {
       await expect(call()).rejects.toThrow("NOT_FOUND");
@@ -92,6 +135,32 @@ describe("reservation application admin actions", () => {
       requireAdminMock.mockResolvedValue(adminPrincipal);
     });
 
+    it("forwards an explicit bulk overbooking binding without treating a bare flag as authorization", async () => {
+      confirmSubmissionCoreMock.mockResolvedValueOnce({ paymentId: "payment-1", reservationIds: ["reservation-1"] });
+      const payload = {
+        submissionId: "submission-1",
+        choices: [{
+          applicationId: "application-1",
+          newChild: true,
+          confirmOverbooking: true,
+          overbookingConfirmation: {
+            applicationId: "application-1",
+            classScheduleId: "class-1",
+            childChoice: "NEW",
+            selectionFingerprint: '[["application-1","NEW"]]',
+          },
+        }],
+      };
+      const form = formData({ payload: JSON.stringify(payload) });
+
+      await expect(actions.confirmApplicationSubmission(form)).resolves.toEqual({ reservationIds: ["reservation-1"] });
+      expect(confirmSubmissionCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        submissionId: "submission-1",
+        choices: [expect.objectContaining({ confirmOverbooking: true, overbookingConfirmation: payload.choices[0]!.overbookingConfirmation })],
+        actorUserId: "admin-1",
+      }));
+    });
+
     it("confirms a new child and redirects to the reservation", async () => {
       confirmCoreMock.mockResolvedValueOnce({ reservationId: "reservation-1", childId: "child-1" });
 
@@ -100,7 +169,7 @@ describe("reservation application admin actions", () => {
       ).rejects.toThrow("REDIRECT:/reservations/reservation-1");
 
       expect(confirmCoreMock).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         expect.objectContaining({
           applicationId: "application-1",
           childChoice: { type: "NEW" },
@@ -123,7 +192,7 @@ describe("reservation application admin actions", () => {
         ),
       ).rejects.toThrow("REDIRECT");
       expect(confirmCoreMock).toHaveBeenLastCalledWith(
-        {},
+        expect.anything(),
         expect.objectContaining({ childChoice: { type: "EXISTING", childId: "child-9" }, confirmOverbooking: true }),
       );
 
@@ -134,7 +203,7 @@ describe("reservation application admin actions", () => {
           formData({ childChoice: "child-9", ...confirmed, confirmedChildChoice: "NEW" }),
         ),
       ).rejects.toThrow("REDIRECT");
-      expect(confirmCoreMock).toHaveBeenLastCalledWith({}, expect.objectContaining({ confirmOverbooking: false }));
+      expect(confirmCoreMock).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ confirmOverbooking: false }));
 
       await expect(
         actions.confirmReservationApplication(
@@ -143,7 +212,7 @@ describe("reservation application admin actions", () => {
           formData({ childChoice: "child-9", ...confirmed, confirmedChildChoice: "child-9" }),
         ),
       ).rejects.toThrow("REDIRECT");
-      expect(confirmCoreMock).toHaveBeenLastCalledWith({}, expect.objectContaining({ confirmOverbooking: false }));
+      expect(confirmCoreMock).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ confirmOverbooking: false }));
     });
 
     it("returns the overbooking warning state instead of confirming", async () => {
@@ -194,7 +263,7 @@ describe("reservation application admin actions", () => {
         actions.rejectReservationApplication("application-1", {}, formData({ resolutionNote: "정원 마감" })),
       ).rejects.toThrow("REDIRECT:/reservation-applications/application-1");
       expect(closeCoreMock).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         expect.objectContaining({ status: "REJECTED", resolutionNote: "정원 마감", actorUserId: "admin-1" }),
       );
     });
@@ -204,7 +273,7 @@ describe("reservation application admin actions", () => {
       await expect(
         actions.cancelReservationApplication("application-1", {}, formData({ resolutionNote: "보호자 요청" })),
       ).rejects.toThrow("REDIRECT");
-      expect(closeCoreMock).toHaveBeenCalledWith({}, expect.objectContaining({ status: "CANCELLED" }));
+      expect(closeCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "CANCELLED" }));
     });
 
     it("reports an already processed deposit confirmation", async () => {
@@ -223,7 +292,7 @@ describe("reservation application admin actions", () => {
         purgedChildCount: 1,
         hasMore: true,
       });
-      expect(purgeCoreMock).toHaveBeenCalledWith({}, expect.objectContaining({ actorUserId: "admin-1" }));
+      expect(purgeCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ actorUserId: "admin-1" }));
     });
 
     it("tells a purged child apart from a missing or inactive child when confirming (MSG-1)", async () => {
@@ -258,8 +327,8 @@ describe("reservation application admin actions", () => {
       await expect(actions.issueApplicationLink("class-1")).resolves.toEqual({});
       await expect(actions.stopApplicationLink("class-1")).resolves.toEqual({});
 
-      expect(issueCoreMock).toHaveBeenCalledWith({}, expect.objectContaining({ classScheduleId: "class-1", actorUserId: "admin-1" }));
-      expect(stopCoreMock).toHaveBeenCalledWith({}, { classScheduleId: "class-1" });
+      expect(issueCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ classScheduleId: "class-1", actorUserId: "admin-1" }));
+      expect(stopCoreMock).toHaveBeenCalledWith(expect.anything(), { classScheduleId: "class-1" });
     });
   });
 });

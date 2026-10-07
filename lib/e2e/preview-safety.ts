@@ -245,5 +245,11 @@ export function assertPreviewMigrationState({
 }
 
 export function createPreviewE2eRunId(random: () => string): string {
-  return `preview-${random()}`;
+  const uuid = random();
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(uuid)) {
+    opaqueError("INVALID_RUN_ID", "Preview E2E run identity is invalid");
+  }
+  // Base64url encodes the full 128-bit UUID in 22 printable characters. The
+  // preview prefix remains compatible with historical cleanup ownership rules.
+  return `preview-${Buffer.from(uuid.replaceAll("-", ""), "hex").toString("base64url")}`;
 }

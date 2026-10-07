@@ -53,14 +53,18 @@ export default async function ReservationApplicationDetailPage({ params }: { par
 
   const isPurged = application.personalDataPurgedAt !== null;
   const isPending = application.status === "SUBMITTED";
-  const canConfirm = isPending && application.depositConfirmedAt !== null;
+  const isSubmissionApplication = application.submissionId !== null;
+  const canConfirm = !isSubmissionApplication && isPending && application.depositConfirmedAt !== null;
+  const guardianName = application.submission?.guardianName ?? application.guardianName;
+  const guardianPhone = application.submission?.guardianPhone ?? application.guardianPhone;
+  const guardianRelationship = application.submission?.guardianRelationship ?? application.guardianRelationship;
   const classStatus = getClassDisplayStatus(application.classSchedule);
   const retention = await getApplicationRetention(application);
   const candidates =
-    canConfirm && application.childName && application.guardianPhone
+    canConfirm && application.childName && guardianPhone
       ? await listChildCandidatesForApplication({
           childName: application.childName,
-          guardianPhone: application.guardianPhone,
+          guardianPhone,
         })
       : [];
   const childOptions: ApplicationChildOption[] = candidates.map((candidate) => ({
@@ -110,18 +114,18 @@ export default async function ReservationApplicationDetailPage({ params }: { par
               <Field label="아이 이름">{application.childName}</Field>
               <Field label="생년월일">{application.childBirthDate ? formatKstDate(application.childBirthDate) : "-"}</Field>
               <Field label="성별">{application.childGender ? APPLICATION_GENDER_LABEL[application.childGender] : "-"}</Field>
-              <Field label="보호자 이름">{application.guardianName}</Field>
+              <Field label="보호자 이름">{guardianName}</Field>
               <Field label="보호자 연락처">
-                {application.guardianPhone ? (
-                  <a className="hover:underline" href={toTelHref(application.guardianPhone)}>
-                    {application.guardianPhone}
+                {guardianPhone ? (
+                  <a className="hover:underline" href={toTelHref(guardianPhone)}>
+                    {guardianPhone}
                   </a>
                 ) : (
                   "-"
                 )}
               </Field>
               <Field label="아이와의 관계">
-                {application.guardianRelationship ? GUARDIAN_RELATIONSHIP_LABEL[application.guardianRelationship] : "-"}
+                {guardianRelationship ? GUARDIAN_RELATIONSHIP_LABEL[guardianRelationship] : "-"}
               </Field>
               <div className="min-w-0 sm:col-span-2">
                 <dt className="text-sm text-slate-500">요청사항</dt>
@@ -254,7 +258,12 @@ export default async function ReservationApplicationDetailPage({ params }: { par
                 취소되었거나 종료된 클래스라 예약으로 확정할 수 없습니다. 신청을 반려해주세요.
               </WarningBanner>
             ) : null}
-            {canConfirm ? (
+            {isSubmissionApplication && application.submission ? (
+              <div className="space-y-2" data-testid="submission-application-finance-link">
+                <p className="text-sm text-slate-600">보호자 {application.submission.guardianName ?? "파기됨"} · 신고 입금자 {application.submission.declaredPayerName ?? "파기됨"}의 입금과 선택 확정은 가족 신청 단위에서 처리합니다.</p>
+                <Link className="text-sm underline" href={`/reservation-applications/submissions/${application.submission.id}`}>가족 신청의 입금·확정 내역 보기</Link>
+              </div>
+            ) : canConfirm ? (
               <ApplicationConfirmForm
                 applicationId={application.id}
                 childOptions={childOptions}

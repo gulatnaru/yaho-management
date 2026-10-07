@@ -15,12 +15,14 @@ import {
   withPreviewDatabaseLock,
 } from "@/lib/e2e/preview-runner";
 import { PreviewE2eSafetyError } from "@/lib/e2e/preview-safety";
+import { encodeSignedPreviewRun, signPreviewRun } from "@/lib/e2e/phase20-lease";
 import {
   classifyPreviewCleanupError,
   cleanupPreviewRun,
   runWithPreviewCleanup,
   type PreviewCleanupClient,
 } from "@/lib/e2e/preview-cleanup";
+import { cleanupPhase20PreviewRun } from "@/lib/e2e/phase20-cleanup";
 
 let activeRunId: string | undefined;
 
@@ -109,7 +111,17 @@ async function main(): Promise<void> {
         const proofPath = path.join(proofDirectory, "runner-proof");
         const proof = randomUUID();
         writeFileSync(proofPath, proof, { encoding: "utf8", mode: 0o600 });
-        return runWithPreviewCleanup({
+        const issuedAt = Date.now();
+        const signedRun = encodeSignedPreviewRun({
+          runId: configuration.runId,
+          deploymentSha: configuration.deploymentSha,
+          issuedAt,
+          signature: signPreviewRun(configuration.runId, configuration.deploymentSha, issuedAt, configuration.handshakeSecret),
+        });
+        let cleanupSucceeded = false;
+        return databaseClient.previewE2eRunLease.create({
+          data: { runId: configuration.runId, deploymentSha: configuration.deploymentSha, expiresAt: new Date(issuedAt + 24 * 60 * 1000) },
+        }).then(async () => runWithPreviewCleanup({
           runId: configuration.runId,
           run: async () => {
             try {
@@ -121,6 +133,7 @@ async function main(): Promise<void> {
                   YAHO_E2E_RUN_ID: configuration.runId,
                   PREVIEW_E2E_RUNNER_PROOF_PATH: proofPath,
                   PREVIEW_E2E_RUNNER_PROOF: proof,
+                  PREVIEW_E2E_PHASE20_SIGNED_RUN: signedRun,
                 },
                 (process) => {
                   child = process;
@@ -132,10 +145,30 @@ async function main(): Promise<void> {
               throw error;
             }
           },
-          cleanup: () => cleanupPreviewRun(databaseClient as unknown as PreviewCleanupClient, configuration.runId),
+          cleanup: async () => {
+            let phase20Error: unknown;
+            try {
+              const phase20 = await cleanupPhase20PreviewRun(databaseClient, configuration.runId);
+              if (phase20.residualGroups !== 0) throw new Error("Phase20 synthetic cleanup left group rows");
+            } catch (error) {
+              // Always attempt marker-root cleanup as well: an interrupted
+              // Phase 20 browser fixture may already have created classes,
+              // children or reservations before the dependent cleanup fails.
+              phase20Error = error;
+            }
+            const legacy = await cleanupPreviewRun(databaseClient as unknown as PreviewCleanupClient, configuration.runId);
+            if (phase20Error) throw phase20Error;
+            cleanupSucceeded = true;
+            return legacy;
+          },
           onCleanupFailure: ({ code, report }) => {
             console.error(`[preview-e2e] cleanup failed (${code}) for synthetic run ${report.runId}`);
           },
+        })).finally(async () => {
+          // A failed/interrupted cleanup keeps the narrow lease ownership
+          // proof for a guarded recovery; only a fully successful two-phase
+          // cleanup releases the lease row.
+          if (cleanupSucceeded) await databaseClient.previewE2eRunLease.deleteMany({ where: { runId: configuration.runId } });
         });
       },
     });
