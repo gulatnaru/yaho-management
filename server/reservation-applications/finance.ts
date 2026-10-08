@@ -302,9 +302,12 @@ export async function confirmApplicationSubmissionCore(
       .map((application) => {
         if (!application.childName || !application.childBirthDate || !application.childGender) throw new ApplicationNotPendingError();
         return newChildIdentityLockKey({ name: application.childName, birthDate: application.childBirthDate, guardianName, guardianPhone });
-      }))].sort();
+    }))].sort();
     for (const identity of newIdentityLocks) {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity}, 0::bigint))`;
+      await tx.$queryRaw<Array<{ locked: number }>>`
+        SELECT 1 AS "locked"
+        FROM pg_advisory_xact_lock(hashtextextended(${identity}, 0::bigint))
+      `;
     }
 
     const reservationIds: string[] = [];

@@ -55,6 +55,7 @@ describe("preventResubmitAfterSuccess", () => {
 describe("public application form wiring", () => {
   const form = read("../../../app/(public)/apply/[token]/_components/reservation-application-form.tsx");
   const actions = read("../../../app/(public)/apply/[token]/actions.ts");
+  const groupForm = read("../../../app/(public)/apply/group/[token]/group-application-form.tsx");
 
   it("opens the completion page with a full document navigation, never a client transition", () => {
     expect(form).toMatch(/useEffect\(\(\) => \{\s*if \(submitted\) openApplicationCompletePage\(\);\s*\}, \[submitted\]\);/);
@@ -74,5 +75,11 @@ describe("public application form wiring", () => {
     expect(actions).not.toContain("next/navigation");
     expect(actions).not.toMatch(/^\s*(return\s+)?redirect\(/m);
     expect(actions).toContain("return { submitted: true };");
+  });
+
+  it("passes the group Server Action directly to useActionState while retaining its pending and success submit guard", () => {
+    expect(groupForm).toContain("useActionState(action, {})");
+    expect(groupForm).not.toContain("preventResubmitAfterSuccess");
+    expect(groupForm).toContain("disabled={pending || state.submitted}");
   });
 });

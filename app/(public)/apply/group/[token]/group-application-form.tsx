@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,7 +8,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
 import { APPLICATION_REQUEST_NOTE_GUIDE, APPLICATION_REQUEST_NOTE_MAX_LENGTH } from "@/lib/reservation-applications/constants";
-import { openApplicationCompletePage, preventResubmitAfterSuccess } from "@/lib/reservation-applications/complete-navigation";
+import { openApplicationCompletePage } from "@/lib/reservation-applications/complete-navigation";
 import type { GroupSubmissionState } from "./actions";
 
 type Child = { classScheduleId: string; requestedChildId?: string; childName: string; childBirthDate: string; childGender: string; requestNote: string; programTerms: boolean; privacyConsent: boolean; legalGuardianConfirmation: boolean; refundTerms: boolean; photoShareConsent: boolean; photoMarketingConsent: boolean };
@@ -17,8 +17,7 @@ type RepeatProfile = { guardian: { guardianName: string; guardianPhone: string; 
 const blankChild = (classScheduleId = ""): Child => ({ classScheduleId, childName: "", childBirthDate: "", childGender: "UNSPECIFIED", requestNote: "", programTerms: false, privacyConsent: false, legalGuardianConfirmation: false, refundTerms: false, photoShareConsent: false, photoMarketingConsent: false });
 
 export function GroupApplicationForm({ action, classes }: { action: (state: GroupSubmissionState, form: FormData) => Promise<GroupSubmissionState>; classes: Array<{ id: string; label: string }> }) {
-  const guarded = useMemo(() => preventResubmitAfterSuccess(action), [action]);
-  const [state, formAction, pending] = useActionState(guarded, {});
+  const [state, formAction, pending] = useActionState(action, {});
   const [guardian, setGuardian] = useState({ guardianName: "", guardianPhone: "", guardianRelationship: "MOTHER", declaredPayerName: "" });
   const [children, setChildren] = useState<Child[]>([blankChild(classes[0]?.id)]);
   const [repeat, setRepeat] = useState<RepeatProfile>({ guardian: null, children: [] });

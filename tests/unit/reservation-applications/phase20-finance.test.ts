@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { ApplicationReturnAmountExceededError, hasBoundOverbookingConfirmation, newChildIdentityLockKey, recordApplicationReturnCore, submissionSelectionFingerprint } from "@/server/reservation-applications/finance";
 
@@ -80,6 +82,12 @@ describe("Phase 20 new-child advisory identity key", () => {
     const value = newChildIdentityLockKey(base);
     expect(value).not.toContain("\u0000");
     expect(JSON.parse(value)).toEqual(["phase20-new-child-v1", "아이", "2020-01-01T00:00:00.000Z", "보호자", "010-0000-0000"]);
+  });
+
+  it("uses a scalar advisory-lock query so Prisma never deserializes PostgreSQL void", () => {
+    const financeSource = readFileSync(fileURLToPath(new URL("../../../server/reservation-applications/finance.ts", import.meta.url)), "utf8");
+
+    expect(financeSource).toMatch(/SELECT 1 AS "locked"\s+FROM pg_advisory_xact_lock\(hashtextextended\(/);
   });
 });
 
