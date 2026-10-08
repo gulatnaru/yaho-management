@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { phase20SyntheticMarker, registerPhase20OwnedChildren } from "@/lib/e2e/phase20-cleanup";
 import { parseAndVerifySignedPreviewRun } from "@/lib/e2e/phase20-lease";
 import { hashApplicationCapabilityToken } from "@/lib/reservation-applications/token";
+import { APPLICATION_CLOSED_MESSAGE } from "@/lib/reservation-applications/constants";
 import { revokeApplicationDeviceCore } from "@/server/reservation-applications/devices";
 import { createApplicationGroupCore, issueApplicationGroupLinkCore } from "@/server/reservation-applications/groups";
 import { purgeExpiredPersonalDataCore } from "@/server/reservation-applications/retention";
@@ -14,6 +15,28 @@ function pastKstDateTimeLocal() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(Date.now() - 60_000));
   const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
   return `${field("year")}-${field("month")}-${field("day")}T${field("hour")}:${field("minute")}`;
+}
+
+async function expectClosedApplicationNotice(page: Page) { await expect(page.getByTestId("application-closed")).toHaveText(APPLICATION_CLOSED_MESSAGE); }
+
+async function submitAndExpectPublicCompletion(page: Page) {
+  const statuses: number[] = [];
+  const record = (response: { status(): number }) => statuses.push(response.status());
+  page.on("response", record);
+  try {
+    const form = page.getByRole("button", { name: "신청하기" }).locator("xpath=ancestor::form");
+    await form.getByRole("button", { name: "신청하기" }).click();
+    const heading = page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true });
+    try {
+      await heading.waitFor({ state: "visible", timeout: 15_000 });
+    } catch {
+      if (statuses.some((status) => status >= 500)) throw new Error("P20_PUBLIC_COMPLETION_ROUTE_5XX");
+      if (await heading.count() > 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
+      if (await form.getByRole("alert").count() > 0) throw new Error("P20_PUBLIC_COMPLETION_ACTION_ALERT");
+      throw new Error("P20_PUBLIC_COMPLETION_TIMEOUT");
+    }
+    if (await heading.count() !== 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
+  } finally { page.off("response", record); }
 }
 
 async function loginAsAdmin(page: Page) {
@@ -56,8 +79,7 @@ async function submitNewGuardian(page: Page, input: { path: string; guardian: st
   const child = page.getByRole("group", { name: "아이 1" });
   await child.getByLabel("아이 1 클래스").selectOption(input.classId); await child.getByLabel("아이 이름").fill(input.child); await child.getByLabel("생년월일").fill("2020-01-01");
   if (input.requestNote) await child.getByLabel("요청사항").fill(input.requestNote);
-  await acceptConsents(page); await page.getByRole("button", { name: "신청하기" }).click();
-  await expect(page.getByRole("heading", { name: "신청이 접수되었습니다" })).toBeVisible();
+  await acceptConsents(page); await submitAndExpectPublicCompletion(page);
 }
 
 async function issueCompanionUrl(page: Page) {
@@ -71,7 +93,7 @@ async function issueCompanionUrl(page: Page) {
 test.describe("Phase 20 companion and repeat privacy boundary", () => {
   test("E. rejects an unknown companion invitation", async ({ page }) => {
     await page.goto("/apply/companion/invalid-phase20-capability");
-    expect(await page.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+    await expectClosedApplicationNotice(page);
   });
 
   test("F. returns an empty device-scoped repeat DTO without a device cookie", async ({ request }) => {
@@ -82,7 +104,7 @@ test.describe("Phase 20 companion and repeat privacy boundary", () => {
 
   test("G. keeps invalid invite navigation closed after a reload", async ({ page }) => {
     await page.goto("/apply/companion/invalid-phase20-capability"); await page.reload();
-    expect(await page.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+    await expectClosedApplicationNotice(page);
   });
 
   test("H. has no publicly addressable child repeat selector", async ({ page }) => {
@@ -135,10 +157,10 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
     const expiringInvite = await prisma.companionInvite.findFirstOrThrow({ where: { issuerSubmissionId: initialSubmission.id, groupId: initialFixture.groupId }, orderBy: { createdAt: "desc" }, select: { id: true } });
     await prisma.companionInvite.update({ where: { id: expiringInvite.id }, data: { expiresAt: new Date(Date.now() - 60_000) } });
     const expiredContext = await isolatedPublicContext(browser); contexts.push(expiredContext); const expiredPage = await expiredContext.newPage(); await expiredPage.goto(expiredInviteUrl);
-    expect(await expiredPage.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+    await expectClosedApplicationNotice(expiredPage);
     const revokedInviteUrl = await issueCompanionUrl(page); await page.getByRole("button", { name: "초대 취소" }).click();
     const revokedContext = await isolatedPublicContext(browser); contexts.push(revokedContext); const revokedPage = await revokedContext.newPage(); await revokedPage.goto(revokedInviteUrl);
-    expect(await revokedPage.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+    await expectClosedApplicationNotice(revokedPage);
     const revokedFixture = await createFixture(prisma, { adminId: admin.id, runId, marker, suffix: "pvv", offsetDays: 20 });
     const revokeContext = await isolatedPublicContext(browser); contexts.push(revokeContext); const revokePage = await revokeContext.newPage();
     await submitNewGuardian(revokePage, { path: `/apply/group/${revokedFixture.token}`, guardian: `${marker}pvrg`, payer: `${marker}pvrp`, child: `${marker}pvrc`, classId: revokedFixture.scheduleId });
@@ -166,7 +188,7 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
     await page.goto(`/apply/group/${repeatFixture.token}`); await expect(page.getByLabel("아이 1 기존 아이")).toBeVisible();
     await page.getByLabel("아이 1 기존 아이").selectOption(confirmedInitial.childId); await page.getByLabel("입금자명").fill(payer); await page.getByRole("button", { name: "신청하기" }).click(); await expect(page.getByRole("alert")).toBeVisible();
     expect(await prisma.reservationApplication.count({ where: { submission: { groupId: repeatFixture.groupId } } })).toBe(0);
-    await acceptConsents(page); await page.getByRole("button", { name: "신청하기" }).click(); await expect(page.getByRole("heading", { name: "신청이 접수되었습니다" })).toBeVisible();
+    await acceptConsents(page); await submitAndExpectPublicCompletion(page);
     const rotatedCookie = (await page.context().cookies()).find((cookie) => cookie.name === "yaho_application_device");
     if (!rotatedCookie) throw new Error("Phase20 rotated device cookie was not issued");
     const repeatSubmission = await prisma.reservationApplicationSubmission.findFirstOrThrow({ where: { groupId: repeatFixture.groupId }, select: { id: true, applications: { select: { id: true } } } });

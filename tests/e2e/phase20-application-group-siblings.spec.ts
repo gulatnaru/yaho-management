@@ -2,12 +2,33 @@ import { expect, test, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { formatKstDateTime } from "@/lib/classes/datetime";
 import { phase20SyntheticMarker } from "@/lib/e2e/phase20-cleanup";
+import { APPLICATION_CLOSED_MESSAGE } from "@/lib/reservation-applications/constants";
 
 const SYNTHETIC_SETTINGS = { bankName: "테스트은행", accountNumber: "000000", accountHolder: "테스트", blogUrl: "https://example.test/blog", instagramUrl: "https://example.test/instagram", kakaoChannelUrl: "https://example.test/kakao" };
 type OwnedSchedule = { id: string; startsAt: Date; applicationPrice: number; programName: string };
 
 function sameIds(left: readonly string[], right: readonly string[]) { return left.length === right.length && [...left].sort().every((id, index) => id === [...right].sort()[index]); }
 function hasAllIds(actual: readonly string[], expected: readonly string[]) { return expected.every((id) => actual.includes(id)); }
+async function expectClosedApplicationNotice(page: Page) { await expect(page.getByTestId("application-closed")).toHaveText(APPLICATION_CLOSED_MESSAGE); }
+async function submitAndExpectPublicCompletion(page: Page) {
+  const statuses: number[] = [];
+  const record = (response: { status(): number }) => statuses.push(response.status());
+  page.on("response", record);
+  try {
+    const form = page.getByRole("button", { name: "신청하기" }).locator("xpath=ancestor::form");
+    await form.getByRole("button", { name: "신청하기" }).click();
+    const heading = page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true });
+    try {
+      await heading.waitFor({ state: "visible", timeout: 15_000 });
+    } catch {
+      if (statuses.some((status) => status >= 500)) throw new Error("P20_PUBLIC_COMPLETION_ROUTE_5XX");
+      if (await heading.count() > 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
+      if (await form.getByRole("alert").count() > 0) throw new Error("P20_PUBLIC_COMPLETION_ACTION_ALERT");
+      throw new Error("P20_PUBLIC_COMPLETION_TIMEOUT");
+    }
+    if (await heading.count() !== 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
+  } finally { page.off("response", record); }
+}
 function createLabel(schedule: OwnedSchedule) { return `${schedule.programName} · ${formatKstDateTime(schedule.startsAt)} · ${schedule.applicationPrice.toLocaleString("ko-KR")}원`; }
 function editLabel(schedule: OwnedSchedule) { return `${schedule.programName} · ${formatKstDateTime(schedule.startsAt)} · ${schedule.applicationPrice.toLocaleString("ko-KR")}원`; }
 function pastKstDateTimeLocal() { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(Date.now() - 60_000)); const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value; return `${field("year")}-${field("month")}-${field("day")}T${field("hour")}:${field("minute")}`; }
@@ -52,7 +73,7 @@ async function fillPublicSiblingSubmission(page: Page, input: { guardian: string
 test.describe("Phase 20 group sibling boundary", () => {
   test("A. rejects an unknown group capability", async ({ page }) => {
     await page.goto("/apply/group/invalid-phase20-capability");
-    expect(await page.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+    await expectClosedApplicationNotice(page);
   });
 
   test("B. does not reveal a completion guide without its short capability", async ({ page }) => {
@@ -100,13 +121,13 @@ test.describe("Phase 20 group sibling boundary", () => {
       expect(await prisma.reservationApplication.count({ where: { submission: { groupId: createdGroupId } } })).toBe(0); await stalePage.close();
 
       await page.getByRole("button", { name: "접수 중지" }).click(); await expect(page.getByText("중지된 그룹입니다. 새 링크를 발급하면 다시 접수합니다.")).toBeVisible();
-      await page.goto(oldGroupUrl); expect(await page.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+      await page.goto(oldGroupUrl); await expectClosedApplicationNotice(page);
       await page.goto(`/reservation-applications/groups/${createdGroupId}`); await page.getByRole("button", { name: "접수 재개·새 링크 발급" }).click();
       const newGroupUrl = await page.getByLabel("신청 그룹 링크").inputValue();
-      await page.goto(oldGroupUrl); expect(await page.getByText("현재 신청을 받을 수 없습니다.").count().then(Boolean)).toBe(true);
+      await page.goto(oldGroupUrl); await expectClosedApplicationNotice(page);
 
       await page.goto(newGroupUrl); await fillPublicSiblingSubmission(page, { guardian, payer, firstChild, secondChild, firstClassId: first!.id, secondClassId: second!.id });
-      await page.getByRole("button", { name: "신청하기" }).click(); await expect(page.getByRole("heading", { name: "신청이 접수되었습니다" })).toBeVisible();
+      await submitAndExpectPublicCompletion(page);
       const submission = await prisma.reservationApplicationSubmission.findFirstOrThrow({ where: { groupId: createdGroupId }, select: { id: true, applications: { select: { id: true, classScheduleId: true, quotedAmount: true } } } });
       const submittedQuotes = new Map(submission.applications.map((application) => [application.classScheduleId, application.quotedAmount]));
       expect(submission.applications).toHaveLength(2); expect(submittedQuotes.get(first!.id) === 10_000 && submittedQuotes.get(second!.id) === 12_000).toBe(true);

@@ -213,10 +213,30 @@ export async function submitInvalidLoginSmoke(
   await loginForm.getByRole("button", { name: "로그인" }).click();
 
   const credentialAlert = loginForm.getByRole("alert").filter({ hasText: EXPECTED_ERROR });
-  await credentialAlert.waitFor({
-    state: "visible",
-    timeout: options.credentialAlertTimeoutMs ?? 15_000,
-  });
+  try {
+    await credentialAlert.waitFor({
+      state: "visible",
+      timeout: options.credentialAlertTimeoutMs ?? 15_000,
+    });
+  } catch {
+    // Never pass Playwright's page snapshot or an Auth.js cause through the
+    // release gate. These fixed outcomes retain the useful failure boundary.
+    const bodyText = await page.locator("body").innerText();
+    const currentUrl = new URL(page.url());
+    if (responseStatuses.some((status) => status >= 500)) {
+      throw new ProductionSmokeError("LOGIN_SUBMIT_5XX");
+    }
+    if (/prisma|callbackrouteerror|column .* does not exist|database connection|query engine/i.test(bodyText)) {
+      throw new ProductionSmokeError("INFRASTRUCTURE_ERROR_EXPOSED");
+    }
+    if (currentUrl.pathname.startsWith("/dashboard")) {
+      throw new ProductionSmokeError("INVALID_CREDENTIAL_AUTHENTICATED");
+    }
+    if (await credentialAlert.count() > 1) {
+      throw new ProductionSmokeError("LOGIN_CREDENTIAL_ALERT_AMBIGUOUS");
+    }
+    throw new ProductionSmokeError("EXPECTED_CREDENTIAL_FAILURE_NOT_OBSERVED");
+  }
   const bodyText = await page.locator("body").innerText();
   const currentUrl = new URL(page.url());
 

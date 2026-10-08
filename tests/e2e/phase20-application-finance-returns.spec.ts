@@ -9,6 +9,28 @@ if (!ADMIN_EMAIL || !ADMIN_PASSWORD) throw new Error("ADMIN_EMAIL/ADMIN_PASSWORD
 
 type Fixture = { groupId: string; token: string; marker: string; prices: [number, number] };
 
+async function submitAndExpectPublicCompletion(page: Page) {
+  const statuses: number[] = [];
+  const record = (response: { status(): number }) => statuses.push(response.status());
+  page.on("response", record);
+  try {
+    const form = page.getByRole("button", { name: "신청하기" }).locator("xpath=ancestor::form");
+    await form.getByRole("button", { name: "신청하기" }).click();
+    const heading = page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true });
+    try {
+      await heading.waitFor({ state: "visible", timeout: 15_000 });
+    } catch {
+      if (statuses.some((status) => status >= 500)) throw new Error("P20_PUBLIC_COMPLETION_ROUTE_5XX");
+      if (await heading.count() > 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
+      if (await form.getByRole("alert").count() > 0) throw new Error("P20_PUBLIC_COMPLETION_ACTION_ALERT");
+      throw new Error("P20_PUBLIC_COMPLETION_TIMEOUT");
+    }
+    if (await heading.count() !== 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
+  } finally {
+    page.off("response", record);
+  }
+}
+
 function pastKstDateTimeLocal(): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(Date.now() - 60_000));
   const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
@@ -61,8 +83,7 @@ async function submitPublicFlow(page: Page, fixture: Fixture) {
   await secondChild.getByLabel("아이 2 클래스").selectOption({ index: 1 });
   const consents = page.locator('input[type="checkbox"]');
   for (let index = 0; index < await consents.count(); index += 1) await consents.nth(index).check();
-  await page.getByRole("button", { name: "신청하기" }).click();
-  await expect(page.getByRole("heading", { name: "신청이 접수되었습니다" })).toBeVisible();
+  await submitAndExpectPublicCompletion(page);
 }
 
 test.describe("Phase 20 finance and return browser flow", () => {
