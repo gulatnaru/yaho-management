@@ -9,7 +9,6 @@ import {
   assertPreviewDatabasePreflight,
   assertDeploymentMatchesRepository,
   assertPreviewIdentityResponse,
-  PREVIEW_E2E_TEST_FILES,
   playwrightCliPath,
   readPreviewE2eConfiguration,
   withPreviewDatabaseLock,
@@ -23,6 +22,7 @@ import {
 } from "@/lib/e2e/preview-cleanup";
 import { cleanupPhase20PreviewRun } from "@/lib/e2e/phase20-cleanup";
 import { previewE2eSafeSummaryPath, writePreviewE2eSafeSummary } from "@/lib/e2e/preview-run-summary";
+import { previewPlaywrightArguments } from "@/lib/e2e/preview-focus";
 
 let activeSummaryPath: string | undefined;
 let activeSummary: Parameters<typeof writePreviewE2eSafeSummary>[1] | undefined;
@@ -76,7 +76,7 @@ function runPlaywright(
   const executable = process.execPath;
   const cliPath = playwrightCliPath();
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, [cliPath, "test", ...PREVIEW_E2E_TEST_FILES], {
+    const child = spawn(executable, [cliPath, ...previewPlaywrightArguments(environment.PREVIEW_E2E_FOCUS)], {
       env: environment,
       // Playwright can include fixture values in failure output. Drain it only
       // into process memory; the durable fixed-field summary is the observer.
@@ -100,6 +100,7 @@ function runPlaywright(
 
 async function main(): Promise<void> {
   loadEnvConfig(process.cwd());
+  previewPlaywrightArguments(process.env.PREVIEW_E2E_FOCUS);
   const configuration = readPreviewE2eConfiguration();
   activeSummaryPath = previewE2eSafeSummaryPath(configuration.runId);
   // This artifact exists before the child inherits stdout, so a lost terminal

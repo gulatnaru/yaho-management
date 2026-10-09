@@ -3,6 +3,10 @@ import { PrismaClient } from "@prisma/client";
 import { formatKstDateTime } from "@/lib/classes/datetime";
 import { phase20SyntheticMarker } from "@/lib/e2e/phase20-cleanup";
 import { APPLICATION_CLOSED_MESSAGE } from "@/lib/reservation-applications/constants";
+import { submitAndExpectPublicCompletion } from "./support/public-completion";
+import { confirmSelectedApplications } from "./support/phase20-action";
+import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun } from "@/lib/e2e/phase20-lease";
+import { assertPreviewE2eRunnerProof } from "@/lib/e2e/preview-runner";
 
 const SYNTHETIC_SETTINGS = { bankName: "테스트은행", accountNumber: "000000", accountHolder: "테스트", blogUrl: "https://example.test/blog", instagramUrl: "https://example.test/instagram", kakaoChannelUrl: "https://example.test/kakao" };
 type OwnedSchedule = { id: string; startsAt: Date; applicationPrice: number; programName: string };
@@ -10,25 +14,6 @@ type OwnedSchedule = { id: string; startsAt: Date; applicationPrice: number; pro
 function sameIds(left: readonly string[], right: readonly string[]) { return left.length === right.length && [...left].sort().every((id, index) => id === [...right].sort()[index]); }
 function hasAllIds(actual: readonly string[], expected: readonly string[]) { return expected.every((id) => actual.includes(id)); }
 async function expectClosedApplicationNotice(page: Page) { await expect(page.getByTestId("application-closed")).toHaveText(APPLICATION_CLOSED_MESSAGE); }
-async function submitAndExpectPublicCompletion(page: Page) {
-  const statuses: number[] = [];
-  const record = (response: { status(): number }) => statuses.push(response.status());
-  page.on("response", record);
-  try {
-    const form = page.getByRole("button", { name: "신청하기" }).locator("xpath=ancestor::form");
-    await form.getByRole("button", { name: "신청하기" }).click();
-    const heading = page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true });
-    try {
-      await heading.waitFor({ state: "visible", timeout: 15_000 });
-    } catch {
-      if (statuses.some((status) => status >= 500)) throw new Error("P20_PUBLIC_COMPLETION_ROUTE_5XX");
-      if (await heading.count() > 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
-      if (await form.getByRole("alert").count() > 0) throw new Error("P20_PUBLIC_COMPLETION_ACTION_ALERT");
-      throw new Error("P20_PUBLIC_COMPLETION_TIMEOUT");
-    }
-    if (await heading.count() !== 1) throw new Error("P20_PUBLIC_COMPLETION_STRICT_LOCATOR");
-  } finally { page.off("response", record); }
-}
 function createLabel(schedule: OwnedSchedule) { return `${schedule.programName} · ${formatKstDateTime(schedule.startsAt)} · ${schedule.applicationPrice.toLocaleString("ko-KR")}원`; }
 function editLabel(schedule: OwnedSchedule) { return `${schedule.programName} · ${formatKstDateTime(schedule.startsAt)} · ${schedule.applicationPrice.toLocaleString("ko-KR")}원`; }
 function pastKstDateTimeLocal() { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(Date.now() - 60_000)); const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value; return `${field("year")}-${field("month")}-${field("day")}T${field("hour")}:${field("minute")}`; }
@@ -128,6 +113,11 @@ test.describe("Phase 20 group sibling boundary", () => {
 
       await page.goto(newGroupUrl); await fillPublicSiblingSubmission(page, { guardian, payer, firstChild, secondChild, firstClassId: first!.id, secondClassId: second!.id });
       await submitAndExpectPublicCompletion(page);
+      if (process.env.PREVIEW_E2E_FOCUS === "MINIMAL") {
+        await expect(page.getByText("22,000원", { exact: true })).toBeVisible();
+        await expect(page.getByText(SYNTHETIC_SETTINGS.bankName, { exact: true })).toBeVisible();
+        return;
+      }
       const submission = await prisma.reservationApplicationSubmission.findFirstOrThrow({ where: { groupId: createdGroupId }, select: { id: true, applications: { select: { id: true, classScheduleId: true, quotedAmount: true } } } });
       const submittedQuotes = new Map(submission.applications.map((application) => [application.classScheduleId, application.quotedAmount]));
       expect(submission.applications).toHaveLength(2); expect(submittedQuotes.get(first!.id) === 10_000 && submittedQuotes.get(second!.id) === 12_000).toBe(true);
@@ -138,7 +128,18 @@ test.describe("Phase 20 group sibling boundary", () => {
       for (const checkbox of await page.getByLabel("확정", { exact: true }).all()) await checkbox.check();
       const firstCandidate = page.getByLabel(`${firstChild} 확정 대상`); const secondCandidate = page.getByLabel(`${secondChild} 확정 대상`);
       expect((await firstCandidate.inputValue() === "NEW") && (await secondCandidate.inputValue() === "NEW")).toBe(true);
-      await page.getByRole("button", { name: "선택한 아이 일괄 확정" }).click(); await expect(page.getByRole("status")).toHaveText("선택한 예약을 확정했습니다.");
+      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: submission.applications.map((application) => application.id), childNames: [firstChild, secondChild], ownedCounts: async () => {
+        assertPreviewE2eRunnerProof({ proofPath: process.env.PREVIEW_E2E_RUNNER_PROOF_PATH, proof: process.env.PREVIEW_E2E_RUNNER_PROOF });
+        const environment = { ...process.env, VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: process.env.PREVIEW_E2E_DEPLOYMENT_SHA };
+        const signed = parseAndVerifySignedPreviewRun(process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN ?? null, environment);
+        if (!await hasActivePhase20PreviewLease(prisma, { signed, syntheticRunId: runId, now: new Date(), environment })) throw new Error("P20_ACTION_OWNED_AUDIT_GUARD_DENIED");
+        return prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+          const owned = await tx.reservationApplicationSubmission.count({ where: { id: submission.id, groupId: createdGroupId, group: { syntheticRunId: runId } } });
+          if (owned !== 1) throw new Error("P20_ACTION_OWNED_AUDIT_SCOPE_DENIED");
+          return { reservations: await tx.reservation.count({ where: { applications: { some: { submissionId: submission.id } } } }), mappings: await tx.reservationApplicationPaymentMapping.count({ where: { application: { submissionId: submission.id } } }) };
+        }, { maxWait: 10_000, timeout: 30_000 });
+      } });
 
       const confirmed = await prisma.reservationApplication.findMany({
         where: { id: { in: submission.applications.map((application) => application.id) } },

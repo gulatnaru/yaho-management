@@ -2,6 +2,7 @@ import { loadEnvConfig } from "@next/env";
 import { defineConfig, devices } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./tests/e2e/support/db-safety";
 import { assertLocalE2eBaseUrl } from "./lib/e2e/local-origin-safety";
+import { previewPlaywrightArguments } from "./lib/e2e/preview-focus";
 import {
   assertPreviewE2eRunnerProof,
   PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS,
@@ -17,8 +18,10 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 const previewE2e = process.env.PLAYWRIGHT_PREVIEW_E2E === "1";
+if (!previewE2e && process.env.PREVIEW_E2E_FOCUS !== undefined) throw new Error("P20_FOCUS_REQUIRES_PREVIEW_RUNNER");
 let localBaseUrl: string | undefined;
 if (previewE2e) {
+  previewPlaywrightArguments(process.env.PREVIEW_E2E_FOCUS);
   // The script also performs the connected-DB, deployment and migration checks
   // before Playwright starts. This keeps direct Preview invocations fail-closed.
   readPreviewE2eConfiguration();
@@ -36,6 +39,7 @@ if (previewE2e) {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  reporter: previewE2e ? [["./tests/e2e/support/preview-safe-reporter.ts"]] : undefined,
   testMatch: previewE2e
     ? PREVIEW_E2E_TEST_FILES.map((file) => new RegExp(`${escapeRegExp(file).replaceAll("/", "[\\\\/]")}$`))
     : undefined,

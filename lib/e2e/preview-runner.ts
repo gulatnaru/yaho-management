@@ -26,8 +26,10 @@ export const PREVIEW_E2E_TEST_FILES = [
 ] as const;
 
 export const PREVIEW_E2E_LOCK_KEY = PHASE20_PREVIEW_LOCK_KEY;
-// Existing approved specs (510s), three 180s Phase 20 browser specs and one
-// 180s PostgreSQL race spec fit inside this 22-minute Playwright budget.
+// Hard whole-run limit, not a promise that every per-case maximum fits.
+// Phase20 browser positives are bounded at 180s/240s/420s; each PostgreSQL
+// race case remains bounded at 180s. The unchanged global deadline may
+// interrupt a worst-case suite and still leaves cleanup within the 25m lock.
 export const PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS = 22 * 60 * 1000;
 // The outer transaction adds two 60-second cleanup phases and one startup
 // minute. It must exceed Playwright's global timeout rather than equal it.
