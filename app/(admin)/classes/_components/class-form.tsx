@@ -34,6 +34,7 @@ export type ClassFormDefaultValues = {
   endTime: string;
   location: string;
   capacity: string;
+  applicationPrice?: string;
   teacherIds: string[];
   memo: string;
   insured?: boolean;
@@ -48,6 +49,7 @@ export interface ClassFormProps {
   programCandidates: ProgramCandidate[];
   teacherCandidates: TeacherCandidate[];
   defaultValues?: ClassFormDefaultValues;
+  allowApplicationPrice?: boolean;
 }
 
 const emptyDefaults: ClassFormDefaultValues = {
@@ -57,6 +59,7 @@ const emptyDefaults: ClassFormDefaultValues = {
   endTime: "",
   location: "",
   capacity: String(CLASS_CAPACITY_DEFAULT),
+  applicationPrice: "",
   teacherIds: [],
   memo: "",
   insured: false,
@@ -80,6 +83,7 @@ export function ClassForm({
   programCandidates,
   teacherCandidates,
   defaultValues = emptyDefaults,
+  allowApplicationPrice = false,
 }: ClassFormProps) {
   const action = mode === "edit" && classId ? updateClass.bind(null, classId) : createClass;
   const [state, formAction, pending] = useActionState(action, initialState);
@@ -214,6 +218,13 @@ export function ClassForm({
           </p>
         ) : null}
       </div>
+
+      {allowApplicationPrice ? <div className="space-y-1.5">
+        <Label htmlFor="applicationPrice">예약 신청 최종 금액</Label>
+        <Input defaultValue={state.values?.applicationPrice ?? defaultValues.applicationPrice ?? ""} id="applicationPrice" min="1" name="applicationPrice" placeholder="미설정" type="number" />
+        <p className="text-xs text-slate-500">신청 그룹에 포함하려면 운영자가 실제 금액을 직접 설정해야 합니다.</p>
+        {fieldErrors.applicationPrice ? <p className="text-sm text-red-600" role="alert">{fieldErrors.applicationPrice[0]}</p> : null}
+      </div> : null}
 
       {mode === "edit" || registrationMode === "single" ? (
         <div className="space-y-1.5">

@@ -12,7 +12,7 @@ export async function confirmApplicationDepositCore(
   input: { applicationId: string; actorUserId: string; now: Date },
 ): Promise<void> {
   const result = await client.reservationApplication.updateMany({
-    where: { id: input.applicationId, status: "SUBMITTED", depositConfirmedAt: null },
+    where: { id: input.applicationId, submissionId: null, status: "SUBMITTED", depositConfirmedAt: null },
     data: { depositConfirmedAt: input.now, depositConfirmedById: input.actorUserId },
   });
   if (result.count === 0) throw new ApplicationNotPendingError();
@@ -32,7 +32,7 @@ export async function closeReservationApplicationCore(
   },
 ): Promise<void> {
   const result = await client.reservationApplication.updateMany({
-    where: { id: input.applicationId, status: "SUBMITTED" },
+    where: { id: input.applicationId, submissionId: null, status: "SUBMITTED" },
     data: {
       status: input.status,
       resolvedAt: input.now,

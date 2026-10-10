@@ -22,7 +22,7 @@ const DEPOSIT_AT = new Date("2026-09-30T05:00:00.000Z");
 const CLASS_ENDS_AT = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
 type TxOptions = {
-  lock?: Array<{ status: string; depositConfirmedAt: Date | null }>;
+  lock?: Array<{ status: string; depositConfirmedAt: Date | null; submissionId?: string | null }>;
   photoShareConsentAgreed?: boolean;
   photoMarketingConsentAgreed?: boolean;
   currentShareAction?: "AGREED" | "REVOKED" | "DECLINED" | null;
@@ -245,6 +245,14 @@ describe("confirmReservationApplicationCore", () => {
     expect(tx.child.create).not.toHaveBeenCalled();
     expect(tx.reservation.create).not.toHaveBeenCalled();
     expect(tx.childConsent.createMany).not.toHaveBeenCalled();
+    expect(tx.reservationApplication.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("does not allow the legacy single-application confirmer to process a parent submission child", async () => {
+    const { client, tx } = createTx({ lock: [{ status: "SUBMITTED", depositConfirmedAt: DEPOSIT_AT, submissionId: "submission-1" }] });
+
+    await expect(confirmReservationApplicationCore(client, input())).rejects.toBeInstanceOf(ApplicationNotPendingError);
+    expect(tx.reservation.create).not.toHaveBeenCalled();
     expect(tx.reservationApplication.updateMany).not.toHaveBeenCalled();
   });
 

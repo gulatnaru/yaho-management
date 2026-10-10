@@ -99,6 +99,7 @@ describe("Phase 18 reservation application migration", () => {
     expect(schema).toContain("model ReservationApplication {");
     expect(schema).toContain("enum ReservationApplicationStatus {");
     expect(schema).toContain("reservationApplicationId String?");
-    expect(schema).toContain("classScheduleId String   @unique");
+    // Phase 20 keeps this unique legacy link field while allowing group-link rows to leave it null.
+    expect(schema).toContain("classScheduleId String?  @unique");
   });
 });

@@ -23,6 +23,7 @@ import {
 
 const APPLICATION_LIST_SELECT = {
   id: true,
+  submissionId: true,
   status: true,
   childName: true,
   submittedAt: true,
@@ -45,13 +46,24 @@ async function findDuplicateIdsForClasses(classScheduleIds: string[]): Promise<S
       classScheduleId: { in: uniqueIds },
       status: { in: ["SUBMITTED", "CONFIRMED"] },
       personalDataPurgedAt: null,
+      OR: [
+        { submissionId: null },
+        { submission: { is: { personalDataPurgedAt: null } } },
+      ],
     },
-    select: { id: true, classScheduleId: true, childName: true, guardianPhone: true, status: true },
+    select: {
+      id: true,
+      classScheduleId: true,
+      childName: true,
+      guardianPhone: true,
+      status: true,
+      submission: { select: { guardianPhone: true } },
+    },
   });
   return findDuplicateApplicationIds(
     related.flatMap((row) =>
-      row.childName && row.guardianPhone
-        ? [{ ...row, childName: row.childName, guardianPhone: row.guardianPhone }]
+      row.childName && (row.guardianPhone ?? row.submission?.guardianPhone)
+        ? [{ ...row, childName: row.childName, guardianPhone: row.guardianPhone ?? row.submission!.guardianPhone! }]
         : [],
     ),
   );
@@ -96,6 +108,7 @@ export async function countPendingReservationApplications(): Promise<number> {
 
 const APPLICATION_DETAIL_SELECT = {
   id: true,
+  submissionId: true,
   status: true,
   childName: true,
   childBirthDate: true,
@@ -122,6 +135,7 @@ const APPLICATION_DETAIL_SELECT = {
   depositConfirmedBy: { select: { name: true } },
   resolvedBy: { select: { name: true } },
   personalDataPurgedBy: { select: { name: true } },
+  submission: { select: { id: true, guardianName: true, guardianPhone: true, guardianRelationship: true, declaredPayerName: true } },
   child: { select: { id: true, name: true } },
   classSchedule: {
     select: {
@@ -206,8 +220,8 @@ export async function getApplicationRetention(application: {
 }
 
 export async function getApplicationLinkForClass(classScheduleId: string) {
-  return prisma.reservationApplicationLink.findUnique({
-    where: { classScheduleId },
-    select: { token: true, isActive: true, issuedAt: true, issuedBy: { select: { name: true } } },
+  return prisma.reservationApplicationLink.findFirst({
+    where: { OR: [{ classScheduleId }, { group: { classes: { some: { classScheduleId } } } }] },
+    select: { token: true, groupId: true, isActive: true, issuedAt: true, issuedBy: { select: { name: true } } },
   });
 }

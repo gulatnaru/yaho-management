@@ -48,6 +48,7 @@ export type ClassFormFieldKey =
   | "endTime"
   | "location"
   | "capacity"
+  | "applicationPrice"
   | "teacherIds"
   | "memo"
   | "insured"
@@ -66,6 +67,7 @@ export type ClassFormValues = {
   endTime?: string;
   location?: string;
   capacity?: string;
+  applicationPrice?: string;
   teacherIds?: string[];
   memo?: string;
   insured?: string;
@@ -88,6 +90,7 @@ function parseClassForm(formData: FormData) {
     endTime: formData.get("endTime"),
     location: formData.get("location"),
     capacity: formData.get("capacity") || undefined,
+    applicationPrice: formData.get("applicationPrice") || undefined,
     teacherIds: formData.getAll("teacherIds").filter((value): value is string => typeof value === "string"),
     memo: formData.get("memo") || undefined,
     insured: formData.get("insured") === "on",
@@ -126,6 +129,7 @@ function readClassFormValues(formData: FormData): ClassFormValues {
     endTime: readFormString(formData, "endTime"),
     location: readFormString(formData, "location"),
     capacity: readFormString(formData, "capacity"),
+    applicationPrice: readFormString(formData, "applicationPrice"),
     teacherIds: formData.getAll("teacherIds").filter((value): value is string => typeof value === "string"),
     memo: readFormString(formData, "memo"),
     insured: formData.get("insured") === "on" ? "on" : undefined,
@@ -149,6 +153,7 @@ function toFieldErrors(error: import("zod").ZodError<unknown>): Partial<Record<C
     "endTime",
     "location",
     "capacity",
+    "applicationPrice",
     "teacherIds",
     "memo",
     "insurer",
@@ -241,7 +246,10 @@ async function createRecurringClass(formData: FormData): Promise<ClassFormState>
 }
 
 export async function createClass(_prevState: ClassFormState, formData: FormData): Promise<ClassFormState> {
-  await requireOperationalPrincipal();
+  const principal = await requireOperationalPrincipal();
+  if (principal.role !== "ADMIN" && readFormString(formData, "applicationPrice")) {
+    return { formError: "신청 최종 금액은 관리자만 설정할 수 있습니다.", values: readClassFormValues(formData) };
+  }
 
   const registrationMode = classRegistrationModeSchema.safeParse(formData.get("registrationMode") ?? "single");
   if (!registrationMode.success) {
@@ -286,6 +294,7 @@ export async function createClass(_prevState: ClassFormState, formData: FormData
           endsAt: data.endsAt,
           location: data.location,
           capacity: data.capacity,
+          applicationPrice: principal.role === "ADMIN" ? data.applicationPrice ?? null : null,
           status: "SCHEDULED",
           memo: data.memo || null,
           insured: data.insured,
@@ -331,7 +340,10 @@ export async function updateClass(
   _prevState: ClassFormState,
   formData: FormData,
 ): Promise<ClassFormState> {
-  await requireOperationalPrincipal();
+  const principal = await requireOperationalPrincipal();
+  if (principal.role !== "ADMIN" && readFormString(formData, "applicationPrice")) {
+    return { formError: "신청 최종 금액은 관리자만 설정할 수 있습니다.", values: readClassFormValues(formData) };
+  }
 
   const current = await prisma.classSchedule.findUnique({
     where: { id },
@@ -379,6 +391,10 @@ export async function updateClass(
           endsAt: data.endsAt,
           location: data.location,
           capacity: data.capacity,
+          // Managers may edit operational class details, but never write a stale
+          // application price read before the transaction. Omitting the field lets
+          // a concurrent ADMIN price edit remain authoritative.
+          ...(principal.role === "ADMIN" ? { applicationPrice: data.applicationPrice ?? null } : {}),
           memo: data.memo || null,
           insured: data.insured,
           insurer: data.insurer || null,

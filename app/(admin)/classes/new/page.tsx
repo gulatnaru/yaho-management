@@ -4,7 +4,7 @@ import { listProgramCandidates, listTeacherCandidates } from "@/lib/classes/cand
 import { ClassForm } from "../_components/class-form";
 
 export default async function NewClassPage() {
-  await requireOperationalPrincipal();
+  const principal = await requireOperationalPrincipal();
   const [programCandidates, teacherCandidates] = await Promise.all([
     listProgramCandidates(),
     listTeacherCandidates(),
@@ -17,7 +17,7 @@ export default async function NewClassPage() {
       </Link>
 
       <h1 className="text-2xl font-bold">클래스 등록</h1>
-      <ClassForm mode="create" programCandidates={programCandidates} teacherCandidates={teacherCandidates} />
+      <ClassForm allowApplicationPrice={principal.role === "ADMIN"} mode="create" programCandidates={programCandidates} teacherCandidates={teacherCandidates} />
     </section>
   );
 }

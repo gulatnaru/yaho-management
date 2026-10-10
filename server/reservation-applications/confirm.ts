@@ -41,11 +41,11 @@ export async function confirmReservationApplicationCore(
   input: ConfirmReservationApplicationInput,
 ): Promise<{ reservationId: string; childId: string }> {
   return client.$transaction(async (tx) => {
-    const [locked] = await tx.$queryRaw<{ status: string; depositConfirmedAt: Date | null }[]>`
-      SELECT "status", "depositConfirmedAt" FROM "ReservationApplication" WHERE "id" = ${input.applicationId} FOR UPDATE
+    const [locked] = await tx.$queryRaw<{ status: string; depositConfirmedAt: Date | null; submissionId: string | null }[]>`
+      SELECT "status", "depositConfirmedAt", "submissionId" FROM "ReservationApplication" WHERE "id" = ${input.applicationId} FOR UPDATE
     `;
     if (!locked) throw new ApplicationNotFoundError();
-    if (locked.status !== "SUBMITTED") throw new ApplicationNotPendingError();
+    if (locked.submissionId != null || locked.status !== "SUBMITTED") throw new ApplicationNotPendingError();
     if (!locked.depositConfirmedAt) throw new ApplicationDepositNotConfirmedError();
 
     const application = await tx.reservationApplication.findUniqueOrThrow({
@@ -59,6 +59,7 @@ export async function confirmReservationApplicationCore(
         guardianPhone: true,
         photoShareConsentAgreed: true,
         photoMarketingConsentAgreed: true,
+        consentVersion: true,
         submittedAt: true,
       },
     });
@@ -126,6 +127,7 @@ export async function confirmReservationApplicationCore(
         recordedAt: application.submittedAt,
         recordedById: input.actorUserId,
         reservationApplicationId: input.applicationId,
+        consentVersion: application.consentVersion,
       })),
     });
 

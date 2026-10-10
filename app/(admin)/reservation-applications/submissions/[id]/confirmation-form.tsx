@@ -1,0 +1,24 @@
+"use client";
+
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { confirmApplicationSubmission } from "../../actions";
+
+type ApplicationChoice = { id: string; childName: string | null; quotedAmount: number | null; candidates: Array<{ id: string; label: string; isRequested: boolean }> };
+type ConfirmationState = { error?: string; reservationIds?: string[]; overbookingConfirmation?: { applicationId: string; classScheduleId: string; childChoice: string; selectionFingerprint: string; capacity: number; reservedCount: number; overByAfterCreate: number } };
+
+export function SubmissionConfirmationForm({ submissionId, applications }: { submissionId: string; applications: ApplicationChoice[] }) {
+  const [selected, setSelected] = useState<Record<string, boolean>>(() => Object.fromEntries(applications.map((application) => [application.id, true])));
+  const [choices, setChoices] = useState<Record<string, string>>(() => Object.fromEntries(applications.map((application) => [application.id, application.candidates.find((candidate) => candidate.isRequested)?.id ?? "NEW"])));
+  const [overbookingBindings, setOverbookingBindings] = useState<Record<string, NonNullable<ConfirmationState["overbookingConfirmation"]>>>({});
+  const [resubmitAfterWarning, setResubmitAfterWarning] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [state, action, pending] = useActionState(async (_: ConfirmationState, formData: FormData) => confirmApplicationSubmission(formData), {});
+  const payload = useMemo(() => ({ submissionId, choices: applications.filter((application) => selected[application.id]).map((application) => ({ applicationId: application.id, ...(choices[application.id] === "NEW" ? { newChild: true } : { childId: choices[application.id] }), ...(overbookingBindings[application.id] ? { confirmOverbooking: true, overbookingConfirmation: overbookingBindings[application.id] } : {}) })) }), [applications, choices, overbookingBindings, selected, submissionId]);
+  const selectionFingerprint = useMemo(() => JSON.stringify(payload.choices.map((choice) => [choice.applicationId, "newChild" in choice ? "NEW" : choice.childId]).sort(([left], [right]) => left.localeCompare(right))), [payload.choices]);
+  useEffect(() => { if (!resubmitAfterWarning) return; formRef.current?.requestSubmit(); setResubmitAfterWarning(false); }, [overbookingBindings, resubmitAfterWarning]);
+  const resetOverbookingConfirmation = () => setOverbookingBindings({});
+  const warning = state.overbookingConfirmation && state.overbookingConfirmation.selectionFingerprint === selectionFingerprint && state.overbookingConfirmation.childChoice === choices[state.overbookingConfirmation.applicationId] ? state.overbookingConfirmation : undefined;
+  return <form action={action} className="space-y-3" ref={formRef}><input name="payload" type="hidden" value={JSON.stringify(payload)} />{applications.map((application) => <div className="grid gap-2 rounded border p-3 md:grid-cols-[auto_1fr_1fr]" key={application.id}><label className="flex items-center gap-2 text-sm"><input checked={selected[application.id] ?? false} onChange={(event) => { setSelected((current) => ({ ...current, [application.id]: event.target.checked })); resetOverbookingConfirmation(); }} type="checkbox" />확정</label><span className="text-sm">{application.childName ?? "파기됨"} · {application.quotedAmount?.toLocaleString("ko-KR") ?? "-"}원</span><Select aria-label={`${application.childName ?? "아이"} 확정 대상`} disabled={!selected[application.id]} onChange={(event) => { setChoices((current) => ({ ...current, [application.id]: event.target.value })); resetOverbookingConfirmation(); }} value={choices[application.id] ?? "NEW"}><option value="NEW">새 아이로 등록</option>{application.candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}</Select></div>)}{warning ? <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm" role="alert"><p>선택한 아이의 클래스는 정원 {warning.capacity}명 중 현재 {warning.reservedCount}명이 예약되어 있습니다. 확정하면 {warning.overByAfterCreate}명 초과합니다.</p><Button disabled={pending || !selected[warning.applicationId]} onClick={() => { setOverbookingBindings((current) => ({ ...current, [warning.applicationId]: warning })); setResubmitAfterWarning(true); }} type="button">초과 예약을 확인하고 확정</Button></div> : null}{state.error ? <p className="text-sm text-red-600" role="alert">{state.error}</p> : null}{state.reservationIds ? <p className="text-sm text-emerald-700" role="status">선택한 예약을 확정했습니다.</p> : null}<Button disabled={pending || applications.every((application) => !selected[application.id])} type="submit">{pending ? "확정 중..." : "선택한 아이 일괄 확정"}</Button></form>;
+}

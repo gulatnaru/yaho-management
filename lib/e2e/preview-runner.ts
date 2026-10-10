@@ -13,15 +13,27 @@ import {
   type PrismaMigrationRow,
   type RuntimeDatabaseIdentity,
 } from "./preview-safety";
+import { PHASE20_PREVIEW_LOCK_KEY } from "./phase20-lease";
 
 export const PREVIEW_E2E_TEST_FILES = [
   "tests/e2e/auth.spec.ts",
   "tests/e2e/phase6-access.spec.ts",
   "tests/e2e/phase11-core-operations.spec.ts",
+  "tests/e2e/phase20-application-group-siblings.spec.ts",
+  "tests/e2e/phase20-application-finance-returns.spec.ts",
+  "tests/e2e/phase20-companion-repeat-privacy.spec.ts",
+  "tests/e2e/phase20-postgres-races.spec.ts",
 ] as const;
 
-export const PREVIEW_E2E_LOCK_KEY = 8_271_903_119n;
-export const PREVIEW_E2E_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
+export const PREVIEW_E2E_LOCK_KEY = PHASE20_PREVIEW_LOCK_KEY;
+// Hard whole-run limit, not a promise that every per-case maximum fits.
+// Phase20 browser positives are bounded at 180s/240s/420s; each PostgreSQL
+// race case remains bounded at 180s. The unchanged global deadline may
+// interrupt a worst-case suite and still leaves cleanup within the 25m lock.
+export const PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS = 22 * 60 * 1000;
+// The outer transaction adds two 60-second cleanup phases and one startup
+// minute. It must exceed Playwright's global timeout rather than equal it.
+export const PREVIEW_E2E_LOCK_TIMEOUT_MS = 25 * 60 * 1000;
 
 /** Node runs the Playwright CLI on every platform; this avoids Windows .cmd spawn semantics. */
 export function playwrightCliPath(workspace = process.cwd()) {

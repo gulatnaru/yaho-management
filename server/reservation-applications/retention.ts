@@ -27,8 +27,24 @@ export const PERSONAL_DATA_PURGE_TRANSACTION_OPTIONS = { maxWait: 10_000, timeou
 
 type RetentionScanClient = Pick<PrismaClient, "$queryRaw" | "reservationApplication">;
 
+/**
+ * Internal callers such as guarded Preview cleanup must never widen a purge
+ * from their own fixture IDs to the normal ADMIN-wide retention sweep.  An
+ * omitted field keeps the production ADMIN behaviour; an explicit empty list
+ * means that category has no eligible rows.
+ */
+export type PersonalDataPurgeScope = {
+  applicationIds?: readonly string[];
+  childIds?: readonly string[];
+};
+
+function normalizedScopeIds(ids: readonly string[] | undefined): string[] | undefined {
+  return ids === undefined ? undefined : [...new Set(ids)].sort();
+}
+
 export type RetentionCandidate = {
   id: string;
+  submissionId: string | null;
   status: ReservationApplicationStatus;
   childName: string | null;
   classStartsAt: Date;
@@ -70,11 +86,14 @@ export type PersonalDataPurgeResult = {
 async function findExpiredApplications(
   client: RetentionScanClient,
   now: Date,
-  input: { statuses: ReservationApplicationStatus[]; limit: number },
+  input: { statuses: ReservationApplicationStatus[]; limit: number; applicationIds?: readonly string[] },
 ): Promise<{ candidates: RetentionCandidate[]; hasMore: boolean }> {
   // 확정 신청은 여기서 다루지 않는다 — 확정 고객(아이)과 함께 5년 기준으로 파기한다.
+  const applicationIds = normalizedScopeIds(input.applicationIds);
+  if (applicationIds?.length === 0) return { candidates: [], hasMore: false };
   const applications = await client.reservationApplication.findMany({
     where: {
+      ...(applicationIds ? { id: { in: applicationIds } } : {}),
       personalDataPurgedAt: null,
       status: { in: input.statuses },
       classSchedule: {
@@ -83,6 +102,7 @@ async function findExpiredApplications(
     },
     select: {
       id: true,
+      submissionId: true,
       status: true,
       childName: true,
       classSchedule: { select: { startsAt: true } },
@@ -101,6 +121,7 @@ async function findExpiredApplications(
     if (!isRetentionExpired(retention, now)) continue;
     candidates.push({
       id: application.id,
+      submissionId: application.submissionId,
       status: application.status,
       childName: application.childName,
       classStartsAt: application.classSchedule.startsAt,
@@ -117,12 +138,12 @@ async function findExpiredApplications(
 export async function scanApplicationRetention(
   client: RetentionScanClient,
   now: Date,
-  options: { limit?: number } = {},
+  options: { limit?: number; applicationIds?: readonly string[] } = {},
 ): Promise<RetentionScan> {
   const limit = options.limit ?? APPLICATION_PURGE_BATCH_SIZE;
   // 인터랙티브 트랜잭션 안에서도 쓰이므로 순서대로 조회한다.
-  const purgeable = await findExpiredApplications(client, now, { statuses: ["REJECTED", "CANCELLED"], limit });
-  const pending = await findExpiredApplications(client, now, { statuses: ["SUBMITTED"], limit });
+  const purgeable = await findExpiredApplications(client, now, { statuses: ["REJECTED", "CANCELLED"], limit, applicationIds: options.applicationIds });
+  const pending = await findExpiredApplications(client, now, { statuses: ["SUBMITTED"], limit, applicationIds: options.applicationIds });
   return {
     purgeable: purgeable.candidates,
     expiredPending: pending.candidates,
@@ -151,11 +172,14 @@ function toExpiredChildCandidate(facts: ConfirmedCustomerFacts, now: Date): Chil
 export async function scanChildRetention(
   client: Pick<PrismaClient, "$queryRaw">,
   now: Date,
-  options: { limit?: number } = {},
+  options: { limit?: number; childIds?: readonly string[] } = {},
 ): Promise<ChildRetentionScan> {
   const limit = options.limit ?? CHILD_PURGE_BATCH_SIZE;
+  const childIds = normalizedScopeIds(options.childIds);
+  if (childIds?.length === 0) return { candidates: [], hasMore: false };
   const facts = await loadConfirmedCustomerFacts(client, {
     now,
+    childIds,
     basisBefore: retentionCandidateCutoff(now, CONFIRMED_CUSTOMER_CANDIDATE_MIN_AGE_DAYS),
     limit: limit + 1,
   });
@@ -195,6 +219,48 @@ const PURGED_APPLICATION_FIELDS = {
   resolutionNote: null,
 } as const;
 
+/** Parent PII is removed only after every child application in the submission is already purged. */
+async function purgeFullyPurgedSubmissions(tx: Prisma.TransactionClient, submissionIds: string[], now: Date) {
+  const ids = [...new Set(submissionIds)].sort();
+  if (ids.length === 0) return;
+  const fullyPurged = await tx.reservationApplicationSubmission.findMany({
+    where: { id: { in: ids }, personalDataPurgedAt: null, applications: { every: { personalDataPurgedAt: { not: null } } } },
+    select: { id: true },
+  });
+  const purgedIds = fullyPurged.map((row) => row.id);
+  if (purgedIds.length === 0) return;
+  await tx.reservationApplicationSubmission.updateMany({ where: { id: { in: purgedIds }, personalDataPurgedAt: null }, data: { guardianName: null, guardianPhone: null, guardianRelationship: null, declaredPayerName: null, personalDataPurgedAt: now } });
+  await tx.applicationDeposit.updateMany({ where: { submissionId: { in: purgedIds } }, data: { payerName: null } });
+  await tx.applicationReturn.updateMany({ where: { returnObligation: { submissionId: { in: purgedIds } } }, data: { reason: null } });
+}
+
+/** Lock parent then application rows before any terminal-data write. */
+async function lockRetentionApplications(
+  tx: Prisma.TransactionClient,
+  applicationIds: string[],
+  childIds: string[] = [],
+) {
+  if (applicationIds.length === 0 && childIds.length === 0) return;
+  const ids = [...new Set(applicationIds)].sort();
+  const children = [...new Set(childIds)].sort();
+  await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+    SELECT s."id" FROM "ReservationApplicationSubmission" s
+    WHERE EXISTS (
+      SELECT 1 FROM "ReservationApplication" a
+      WHERE a."submissionId" = s."id"
+        AND (${ids.length ? Prisma.sql`a."id" IN (${Prisma.join(ids)})` : Prisma.sql`false`}
+          OR ${children.length ? Prisma.sql`a."childId" IN (${Prisma.join(children)}) OR a."requestedChildId" IN (${Prisma.join(children)})` : Prisma.sql`false`})
+    )
+    ORDER BY s."id" FOR UPDATE OF s
+  `);
+  await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+    SELECT "id" FROM "ReservationApplication"
+    WHERE ${ids.length ? Prisma.sql`"id" IN (${Prisma.join(ids)})` : Prisma.sql`false`}
+      OR ${children.length ? Prisma.sql`"childId" IN (${Prisma.join(children)}) OR "requestedChildId" IN (${Prisma.join(children)})` : Prisma.sql`false`}
+    ORDER BY "id" FOR UPDATE
+  `);
+}
+
 /**
  * 이미 열린 트랜잭션 안에서 보관기간이 지난 개인정보를 파기한다(ADR-055~058). 동시성 검증(E2E)도 이 함수를 쓴다.
  * - 반려·취소 신청(수업일+1년): 아이·보호자 항목, 아이와의 관계, 요청사항, 반려·취소 사유를 지운다
@@ -208,35 +274,56 @@ const PURGED_APPLICATION_FIELDS = {
  * ChildConsent 삭제는 append-only 원칙(ADR-008)의 유일한 예외인 "보유기간 만료 파기"다.
  *
  * 잠금: 예약 생성·예약 신청 확정·동의 기록·안전정보 저장·예약 취소는 Child 행을 FOR SHARE 로 잠근다(lib/children/lock.ts).
- * 이 함수는 ClassSchedule 을 잠그지 않고 Child → 딸린 행 순서로만 잠그므로 순환 대기가 생기지 않는다.
+ * 확정은 Submission → Application → ClassSchedule → Child 순서다. 파기도 같은 Submission →
+ * Application → Child 순서로 잠가 Child 를 먼저 잡은 파기와 확정이 서로 기다리는 순환을 막는다.
  */
 export async function purgeExpiredPersonalDataInTransaction(
   tx: Prisma.TransactionClient,
-  input: { actorUserId: string; now: Date },
+  input: { actorUserId: string; now: Date; scope?: PersonalDataPurgeScope },
 ): Promise<PersonalDataPurgeResult> {
   const purgedMark = { personalDataPurgedAt: input.now, personalDataPurgedById: input.actorUserId };
+  // Supplying either scoped category makes this an internal bounded purge.
+  // The omitted sibling category is intentionally empty, never an accidental
+  // fallback to the production-wide ADMIN sweep.
+  const scopedApplicationIds = input.scope
+    ? (input.scope.applicationIds ?? [])
+    : undefined;
+  const scopedChildIds = input.scope
+    ? (input.scope.childIds ?? [])
+    : undefined;
 
   let purgedApplicationCount = 0;
   const applications = await findExpiredApplications(tx, input.now, {
     statuses: ["REJECTED", "CANCELLED"],
     limit: APPLICATION_PURGE_BATCH_SIZE,
+    applicationIds: scopedApplicationIds,
   });
   const applicationIds = applications.candidates
     .filter((candidate) => isPurgeableStatus(candidate.status))
     .map((candidate) => candidate.id);
+  // Discover both bounded candidate sets before taking any write lock. One
+  // Submission → Application union prevents two multi-child purge batches
+  // from taking sibling parent/application locks in opposite phases.
+  const children = await scanChildRetention(tx, input.now, { limit: CHILD_PURGE_BATCH_SIZE, childIds: scopedChildIds });
+  const candidateIds = children.candidates.map((candidate) => candidate.id).sort();
+  if (applicationIds.length || candidateIds.length) await lockRetentionApplications(tx, applicationIds, candidateIds);
   if (applicationIds.length > 0) {
     const result = await tx.reservationApplication.updateMany({
       where: { id: { in: applicationIds }, personalDataPurgedAt: null, status: { in: ["REJECTED", "CANCELLED"] } },
       data: { ...PURGED_APPLICATION_FIELDS, ...purgedMark },
     });
     purgedApplicationCount += result.count;
+    // Phase 20 parent PII is retained only while at least one child application still needs it.
+    // Application rows were already selected by the same retention rule; the relation predicate is
+    // re-evaluated in this transaction to avoid prematurely clearing a sibling submission.
+    await purgeFullyPurgedSubmissions(tx, applications.candidates.flatMap((candidate) => candidate.submissionId ? [candidate.submissionId] : []), input.now);
   }
 
   let purgedChildCount = 0;
-  const children = await scanChildRetention(tx, input.now, { limit: CHILD_PURGE_BATCH_SIZE });
-  const candidateIds = children.candidates.map((candidate) => candidate.id).sort();
   if (candidateIds.length > 0) {
-    // 2) 잠금. 이미 다른 파기가 처리한 행은 잠금을 기다린 뒤 WHERE 를 다시 평가해 빠진다.
+    // 2) Confirm 경로와 같은 Submission → Application → Child 순서.  잠금 후 다시
+    // 확인하므로 이 후보 조회와 실제 파기 사이의 새 예약도 보존된다.
+    // Already-purged rows disappear after waiting for the preceding locks.
     const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
       SELECT "id" FROM "Child"
       WHERE "id" IN (${Prisma.join(candidateIds)}) AND "personalDataPurgedAt" IS NULL
@@ -254,6 +341,7 @@ export async function purgeExpiredPersonalDataInTransaction(
 
     if (childIds.length > 0) {
       const inChildIds = { in: childIds };
+      const confirmedSubmissionRows = await tx.reservationApplication.findMany({ where: { childId: inChildIds, submissionId: { not: null } }, select: { submissionId: true } });
       await tx.childConsent.deleteMany({ where: { childId: inChildIds } });
       await tx.childSafetyInfo.deleteMany({ where: { childId: inChildIds } });
       await tx.relationship.deleteMany({
@@ -269,6 +357,12 @@ export async function purgeExpiredPersonalDataInTransaction(
         data: { ...PURGED_APPLICATION_FIELDS, ...purgedMark },
       });
       purgedApplicationCount += confirmedApplications.count;
+      // A purged child can neither be selected for repeat application nor remain as an
+      // unconfirmed requested-child reference.
+      await tx.deviceChild.deleteMany({ where: { childId: inChildIds } });
+      // Keep a non-PII tombstone so a historic requested-child application
+      // cannot be confirmed as NEW after the referenced child is purged.
+      await tx.reservationApplication.updateMany({ where: { requestedChildId: inChildIds }, data: { requestedChildId: null, requestedChildPurgedAt: input.now } });
       const purgedChildren = await tx.child.updateMany({
         where: { id: inChildIds, personalDataPurgedAt: null },
         data: {
@@ -283,6 +377,7 @@ export async function purgeExpiredPersonalDataInTransaction(
         },
       });
       purgedChildCount = purgedChildren.count;
+      await purgeFullyPurgedSubmissions(tx, confirmedSubmissionRows.flatMap((row) => row.submissionId ? [row.submissionId] : []), input.now);
     }
   }
 
@@ -296,7 +391,7 @@ export async function purgeExpiredPersonalDataInTransaction(
 /** ADMIN 이 직접 실행하는 파기 경로. 자동 배치는 없다. 한 트랜잭션에서 모두 하거나 아무것도 하지 않는다. */
 export async function purgeExpiredPersonalDataCore(
   client: Pick<PrismaClient, "$transaction">,
-  input: { actorUserId: string; now: Date },
+  input: { actorUserId: string; now: Date; scope?: PersonalDataPurgeScope },
 ): Promise<PersonalDataPurgeResult> {
   return client.$transaction(
     (tx) => purgeExpiredPersonalDataInTransaction(tx, input),
