@@ -65,4 +65,3 @@ export async function finishClipboardVerification(page: Page): Promise<void> {
   appendFileSync(path.resolve("test-results", `preview-e2e-${runId}.safe-clipboard.jsonl`), records.map((item) => JSON.stringify(item)).join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
   assertClipboardVerification(records);
 }
-
