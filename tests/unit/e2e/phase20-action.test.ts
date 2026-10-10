@@ -49,7 +49,7 @@ describe("bounded matched Phase20 action completion", () => {
   it.each([
     [{ failed: true }, "P20_ACTION_REQUEST_FAILED"],
     [{ httpError: true }, "P20_ACTION_HTTP_ERROR"],
-    [{ resultMs: 30_001 }, "P20_ACTION_RESULT_UNREACHED"],
+    [{ resultMs: 30_001 }, "P20_ACTION_DEADLINE"],
     [{ duplicate: true }, "P20_ACTION_RESULT_UNREACHED"],
   ] as const)("sanitizes failure and releases observers", async (input, code) => {
     const value = fixture(input);
@@ -64,7 +64,11 @@ describe("bounded matched Phase20 action completion", () => {
     const value = fixture({ failed: true, failureText: "net::ERR_ABORTED" });
     await expect(clickAndExpectPhase20Action(value.page, value.button, value.result, value.now, "CONFIRM", async () => true)).resolves.toBeUndefined();
     const denied = fixture({ failed: true, failureText: "net::ERR_ABORTED" });
-    await expect(clickAndExpectPhase20Action(denied.page, denied.button, denied.result, denied.now, "CONFIRM", async () => false)).rejects.toThrow("P20_ACTION_REQUEST_FAILED");
+    await expect(clickAndExpectPhase20Action(denied.page, denied.button, denied.result, denied.now, "CONFIRM", async () => false)).rejects.toThrow("P20_ACTION_RESULT_UNREACHED");
+  });
+  it("preserves a later UI deadline rather than blaming an accepted aborted transport", async () => {
+    const value = fixture({ failed: true, failureText: "net::ERR_ABORTED", resultMs: 30_001 });
+    await expect(clickAndExpectPhase20Action(value.page, value.button, value.result, value.now, "CONFIRM", async () => true)).rejects.toThrow("P20_ACTION_DEADLINE");
   });
   it("never accepts other transport failures or HTTP errors with successful postconditions", async () => {
     for (const input of [{ failed: true }, { httpError: true }]) {

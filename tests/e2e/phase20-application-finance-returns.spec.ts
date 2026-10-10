@@ -7,6 +7,7 @@ import { confirmSelectedApplications, clickAndExpectPhase20Action, recordPhase20
 import { assertPreviewE2eRunnerProof } from "@/lib/e2e/preview-runner";
 import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun } from "@/lib/e2e/phase20-lease";
 import { observeDepositPending, readDepositPending, stopDepositPending } from "./support/phase20-deposit-state";
+import { installClipboardVerification, finishClipboardVerification } from "./support/phase20-clipboard";
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -79,14 +80,17 @@ test.describe("Phase 20 finance and return browser flow", () => {
     const prisma = new PrismaClient();
     try {
       const fixture = await createFixture(prisma);
+      await installClipboardVerification(page);
       await submitPublicFlow(page, fixture);
       recordPhase20Stage("INITIAL_COMPLETION", testStartedAt);
       for (const value of [fixture.prices[0].toLocaleString("ko-KR") + "원", fixture.prices[1].toLocaleString("ko-KR") + "원", "22,000원", "테스트은행", "000000", fixture.marker]) await expect(page.getByText(value, { exact: true })).toBeVisible();
-      for (const [name, expectedClipboard] of [["계좌번호 복사", "000000"], ["금액 복사", "22000"], ["입금자명 복사", fixture.marker]] as const) {
-        await page.getByRole("button", { name }).click();
-        await expect(page.getByRole("status")).toHaveText("복사했습니다.");
-        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expectedClipboard);
-      }
+      try {
+        for (const [name, expectedClipboard] of [["계좌번호 복사", "000000"], ["금액 복사", "22000"], ["입금자명 복사", fixture.marker]] as const) {
+          await page.getByRole("button", { name }).click();
+          await expect(page.getByRole("status")).toHaveText("복사했습니다.");
+          expect(await page.evaluate(() => navigator.clipboard.readText()) === expectedClipboard).toBe(true);
+        }
+      } finally { await finishClipboardVerification(page); }
       await page.getByRole("button", { name: "입금했어요" }).click();
       await expect(page.getByRole("status")).toContainText("입금 알림을 기록했습니다");
       const notifiedOnce = await prisma.reservationApplicationSubmission.findFirstOrThrow({ where: { groupId: fixture.groupId }, select: { depositNotifiedAt: true } });

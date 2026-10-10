@@ -32,5 +32,12 @@ describe("fixed Preview execution scopes", () => {
     expect(pattern.test("F. returns an empty device-scoped repeat DTO without a device cookie")).toBe(false);
     expect(previewPlaywrightArguments("PHASE20")).toEqual(["test", ...PREVIEW_E2E_TEST_FILES.slice(3)]);
   });
-  it.each(["", "../auth.spec.ts", "--headed", "MINIMAL.*", "__proto__", "PUBLIC_COMPLETION_DIAGNOSTIC", "PUBLIC_COMPLETION_DURATION_DIAGNOSTIC"])("denies non-allowlisted scope %s", (scope) => expect(() => previewPlaywrightArguments(scope)).toThrow("P20_FOCUS_SELECTION_DENIED"));
+  it("keeps the legacy browser context and finance in a fixed ordered four-file selection", () => {
+    expect(previewPlaywrightArguments("LEGACY_FINANCE")).toEqual([
+      "test", "tests/e2e/auth.spec.ts", "tests/e2e/phase6-access.spec.ts",
+      "tests/e2e/phase11-core-operations.spec.ts", "tests/e2e/phase20-application-finance-returns.spec.ts",
+    ]);
+    expect(previewPlaywrightArguments(undefined)).toEqual(["test", ...PREVIEW_E2E_TEST_FILES]);
+  });
+  it.each(["", "../auth.spec.ts", "--headed", "MINIMAL.*", "LEGACY_FINANCE --headed", "LEGACY_FINANCE/../auth.spec.ts", "__proto__", "PUBLIC_COMPLETION_DIAGNOSTIC", "PUBLIC_COMPLETION_DURATION_DIAGNOSTIC"])("denies non-allowlisted scope %s", (scope) => expect(() => previewPlaywrightArguments(scope)).toThrow("P20_FOCUS_SELECTION_DENIED"));
 });

@@ -13,6 +13,7 @@ export function previewPlaywrightArguments(focus: string | undefined): string[] 
   if (focus === undefined) return ["test", ...PREVIEW_E2E_TEST_FILES];
   if (focus === "MINIMAL" || focus === "GROUP_POSITIVE_FULL") return ["test", groupFile, "--grep", titlePattern(GROUP_POSITIVE_TITLE)];
   if (focus === "FINANCE_POSITIVE") return ["test", financeFile, "--grep", titlePattern(FINANCE_POSITIVE_TITLE)];
+  if (focus === "LEGACY_FINANCE") return ["test", "tests/e2e/auth.spec.ts", "tests/e2e/phase6-access.spec.ts", "tests/e2e/phase11-core-operations.spec.ts", financeFile];
   if (focus === "COMPANION_POSITIVE") return ["test", companionFile, "--grep", titlePattern(COMPANION_POSITIVE_TITLE)];
   if (focus === "THREE_POSITIVE") return ["test", groupFile, financeFile, companionFile, "--grep", [GROUP_POSITIVE_TITLE, FINANCE_POSITIVE_TITLE, COMPANION_POSITIVE_TITLE].map(titlePattern).join("|")];
   if (focus === "PHASE20") return ["test", groupFile, financeFile, companionFile, "tests/e2e/phase20-postgres-races.spec.ts"];
