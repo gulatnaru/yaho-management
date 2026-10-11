@@ -178,10 +178,10 @@ describe("public application page", () => {
     "utf8",
   );
 
-  it("renders from the two-step loader and returns the closed notice before touching class data", () => {
+  it("uses the legacy loader before a scoped upgraded-link lookup and returns the closed notice before legacy class data", () => {
     expect(page).toContain("loadPublicApplicationView(");
-    expect(page).not.toMatch(/from "@\/lib\/db\/prisma"/);
-    expect(page).not.toMatch(/findUnique|findFirst|findMany/);
+    expect(page).toContain("hashApplicationCapabilityToken(token)");
+    expect(page).toContain("group: { is: { isActive: true");
     const openCheck = page.indexOf("if (!view.open)");
     const closedReturn = page.indexOf("return <ApplicationClosedNotice />");
     const classAccess = page.indexOf("const { classSchedule } = view;");

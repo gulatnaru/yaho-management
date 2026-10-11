@@ -38,7 +38,9 @@ export type PreviewCleanupClient = PreviewCleanupTransaction & {
 
 function ids(rows: Array<{ id: string }>) { return rows.map((row) => row.id); }
 function markerForRun(runId: string) {
-  if (!/^preview-[a-z0-9-]+$/i.test(runId)) throw new Error("Invalid Preview E2E run ID");
+  // Historical hyphenated IDs remain cleanable. New IDs encode the full UUID
+  // in base64url, including '_' when present.
+  if (!/^preview-(?:[a-z0-9-]+|[A-Za-z0-9_-]{22})$/i.test(runId)) throw new Error("Invalid Preview E2E run ID");
   return `E2E_P11_${runId}_`;
 }
 

@@ -196,6 +196,14 @@ function createClient(options: {
   const queryRaw = vi.fn(async (arg: unknown) => {
     const raw = toRaw(arg);
     rawCalls.push(raw);
+    if (raw.sql.includes('FROM "ReservationApplicationSubmission"')) {
+      calls.push("submission.lock");
+      return [];
+    }
+    if (raw.sql.includes('FROM "ReservationApplication"') && raw.sql.includes("FOR UPDATE")) {
+      calls.push("application.lock");
+      return [];
+    }
     if (raw.sql.includes("FOR UPDATE")) {
       calls.push("child.lock");
       const requested = raw.values.filter((value): value is string => typeof value === "string");
@@ -230,6 +238,7 @@ function createClient(options: {
     childSafetyInfo: { deleteMany: record("safety.delete") },
     relationship: { deleteMany: record("relationship.delete") },
     reservation: { updateMany: record("reservation.update") },
+    deviceChild: { deleteMany: record("device-child.delete") },
   };
   const transaction = vi.fn(async (...args: [callback: (value: typeof tx) => Promise<unknown>, options?: unknown]) =>
     args[0](tx),
@@ -389,10 +398,12 @@ describe("purgeExpiredPersonalDataCore", () => {
 
     await purgeExpiredPersonalDataCore(client, actor);
 
-    const lock = rawCalls.find((call) => call.sql.includes("FOR UPDATE"));
+    const lock = rawCalls.find((call) => call.sql.includes('FROM "Child"') && call.sql.includes("FOR UPDATE"));
     expect(lock?.sql).toMatch(/"personalDataPurgedAt" IS NULL\s+ORDER BY "id"\s+FOR UPDATE/);
     expect(lock?.values.filter((value) => typeof value === "string")).toEqual(["child-a", "child-b"]);
-    expect(calls.indexOf("child.lock")).toBeGreaterThan(calls.indexOf("facts.scan"));
+    expect(calls.indexOf("submission.lock")).toBeGreaterThan(calls.indexOf("facts.scan"));
+    expect(calls.indexOf("application.lock")).toBeGreaterThan(calls.indexOf("submission.lock"));
+    expect(calls.indexOf("child.lock")).toBeGreaterThan(calls.indexOf("application.lock"));
     expect(calls.indexOf("facts.recheck")).toBeGreaterThan(calls.indexOf("child.lock"));
     expect(calls.indexOf("consent.delete")).toBeGreaterThan(calls.indexOf("facts.recheck"));
   });
@@ -414,7 +425,7 @@ describe("purgeExpiredPersonalDataCore", () => {
       purgedChildCount: 0,
       hasMore: false,
     });
-    expect(calls).toEqual(["facts.scan", "child.lock", "facts.recheck"]);
+    expect(calls).toEqual(["facts.scan", "submission.lock", "application.lock", "child.lock", "facts.recheck"]);
     expect(tx.child.updateMany).not.toHaveBeenCalled();
     expect(tx.childConsent.deleteMany).not.toHaveBeenCalled();
   });
@@ -423,7 +434,7 @@ describe("purgeExpiredPersonalDataCore", () => {
     const { client, calls } = createClient({ facts: [expired], lockedIds: [] });
 
     await expect(purgeExpiredPersonalDataCore(client, actor)).resolves.toMatchObject({ purgedChildCount: 0 });
-    expect(calls).toEqual(["facts.scan", "child.lock"]);
+    expect(calls).toEqual(["facts.scan", "submission.lock", "application.lock", "child.lock"]);
   });
 
   it("anonymizes expired children in place and deletes only consent, safety and relationship rows", async () => {
@@ -445,6 +456,7 @@ describe("purgeExpiredPersonalDataCore", () => {
       where: { childId: childIds },
       data: { memo: null, cancelDetail: null },
     });
+    expect(tx.deviceChild.deleteMany).toHaveBeenCalledWith({ where: { childId: childIds } });
     expect(tx.reservationApplication.updateMany).toHaveBeenCalledWith({
       where: { childId: childIds, personalDataPurgedAt: null, status: "CONFIRMED" },
       data: expect.objectContaining({ childName: null, resolutionNote: null, personalDataPurgedAt: NOW }),

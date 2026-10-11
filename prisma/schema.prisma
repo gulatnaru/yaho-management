@@ -74,6 +74,12 @@ enum ReservationApplicationStatus {
   CANCELLED // 보호자 요청 취소
 }
 
+enum ReturnObligationKind {
+  REJECTED
+  CANCELLED
+  EXCESS
+}
+
 enum ProgramStatus {
   ACTIVE
   INACTIVE
@@ -168,20 +174,25 @@ model User {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  cancelledClasses        ClassSchedule[]     @relation("ClassCancelledBy")
-  cancelledReservations   Reservation[]       @relation("ReservationCancelledBy")
-  processedRefunds        Refund[]            @relation("RefundProcessedBy")
-  safetyInfoUpdates       ChildSafetyInfo[]   @relation("SafetyInfoUpdatedBy")
-  consentRecords          ChildConsent[]      @relation("ConsentRecordedBy")
-  attendanceRecords       Reservation[]       @relation("AttendanceRecordedBy")
-  teacher                 Teacher?            @relation(fields: [teacherId], references: [id], onDelete: Restrict)
-  accountChanges          UserAccountChange[] @relation("AccountChangeTarget")
-  performedAccountChanges UserAccountChange[] @relation("AccountChangeActor")
-  issuedApplicationLinks       ReservationApplicationLink[] @relation("ApplicationLinkIssuedBy")
-  depositConfirmedApplications ReservationApplication[]     @relation("ApplicationDepositConfirmedBy")
-  resolvedApplications         ReservationApplication[]     @relation("ApplicationResolvedBy")
-  purgedApplications           ReservationApplication[]     @relation("ApplicationPersonalDataPurgedBy")
-  purgedChildren               Child[]                      @relation("ChildPersonalDataPurgedBy")
+  cancelledClasses              ClassSchedule[]                    @relation("ClassCancelledBy")
+  cancelledReservations         Reservation[]                      @relation("ReservationCancelledBy")
+  processedRefunds              Refund[]                           @relation("RefundProcessedBy")
+  safetyInfoUpdates             ChildSafetyInfo[]                  @relation("SafetyInfoUpdatedBy")
+  consentRecords                ChildConsent[]                     @relation("ConsentRecordedBy")
+  attendanceRecords             Reservation[]                      @relation("AttendanceRecordedBy")
+  teacher                       Teacher?                           @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  accountChanges                UserAccountChange[]                @relation("AccountChangeTarget")
+  performedAccountChanges       UserAccountChange[]                @relation("AccountChangeActor")
+  issuedApplicationLinks        ReservationApplicationLink[]       @relation("ApplicationLinkIssuedBy")
+  depositConfirmedApplications  ReservationApplication[]           @relation("ApplicationDepositConfirmedBy")
+  resolvedApplications          ReservationApplication[]           @relation("ApplicationResolvedBy")
+  purgedApplications            ReservationApplication[]           @relation("ApplicationPersonalDataPurgedBy")
+  purgedChildren                Child[]                            @relation("ChildPersonalDataPurgedBy")
+  applicationGroupsCreated      ReservationApplicationGroup[]      @relation("ApplicationGroupCreatedBy")
+  applicationSubmissionsUpdated ReservationApplicationSubmission[] @relation("ApplicationSubmissionUpdatedBy")
+  verifiedApplicationDeposits   ApplicationDeposit[]               @relation("ApplicationDepositConfirmedBy")
+  returnedApplicationFunds      ApplicationReturn[]                @relation("ApplicationReturnProcessedBy")
+  applicationSettingsUpdates    ReservationApplicationSettings[]   @relation("ApplicationSettingsUpdatedBy")
 }
 
 model UserAccountChange {
@@ -209,28 +220,30 @@ model UserAccountChange {
 // ─────────────────────────────────────────────
 
 model Child {
-  id            String    @id @default(cuid())
-  name          String
-  birthDate     DateTime? @db.Date
-  gender        Gender    @default(UNSPECIFIED)
-  guardianName  String?
-  guardianPhone String?
-  memo          String?
-  isActive      Boolean   @default(true)
-  registeredAt  DateTime  @default(now())
+  id                     String    @id @default(cuid())
+  name                   String
+  birthDate              DateTime? @db.Date
+  gender                 Gender    @default(UNSPECIFIED)
+  guardianName           String?
+  guardianPhone          String?
+  memo                   String?
+  isActive               Boolean   @default(true)
+  registeredAt           DateTime  @default(now())
   // 마지막 예약 수업일로부터 5년이 지나 개인정보를 비식별화한 시각 (ADR-057). 행은 예약·결제 무결성을 위해 남긴다
   personalDataPurgedAt   DateTime?
   personalDataPurgedById String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  personalDataPurgedBy User?            @relation("ChildPersonalDataPurgedBy", fields: [personalDataPurgedById], references: [id], onDelete: Restrict)
-  safetyInfo       ChildSafetyInfo?
-  consents         ChildConsent[]
-  reservations     Reservation[]
-  relationshipsAsA Relationship[]   @relation("RelationshipChildA")
-  relationshipsAsB Relationship[]   @relation("RelationshipChildB")
-  reservationApplications ReservationApplication[]
+  personalDataPurgedBy             User?                    @relation("ChildPersonalDataPurgedBy", fields: [personalDataPurgedById], references: [id], onDelete: Restrict)
+  safetyInfo                       ChildSafetyInfo?
+  consents                         ChildConsent[]
+  reservations                     Reservation[]
+  relationshipsAsA                 Relationship[]           @relation("RelationshipChildA")
+  relationshipsAsB                 Relationship[]           @relation("RelationshipChildB")
+  reservationApplications          ReservationApplication[]
+  requestedReservationApplications ReservationApplication[] @relation("ReservationApplicationRequestedChild")
+  applicationDevices               DeviceChild[]
 
   @@index([name])
   @@index([guardianPhone])
@@ -240,34 +253,36 @@ model Child {
 
 // 민감정보. 목록 조회에 include 하지 않는다 (ADR-006)
 model ChildSafetyInfo {
-  id                     String   @id @default(cuid())
-  childId                String   @unique
-  allergies              String?
-  emergencyNotes         String? // 현장에서 즉시 알아야 할 사항에 한정. 진단명/병력/복용약 이력 금지
-  emergencyContactName   String?
-  emergencyContactPhone  String?
+  id                       String   @id @default(cuid())
+  childId                  String   @unique
+  allergies                String?
+  emergencyNotes           String? // 현장에서 즉시 알아야 할 사항에 한정. 진단명/병력/복용약 이력 금지
+  emergencyContactName     String?
+  emergencyContactPhone    String?
   emergencyContactRelation String?
-  updatedById            String?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  updatedById              String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
-  child       Child @relation(fields: [childId], references: [id], onDelete: Cascade)
-  updatedBy   User? @relation("SafetyInfoUpdatedBy", fields: [updatedById], references: [id])
+  child     Child @relation(fields: [childId], references: [id], onDelete: Cascade)
+  updatedBy User? @relation("SafetyInfoUpdatedBy", fields: [updatedById], references: [id])
 }
 
 // append-only 이력. 동의/철회할 때마다 새 행을 쌓는다.
 // 현재 상태 = 해당 consentType 의 recordedAt 최신 행. 기존 행을 수정하거나 삭제하지 않는다.
 model ChildConsent {
-  id           String        @id @default(cuid())
-  childId      String
-  consentType  ConsentType
-  action       ConsentAction
-  recordedAt   DateTime      @default(now())
-  memo         String?
-  createdAt    DateTime      @default(now())
-  recordedById String?
+  id                       String        @id @default(cuid())
+  childId                  String
+  consentType              ConsentType
+  action                   ConsentAction
+  recordedAt               DateTime      @default(now())
+  memo                     String?
+  createdAt                DateTime      @default(now())
+  recordedById             String?
   // Phase 18: 보호자가 온라인 예약 신청에서 동의한 기록이면 출처 신청을 가리킨다 (ADR-054)
   reservationApplicationId String?
+  // Snapshot of the public consent wording shown for this append-only record.
+  consentVersion           String?
 
   child                  Child                   @relation(fields: [childId], references: [id], onDelete: Cascade)
   recordedBy             User?                   @relation("ConsentRecordedBy", fields: [recordedById], references: [id])
@@ -329,36 +344,40 @@ model Program {
 }
 
 model ClassSchedule {
-  id        String      @id @default(cuid())
-  programId String
-  startsAt  DateTime // UTC 저장, KST 표시
-  endsAt    DateTime
-  location  String
-  capacity  Int         @default(8) // ADR-044: 앱은 1~99 검증, DB 는 1 이상만 보장
-  status    ClassStatus @default(SCHEDULED)
-  memo      String?
+  id               String      @id @default(cuid())
+  programId        String
+  startsAt         DateTime // UTC 저장, KST 표시
+  endsAt           DateTime
+  location         String
+  capacity         Int         @default(8) // ADR-044: 앱은 1~99 검증, DB 는 1 이상만 보장
+  status           ClassStatus @default(SCHEDULED)
+  memo             String?
+  // Phase 20의 공개 신청 최종금액. Program.defaultPrice의 fallback이 아니다.
+  applicationPrice Int?
 
   // 클래스 전체 취소 (ADR-002)
-  cancelledAt     DateTime?
-  cancelReason    ClassCancelReason?
-  cancelDetail    String?
-  cancelledById   String?
+  cancelledAt   DateTime?
+  cancelReason  ClassCancelReason?
+  cancelDetail  String?
+  cancelledById String?
 
   // 클래스 단위 안전 정보 (요구사항 20-1.5)
-  insured        Boolean @default(false)
-  insurer        String?
+  insured           Boolean @default(false)
+  insurer           String?
   insurancePolicyNo String?
-  safetyMemo     String?
+  safetyMemo        String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  program      Program        @relation(fields: [programId], references: [id])
-  cancelledBy  User?          @relation("ClassCancelledBy", fields: [cancelledById], references: [id])
-  teachers     ClassTeacher[]
-  reservations Reservation[]
-  applicationLink ReservationApplicationLink?
-  applications    ReservationApplication[]
+  program                        Program                            @relation(fields: [programId], references: [id])
+  cancelledBy                    User?                              @relation("ClassCancelledBy", fields: [cancelledById], references: [id])
+  teachers                       ClassTeacher[]
+  reservations                   Reservation[]
+  applicationLink                ReservationApplicationLink?
+  applications                   ReservationApplication[]
+  applicationGroupMemberships    ReservationApplicationGroupClass[]
+  upgradedLegacyApplicationGroup ReservationApplicationGroup?       @relation("UpgradedLegacyApplicationGroup")
 
   @@index([startsAt])
   @@index([status])
@@ -401,10 +420,10 @@ model Reservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  child                Child         @relation(fields: [childId], references: [id])
-  classSchedule        ClassSchedule @relation(fields: [classScheduleId], references: [id])
-  cancelledBy          User?         @relation("ReservationCancelledBy", fields: [cancelledById], references: [id])
-  attendanceRecordedBy User?         @relation("AttendanceRecordedBy", fields: [attendanceRecordedById], references: [id])
+  child                Child                    @relation(fields: [childId], references: [id])
+  classSchedule        ClassSchedule            @relation(fields: [classScheduleId], references: [id])
+  cancelledBy          User?                    @relation("ReservationCancelledBy", fields: [cancelledById], references: [id])
+  attendanceRecordedBy User?                    @relation("AttendanceRecordedBy", fields: [attendanceRecordedById], references: [id])
   paymentItem          PaymentItem?
   applications         ReservationApplication[]
 
@@ -422,23 +441,104 @@ model Reservation {
 
 // 클래스별 공개 신청 링크(클래스당 1개). 토큰을 ClassSchedule 컬럼으로 두지 않아
 // 기존 클래스 조회 결과(MANAGER/TEACHER payload 포함)에 섞이지 않게 한다.
+model ReservationApplicationGroup {
+  id                            String   @id @default(cuid())
+  isActive                      Boolean  @default(true)
+  createdById                   String
+  syntheticRunId                String?
+  // Set only by explicit Phase 18 URL upgrade. Ordinary groups may contain
+  // the same class while its legacy URL remains valid.
+  upgradedLegacyClassScheduleId String?  @unique
+  // Preview-only fixture configuration. It is accepted only with an active
+  // signed lease and never changes the production settings singleton.
+  syntheticSettings             Json?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  createdBy                   User                               @relation("ApplicationGroupCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  upgradedLegacyClassSchedule ClassSchedule?                     @relation("UpgradedLegacyApplicationGroup", fields: [upgradedLegacyClassScheduleId], references: [id], onDelete: Restrict)
+  classes                     ReservationApplicationGroupClass[]
+  links                       ReservationApplicationLink[]
+  submissions                 ReservationApplicationSubmission[]
+  companionInvites            CompanionInvite[]
+  companionGroups             CompanionGroup[]
+
+  @@index([isActive, createdAt])
+  @@index([syntheticRunId])
+}
+
+model ReservationApplicationGroupClass {
+  id              String   @id @default(cuid())
+  groupId         String
+  classScheduleId String
+  createdAt       DateTime @default(now())
+
+  group         ReservationApplicationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  classSchedule ClassSchedule               @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
+
+  @@unique([groupId, classScheduleId])
+  @@index([classScheduleId])
+}
+
 model ReservationApplicationLink {
   id              String   @id @default(cuid())
-  classScheduleId String   @unique
-  token           String   @unique
+  // legacy row: classScheduleId + token. Phase 20 row: groupId + tokenHash.
+  classScheduleId String?  @unique
+  token           String?  @unique
+  tokenHash       String?  @unique
+  groupId         String?
   isActive        Boolean  @default(true)
   issuedAt        DateTime @default(now())
   issuedById      String
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  classSchedule ClassSchedule @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
-  issuedBy      User          @relation("ApplicationLinkIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  classSchedule ClassSchedule?               @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
+  group         ReservationApplicationGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  issuedBy      User                         @relation("ApplicationLinkIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+}
+
+model ReservationApplicationSubmission {
+  id                   String                @id @default(cuid())
+  groupId              String?
+  guardianName         String?
+  guardianPhone        String?
+  guardianRelationship GuardianRelationship?
+  declaredPayerName    String?
+  submittedAt          DateTime              @default(now())
+  depositNotifiedAt    DateTime?
+  personalDataPurgedAt DateTime?
+  completionTokenHash  String?               @unique
+  completionExpiresAt  DateTime?
+  updatedById          String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  group                     ReservationApplicationGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  updatedBy                 User?                        @relation("ApplicationSubmissionUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  applications              ReservationApplication[]
+  deposits                  ApplicationDeposit[]
+  returnObligations         ReturnObligation[]
+  companionInvites          CompanionInvite[]
+  companionGroupsAsIssuer   CompanionGroup[]             @relation("CompanionGroupIssuer")
+  companionGroupMemberships CompanionGroupMember[]
+  deviceSubmissions         DeviceSubmission[]
+
+  @@index([groupId, submittedAt])
+  @@index([personalDataPurgedAt])
+  @@index([completionExpiresAt])
 }
 
 model ReservationApplication {
   id                          String                       @id @default(cuid())
   classScheduleId             String
+  submissionId                String?
+  quotedAmount                Int?
+  requestedChildId            String?
+  // Set by retention when a selected repeat child is purged.  This preserves
+  // the fact that the selection is no longer confirmable without retaining
+  // the child's identity.
+  requestedChildPurgedAt      DateTime?
   status                      ReservationApplicationStatus @default(SUBMITTED)
   // 개인정보 항목은 보관기간 만료 후 파기(NULL)될 수 있다. 파기 전에는 CHECK 로 모두 필수다 (ADR-055)
   childName                   String?
@@ -468,19 +568,221 @@ model ReservationApplication {
   createdAt                   DateTime                     @default(now())
   updatedAt                   DateTime                     @updatedAt
 
-  classSchedule        ClassSchedule  @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
-  depositConfirmedBy   User?          @relation("ApplicationDepositConfirmedBy", fields: [depositConfirmedById], references: [id], onDelete: Restrict)
-  resolvedBy           User?          @relation("ApplicationResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
-  personalDataPurgedBy User?          @relation("ApplicationPersonalDataPurgedBy", fields: [personalDataPurgedById], references: [id], onDelete: Restrict)
-  child              Child?         @relation(fields: [childId], references: [id], onDelete: Restrict)
-  reservation        Reservation?   @relation(fields: [reservationId], references: [id], onDelete: Restrict)
-  consents           ChildConsent[]
+  classSchedule        ClassSchedule                         @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
+  submission           ReservationApplicationSubmission?     @relation(fields: [submissionId], references: [id], onDelete: Restrict)
+  depositConfirmedBy   User?                                 @relation("ApplicationDepositConfirmedBy", fields: [depositConfirmedById], references: [id], onDelete: Restrict)
+  resolvedBy           User?                                 @relation("ApplicationResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+  personalDataPurgedBy User?                                 @relation("ApplicationPersonalDataPurgedBy", fields: [personalDataPurgedById], references: [id], onDelete: Restrict)
+  child                Child?                                @relation(fields: [childId], references: [id], onDelete: Restrict)
+  requestedChild       Child?                                @relation("ReservationApplicationRequestedChild", fields: [requestedChildId], references: [id], onDelete: Restrict)
+  reservation          Reservation?                          @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  consents             ChildConsent[]
+  paymentMapping       ReservationApplicationPaymentMapping?
+  returnObligations    ReturnObligation[]
 
   @@index([status, submittedAt])
   @@index([classScheduleId, status])
   @@index([childId])
   @@index([reservationId])
   @@index([personalDataPurgedAt])
+  @@index([submissionId, status])
+  @@index([requestedChildId])
+  @@index([requestedChildPurgedAt])
+}
+
+model CompanionInvite {
+  id                 String    @id @default(cuid())
+  issuerSubmissionId String
+  groupId            String
+  companionGroupId   String
+  tokenHash          String    @unique
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+
+  issuerSubmission ReservationApplicationSubmission @relation(fields: [issuerSubmissionId], references: [id], onDelete: Cascade)
+  group            ReservationApplicationGroup      @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  companionGroup   CompanionGroup                   @relation(fields: [companionGroupId], references: [id], onDelete: Cascade)
+
+  @@index([groupId, expiresAt])
+}
+
+// 동행은 제출 단위 연결만 표현하며 Child Relationship·동의 대리 권한을 만들지 않는다.
+model CompanionGroup {
+  id                 String   @id @default(cuid())
+  groupId            String
+  issuerSubmissionId String
+  createdAt          DateTime @default(now())
+
+  group            ReservationApplicationGroup      @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  issuerSubmission ReservationApplicationSubmission @relation("CompanionGroupIssuer", fields: [issuerSubmissionId], references: [id], onDelete: Restrict)
+  invites          CompanionInvite[]
+  members          CompanionGroupMember[]
+
+  @@index([groupId])
+  @@index([issuerSubmissionId])
+}
+
+model CompanionGroupMember {
+  id               String   @id @default(cuid())
+  companionGroupId String
+  submissionId     String   @unique
+  createdAt        DateTime @default(now())
+
+  companionGroup CompanionGroup                   @relation(fields: [companionGroupId], references: [id], onDelete: Cascade)
+  submission     ReservationApplicationSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([companionGroupId])
+}
+
+model ApplicationDevice {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  submissions DeviceSubmission[]
+  children    DeviceChild[]
+
+  @@index([expiresAt])
+}
+
+model DeviceSubmission {
+  id           String   @id @default(cuid())
+  deviceId     String
+  submissionId String
+  createdAt    DateTime @default(now())
+
+  device     ApplicationDevice                @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  submission ReservationApplicationSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, submissionId])
+  @@index([submissionId])
+}
+
+model DeviceChild {
+  id        String   @id @default(cuid())
+  deviceId  String
+  childId   String
+  createdAt DateTime @default(now())
+
+  device ApplicationDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  child  Child             @relation(fields: [childId], references: [id], onDelete: Restrict)
+
+  @@unique([deviceId, childId])
+  @@index([childId])
+}
+
+model ApplicationDeposit {
+  id             String   @id @default(cuid())
+  submissionId   String
+  amount         Int
+  payerName      String?
+  depositedAt    DateTime
+  confirmedAt    DateTime
+  confirmedById  String
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  submission  ReservationApplicationSubmission @relation(fields: [submissionId], references: [id], onDelete: Restrict)
+  confirmedBy User                             @relation("ApplicationDepositConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict)
+  allocations FundAllocation[]
+
+  @@index([submissionId, confirmedAt, id])
+}
+
+model ReservationApplicationPaymentMapping {
+  id            String   @id @default(cuid())
+  applicationId String   @unique
+  paymentItemId String   @unique
+  createdAt     DateTime @default(now())
+
+  application ReservationApplication @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  paymentItem PaymentItem            @relation(fields: [paymentItemId], references: [id], onDelete: Restrict)
+  allocations FundAllocation[]
+}
+
+model ReturnObligation {
+  id             String               @id @default(cuid())
+  submissionId   String
+  applicationId  String?
+  kind           ReturnObligationKind
+  amount         Int
+  returnedAmount Int                  @default(0)
+  resolvedAt     DateTime?
+  createdAt      DateTime             @default(now())
+
+  submission  ReservationApplicationSubmission @relation(fields: [submissionId], references: [id], onDelete: Restrict)
+  application ReservationApplication?          @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  allocations FundAllocation[]
+  returns     ApplicationReturn[]
+
+  @@unique([applicationId, kind])
+  @@index([submissionId, resolvedAt])
+}
+
+model ApplicationReturn {
+  id                 String   @id @default(cuid())
+  returnObligationId String
+  amount             Int
+  returnedAt         DateTime
+  processedById      String
+  reason             String?
+  idempotencyKey     String?  @unique
+  createdAt          DateTime @default(now())
+
+  returnObligation ReturnObligation @relation(fields: [returnObligationId], references: [id], onDelete: Restrict)
+  processedBy      User             @relation("ApplicationReturnProcessedBy", fields: [processedById], references: [id], onDelete: Restrict)
+
+  @@index([returnObligationId, returnedAt])
+}
+
+model FundAllocation {
+  id                 String   @id @default(cuid())
+  depositId          String
+  paymentMappingId   String?
+  returnObligationId String?
+  amount             Int
+  createdAt          DateTime @default(now())
+
+  deposit          ApplicationDeposit                    @relation(fields: [depositId], references: [id], onDelete: Restrict)
+  paymentMapping   ReservationApplicationPaymentMapping? @relation(fields: [paymentMappingId], references: [id], onDelete: Restrict)
+  returnObligation ReturnObligation?                     @relation(fields: [returnObligationId], references: [id], onDelete: Restrict)
+
+  @@index([depositId])
+  @@index([paymentMappingId])
+  @@index([returnObligationId])
+}
+
+model ReservationApplicationSettings {
+  id              Int      @id @default(1)
+  bankName        String
+  accountNumber   String
+  accountHolder   String
+  blogUrl         String
+  instagramUrl    String
+  kakaoChannelUrl String
+  updatedById     String
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  updatedBy User @relation("ApplicationSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+}
+
+// Preview 공개 접수는 이 lease가 정확한 배포 SHA와 살아 있는 단일 run을 가리킬 때만 별도 guard가 연다.
+model PreviewE2eRunLease {
+  id            String   @id @default(cuid())
+  runId         String   @unique
+  deploymentSha String
+  expiresAt     DateTime
+  // Non-PII, run-scoped ownership proof retained until cleanup succeeds.
+  ownedChildIds Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([expiresAt])
 }
 
 // ─────────────────────────────────────────────
@@ -518,9 +820,10 @@ model PaymentItem {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  payment     Payment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  reservation Reservation @relation(fields: [reservationId], references: [id])
-  refunds     Refund[]
+  payment                       Payment                               @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  reservation                   Reservation                           @relation(fields: [reservationId], references: [id])
+  refunds                       Refund[]
+  reservationApplicationMapping ReservationApplicationPaymentMapping?
 
   @@index([paymentId])
 }

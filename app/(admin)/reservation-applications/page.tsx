@@ -43,6 +43,15 @@ export default async function ReservationApplicationsPage({ searchParams }: Rese
         <Link className="text-sm text-slate-600 hover:underline" href="/reservation-applications/retention">
           개인정보 보관기간 관리
         </Link>
+        <Link className="text-sm text-slate-600 hover:underline" href="/reservation-applications/groups">
+          신청 그룹 관리
+        </Link>
+        <Link className="text-sm text-slate-600 hover:underline" href="/reservation-applications/settings">
+          운영 설정
+        </Link>
+        <Link className="text-sm text-slate-600 hover:underline" href="/reservation-applications/returns">
+          반환 처리
+        </Link>
       </div>
 
       <ApplicationStatusFilter status={status} />

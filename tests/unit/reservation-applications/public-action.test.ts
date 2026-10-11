@@ -16,6 +16,9 @@ vi.mock("next/navigation", () => ({ redirect: (destination: string) => redirectM
 vi.mock("@/server/reservation-applications/submit", () => ({
   submitReservationApplicationCore: (...args: unknown[]) => submitCoreMock(...args),
 }));
+vi.mock("@/lib/reservation-applications/runtime", () => ({
+  buildLegacyApplicationAvailabilityContext: vi.fn().mockResolvedValue({ configReady: true, consentReady: true, environmentAllowed: true }),
+}));
 
 const { submitReservationApplication } = await import("@/app/(public)/apply/[token]/actions");
 

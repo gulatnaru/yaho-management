@@ -22,7 +22,7 @@ test("invalid-login smoke ignores an empty route announcer and reads the form er
   const observation = await submitInvalidLoginSmoke(page, response?.status() ?? 599);
 
   expect(await page.getByRole("alert").count()).toBeGreaterThanOrEqual(2);
-  expect(page.getByTestId("empty-route-announcer")).toHaveText("");
+  await expect(page.getByTestId("empty-route-announcer")).toHaveText("");
   expect(observation.alertText).toBe("이메일 또는 비밀번호가 올바르지 않습니다.");
   expect(() => assertSmokeObservation(observation)).not.toThrow();
 });

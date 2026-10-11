@@ -4,7 +4,7 @@ import {
   ApplicationLinkNotFoundError,
   ApplicationNotPendingError,
 } from "@/lib/reservation-applications/errors";
-import { issueApplicationLinkCore, stopApplicationLinkCore } from "@/server/reservation-applications/links";
+import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
 import {
   closeReservationApplicationCore,
   confirmApplicationDepositCore,
@@ -16,10 +16,15 @@ const FUTURE = new Date("2026-10-02T01:00:00.000Z");
 function linkClient(classSchedule: unknown) {
   const findUnique = vi.fn(async () => classSchedule);
   const upsert = vi.fn(async () => ({}));
+  const linkFindUnique = vi.fn(async () => null);
+  const groupFindFirst = vi.fn<() => Promise<{ id: string } | null>>(async () => null);
   const updateMany = vi.fn(async () => ({ count: 1 }));
+  const tx = { $queryRaw: vi.fn(async () => [{ id: "class-1" }]), classSchedule: { findUnique }, reservationApplicationGroup: { findFirst: groupFindFirst }, reservationApplicationLink: { findUnique: linkFindUnique, upsert, updateMany } };
   return {
-    client: { classSchedule: { findUnique }, reservationApplicationLink: { upsert, updateMany } } as never,
+    client: { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx), reservationApplicationLink: { updateMany } } as never,
     upsert,
+    linkFindUnique,
+    groupFindFirst,
     updateMany,
   };
 }
@@ -74,6 +79,27 @@ describe("application link core", () => {
       ApplicationLinkNotFoundError,
     );
   });
+
+  it("does not recreate a raw legacy link after the class was upgraded to a group", async () => {
+    const { client, upsert, groupFindFirst } = linkClient({ status: "SCHEDULED", startsAt: FUTURE });
+    groupFindFirst.mockResolvedValue({ id: "group-link-1" });
+    await expect(issueApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin-1", now: NOW })).rejects.toBeInstanceOf(ApplicationLinkNotFoundError);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("upgrades an explicit priced legacy link in place without revealing or regenerating its raw URL", async () => {
+    const update = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "class-1" }]),
+      classSchedule: { findUnique: vi.fn().mockResolvedValue({ status: "SCHEDULED", startsAt: FUTURE, applicationPrice: 10_000 }) },
+      reservationApplicationLink: { findUnique: vi.fn().mockResolvedValue({ id: "link-1", token: "opaque-legacy", groupId: null }), update },
+      reservationApplicationGroup: { create: vi.fn().mockResolvedValue({ id: "group-1" }) },
+      reservationApplicationSettings: { findUnique: vi.fn().mockResolvedValue({ bankName: "은행", accountNumber: "123", accountHolder: "예금주", blogUrl: "https://example.test/blog", instagramUrl: "https://example.test/instagram", kakaoChannelUrl: "https://example.test/kakao" }) },
+    };
+    const client = { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx) } as never;
+    await expect(upgradeLegacyApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin-1", now: NOW, configReady: true })).resolves.toEqual({ groupId: "group-1" });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ classScheduleId: null, token: null, groupId: "group-1", tokenHash: expect.any(String) }) }));
+  });
 });
 
 function applicationClient(count = 1) {
@@ -88,7 +114,7 @@ describe("application resolution core", () => {
     await confirmApplicationDepositCore(client, { applicationId: "application-1", actorUserId: "admin-1", now: NOW });
 
     expect(updateMany).toHaveBeenCalledWith({
-      where: { id: "application-1", status: "SUBMITTED", depositConfirmedAt: null },
+      where: { id: "application-1", submissionId: null, status: "SUBMITTED", depositConfirmedAt: null },
       data: { depositConfirmedAt: NOW, depositConfirmedById: "admin-1" },
     });
     await expect(
@@ -112,7 +138,7 @@ describe("application resolution core", () => {
     });
 
     expect(updateMany).toHaveBeenCalledWith({
-      where: { id: "application-1", status: "SUBMITTED" },
+      where: { id: "application-1", submissionId: null, status: "SUBMITTED" },
       data: { status, resolvedAt: NOW, resolvedById: "admin-1", resolutionNote: "테스트 사유" },
     });
   });

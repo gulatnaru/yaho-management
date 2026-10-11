@@ -99,11 +99,12 @@ describe("Preview E2E target safety", () => {
 
   it("allows only the exact approved Preview origin and creates unique run IDs", () => {
     const environment = configurationEnvironment();
-    const first = readPreviewE2eConfiguration(environment, () => "run-one");
-    const second = readPreviewE2eConfiguration(environment, () => "run-two");
+    const first = readPreviewE2eConfiguration(environment, () => "00000000-0000-4000-8000-000000000001");
+    const second = readPreviewE2eConfiguration(environment, () => "00000000-0000-4000-8000-000000000002");
     expect(first.baseUrl).toBe(environment.PLAYWRIGHT_BASE_URL);
-    expect(first.runId).toBe("preview-run-one");
-    expect(second.runId).toBe("preview-run-two");
+    expect(first.runId).toMatch(/^preview-[A-Za-z0-9_-]{22}$/);
+    expect(second.runId).toMatch(/^preview-[A-Za-z0-9_-]{22}$/);
+    expect(first.runId).not.toBe(second.runId);
   });
 
   it("allows separate projects with an identical postgres/public runtime tuple without a Production fingerprint", () => {
@@ -296,6 +297,10 @@ describe("Preview E2E migration and lock guards", () => {
       "tests/e2e/auth.spec.ts",
       "tests/e2e/phase6-access.spec.ts",
       "tests/e2e/phase11-core-operations.spec.ts",
+      "tests/e2e/phase20-application-group-siblings.spec.ts",
+      "tests/e2e/phase20-application-finance-returns.spec.ts",
+      "tests/e2e/phase20-companion-repeat-privacy.spec.ts",
+      "tests/e2e/phase20-postgres-races.spec.ts",
     ]);
     expect(PREVIEW_E2E_TEST_FILES).not.toContain("tests/e2e/phase18-retention-concurrency.spec.ts");
     expect(PREVIEW_E2E_TEST_FILES).not.toContain("tests/e2e/phase18-reservation-application.spec.ts");

@@ -12,7 +12,7 @@ import {
   ApplicationRateLimitedError,
   describeErrorForLog,
 } from "@/lib/reservation-applications/errors";
-import { buildApplicationAvailabilityContext } from "@/lib/reservation-applications/runtime";
+import { buildLegacyApplicationAvailabilityContext } from "@/lib/reservation-applications/runtime";
 import { reservationApplicationSubmissionSchema } from "@/lib/validation/reservation-application";
 import { submitReservationApplicationCore } from "@/server/reservation-applications/submit";
 
@@ -127,7 +127,7 @@ export async function submitReservationApplication(
       token,
       data: parsed.data,
       consentVersion: APPLICATION_CONSENT_CONTENT.version,
-      context: buildApplicationAvailabilityContext(new Date()),
+      context: await buildLegacyApplicationAvailabilityContext(prisma, new Date()),
     });
   } catch (error) {
     if (error instanceof ApplicationClosedError) {

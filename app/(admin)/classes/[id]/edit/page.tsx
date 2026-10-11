@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { listProgramCandidates, listTeacherCandidates } from "@/lib/classes/candidates";
 import { formatKstDate, formatKstTime } from "@/lib/classes/datetime";
-import { getClassDetail } from "@/lib/classes/queries";
+import { getClassDetailForPrincipal } from "@/lib/classes/queries";
 import { getClassDisplayStatus } from "@/lib/classes/status";
 import { ClassForm } from "../../_components/class-form";
 
@@ -12,9 +12,9 @@ interface EditClassPageProps {
 }
 
 export default async function EditClassPage({ params }: EditClassPageProps) {
-  await requireOperationalPrincipal();
+  const principal = await requireOperationalPrincipal();
   const { id } = await params;
-  const classDetail = await getClassDetail(id);
+  const classDetail = await getClassDetailForPrincipal(id, principal);
 
   if (!classDetail) {
     notFound();
@@ -59,6 +59,7 @@ export default async function EditClassPage({ params }: EditClassPageProps) {
           endTime: formatKstTime(classDetail.endsAt),
           location: classDetail.location,
           capacity: String(classDetail.capacity),
+          applicationPrice: classDetail.applicationPrice ? String(classDetail.applicationPrice) : "",
           teacherIds: currentTeacherIds,
           memo: classDetail.memo ?? "",
           insured: classDetail.insured,
@@ -67,6 +68,7 @@ export default async function EditClassPage({ params }: EditClassPageProps) {
           safetyMemo: classDetail.safetyMemo ?? "",
         }}
         mode="edit"
+        allowApplicationPrice={principal.role === "ADMIN"}
         programCandidates={programCandidates}
         teacherCandidates={teacherCandidates}
       />

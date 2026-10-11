@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { issueApplicationLink, stopApplicationLink } from "@/app/(admin)/reservation-applications/actions";
+import { issueApplicationLink, stopApplicationLink, upgradeLegacyApplicationLink } from "@/app/(admin)/reservation-applications/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,8 @@ const STATE_DESCRIPTION: Record<ApplicationLinkAdminState, string> = {
 
 export interface ApplicationLinkCardProps {
   classScheduleId: string;
+  applicationPrice: number | null;
+  upgradedGroupId?: string | null;
   state: ApplicationLinkAdminState;
   link: { token: string; isActive: boolean; issuedAtLabel: string; issuedByName: string } | null;
 }
@@ -27,7 +29,7 @@ export interface ApplicationLinkCardProps {
  * ADMIN 전용 클래스 신청 링크 카드(ADR-052/053). 링크 주소는 현재 접속한 주소(origin) 기준으로 만든다.
  * 재발급·중지는 되돌릴 수 없으므로 한 번 더 확인받는다.
  */
-export function ApplicationLinkCard({ classScheduleId, state, link }: ApplicationLinkCardProps) {
+export function ApplicationLinkCard({ classScheduleId, applicationPrice, upgradedGroupId, state, link }: ApplicationLinkCardProps) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | undefined>();
   const [notice, setNotice] = useState<string | undefined>();
@@ -93,7 +95,7 @@ export function ApplicationLinkCard({ classScheduleId, state, link }: Applicatio
               링크 복사
             </Button>
           ) : null}
-          {!classClosed ? (
+          {!classClosed && !upgradedGroupId ? (
             <Button
               className="w-full md:w-auto"
               disabled={pending}
@@ -108,6 +110,12 @@ export function ApplicationLinkCard({ classScheduleId, state, link }: Applicatio
               {pending ? "처리 중..." : link ? "재발급" : "링크 만들기"}
             </Button>
           ) : null}
+          {link && applicationPrice && !classClosed && !upgradedGroupId ? <Button className="w-full md:w-auto" disabled={pending} onClick={() => run(async () => {
+            const result = await upgradeLegacyApplicationLink(classScheduleId);
+            if (result.groupId) setNotice("기존 주소를 그룹 신청 링크로 전환했습니다.");
+            return result;
+          }, "기존 주소는 유지하고 그룹 신청 방식으로 전환합니다. 계속할까요?")} type="button">그룹 신청으로 전환</Button> : null}
+          {upgradedGroupId ? <a className="text-sm underline" href={`/reservation-applications/groups/${upgradedGroupId}`}>그룹 신청 관리</a> : null}
           {showUrl ? (
             <Button
               className="w-full md:w-auto"

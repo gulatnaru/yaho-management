@@ -2,8 +2,10 @@ import { loadEnvConfig } from "@next/env";
 import { defineConfig, devices } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./tests/e2e/support/db-safety";
 import { assertLocalE2eBaseUrl } from "./lib/e2e/local-origin-safety";
+import { previewPlaywrightArguments } from "./lib/e2e/preview-focus";
 import {
   assertPreviewE2eRunnerProof,
+  PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS,
   PREVIEW_E2E_TEST_FILES,
   readPreviewE2eConfiguration,
 } from "./lib/e2e/preview-runner";
@@ -16,8 +18,10 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 const previewE2e = process.env.PLAYWRIGHT_PREVIEW_E2E === "1";
+if (!previewE2e && process.env.PREVIEW_E2E_FOCUS !== undefined) throw new Error("P20_FOCUS_REQUIRES_PREVIEW_RUNNER");
 let localBaseUrl: string | undefined;
 if (previewE2e) {
+  previewPlaywrightArguments(process.env.PREVIEW_E2E_FOCUS);
   // The script also performs the connected-DB, deployment and migration checks
   // before Playwright starts. This keeps direct Preview invocations fail-closed.
   readPreviewE2eConfiguration();
@@ -35,17 +39,25 @@ if (previewE2e) {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  reporter: previewE2e ? [["./tests/e2e/support/preview-safe-reporter.ts"]] : undefined,
   testMatch: previewE2e
     ? PREVIEW_E2E_TEST_FILES.map((file) => new RegExp(`${escapeRegExp(file).replaceAll("/", "[\\\\/]")}$`))
     : undefined,
+  // This suite intentionally throws before creating a client unless the Preview
+  // runner proof is present. Ignore it during ordinary local discovery so the
+  // local safety check can list the browser suite without weakening that guard.
+  testIgnore: previewE2e ? undefined : /phase20-postgres-races\.spec\.ts$/,
   // 로컬 Next dev cold compilation 환경에서 전체 E2E 실행의 결정성을 우선한다.
   workers: 1,
+  // The outer runner adds cleanup/startup time beyond this browser budget.
+  globalTimeout: previewE2e ? PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS : undefined,
   expect: { timeout: 15000 },
   use: {
     baseURL: previewE2e ? process.env.PLAYWRIGHT_BASE_URL : localBaseUrl,
     trace: previewE2e ? "off" : "on-first-retry",
+    screenshot: previewE2e ? "off" : "only-on-failure",
     extraHTTPHeaders: previewE2e
-      ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET as string }
+      ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET as string, "x-yaho-phase20-preview-run": process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN as string }
       : undefined,
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

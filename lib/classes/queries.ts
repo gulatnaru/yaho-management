@@ -67,6 +67,7 @@ const CLASS_DETAIL_SELECT = {
   endsAt: true,
   location: true,
   capacity: true,
+  applicationPrice: true,
   status: true,
   memo: true,
   insured: true,
@@ -98,6 +99,7 @@ const CLASS_DETAIL_SELECT = {
 
 const CLASS_TEACHER_DETAIL_SELECT = {
   ...CLASS_DETAIL_SELECT,
+  applicationPrice: false,
   teachers: {
     select: {
       id: true,
@@ -105,6 +107,12 @@ const CLASS_TEACHER_DETAIL_SELECT = {
       teacher: { select: { id: true, name: true, isActive: true } },
     },
   },
+} as const;
+
+// Final application price is an ADMIN-only operational value and must not enter MANAGER/TEACHER RSC data.
+const CLASS_NON_ADMIN_DETAIL_SELECT = {
+  ...CLASS_DETAIL_SELECT,
+  applicationPrice: false,
 } as const;
 
 export async function getClassDetail(id: string) {
@@ -115,15 +123,21 @@ export async function getClassDetail(id: string) {
 }
 
 export async function getClassDetailForPrincipal(id: string, principal: CurrentPrincipal) {
-  if (principal.role !== "TEACHER") {
+  if (principal.role === "ADMIN") {
     return getClassDetail(id);
   }
 
-  return prisma.classSchedule.findFirst({
+  if (principal.role === "MANAGER") {
+    const detail = await prisma.classSchedule.findUnique({ where: { id }, select: CLASS_NON_ADMIN_DETAIL_SELECT });
+    return detail ? { ...detail, applicationPrice: null } : null;
+  }
+
+  const detail = await prisma.classSchedule.findFirst({
     where: {
       id,
       teachers: { some: { teacherId: principal.teacherId } },
     },
     select: CLASS_TEACHER_DETAIL_SELECT,
   });
+  return detail ? { ...detail, applicationPrice: null } : null;
 }

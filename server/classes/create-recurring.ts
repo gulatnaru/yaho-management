@@ -68,6 +68,7 @@ export async function createRecurringClassesCore(
         endsAt,
         location: input.location,
         capacity: input.capacity,
+        applicationPrice: input.applicationPrice ?? null,
         status: "SCHEDULED" as const,
         memo: input.memo || null,
         insured: input.insured,

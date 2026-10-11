@@ -143,8 +143,10 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
       {isAdmin ? (
         <ApplicationLinkCard
           classScheduleId={id}
+          applicationPrice={classDetail.applicationPrice}
+          upgradedGroupId={applicationLink?.groupId}
           link={
-            applicationLink
+            applicationLink?.token
               ? {
                   token: applicationLink.token,
                   isActive: applicationLink.isActive,

@@ -40,6 +40,7 @@ export function ApplicationTable({ items }: { items: ApplicationListRow[] }) {
               <Link className="font-medium hover:underline" href={`/reservation-applications/${application.id}`}>
                 {application.childName ?? PURGED_PERSONAL_DATA_LABEL}
               </Link>
+              {application.submissionId ? <Link className="ml-2 text-xs text-slate-500 hover:underline" href={`/reservation-applications/submissions/${application.submissionId}`}>가족 신청</Link> : null}
               {application.isPossibleDuplicate ? (
                 <Badge className="ml-2" variant="warning">
                   중복 가능
