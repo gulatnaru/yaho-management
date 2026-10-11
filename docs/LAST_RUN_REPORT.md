@@ -1,3 +1,20 @@
+# Phase 20 release result — 2026-10-11 (Asia/Seoul)
+
+- Implementation: complete. Schedule groups, multi-child applications, independent guardian invitations, deposit notification/confirmation, returns, Payment mapping, ADMIN settings and secure repeat applications implemented.
+- Validation: 116 unit files / 1011 tests; lint, typecheck, Prisma validate, final production build, diff check, QA and Review PASS.
+- Preview E2E: exact head 5bfc90e327092c7fbe9bb33562441686442a41ea, default29/29 PASS, PostgreSQL12/12 included; wrapper/child0, cleanup PASS, exact-run groups/leases/markerResources/advisoryLocks0/0/0/0.
+- Migration: 20261006090000_phase20_reservation_application_enhancements, additive; approved Production preflight/deploy/verify and final schema gate PASS (run38014992659 attempt2).
+- Feature PR49 MERGED: https://github.com/gulatnaru/yaho-management/pull/49 ; merge SHA b7f1324bef421d7d343cf980f66c6513d6c905c4. Exact merge CI38103025442 SUCCESS.
+- Production Vercel: dpl_DbSC3wvz223UDja9J2EarLLPFZtu READY at exact merge SHA.
+- Production Release Verification38103025470 SUCCESS: authoritative checkpointA, read-only migration status and stable checkpointB/C invalid-login smoke all PASS. https://github.com/gulatnaru/yaho-management/actions/runs/38103025470
+- METRICS: append-only PR49 row in documentation follow-up. Historical formal ledger: Critical0/Major9/QA rejects4/rework5; the later sole minor budget-comment rework adds1, total6. Actual GitHub CI workflow failures0; Production inactive preflight failure is an infrastructure gate failure, not counted as a CI quality failure. Focused E2E diagnostic/recovery runs are recorded separately below, not invented formal QA rejections.
+- Remaining SHIP housekeeping: documentation follow-up PR/CI/merge, then main sync and feature branch cleanup. No implementation blocker or nonblocking feature follow-up remains.
+- PC: will stay on, per the user's latest instruction. Protected .gitignore and environment files are excluded from commits.
+
+---
+
+## Historical checkpoints (superseded by the release result above)
+
 # Last run: Phase 20 SHIP candidate and Preview verification
 
 Recorded: 2026-10-08 (Asia/Seoul)
@@ -548,3 +565,61 @@ The remaining repository migrations were already applied, producing the final `1
 - Fresh root read-only QA: PASS. Fresh Review: PASS; no outstanding findings. Initial server/client disabled state agrees, native copy behavior and server authorization remain unchanged, and pending invite revoke prevents duplicate transitions. This is a narrow UI readiness correction, with no new domain/schema/privacy/payment policy.
 - Required local gates passed: 116 unit files / 1011 tests, lint, typecheck, Prisma validate, actual production build exit0 and diff check. The latest actual live result remains DEFAULT 65176: 28/29 with sole native-copy boundary failure and cleanup/audit zero. Exact new-head DEFAULT29 remains mandatory before release acceptance.
 - SHIP stages only CompletionGuide, its SSR regression and this report. User .gitignore and env files remain excluded. Exact Preview READY, CI, human Production schema approval, merge and Production release verification follow separately; shutdown is not scheduled.
+
+## Latest final continuation result — 2026-10-10 (authoritative current status)
+
+- Phase: 20 예약 신청 고도화. Implementation and Preview verification complete; SHIP remains blocked only by the required GitHub Production Environment human approval. Release completion is not claimed.
+- Implemented scope: schedule application groups, atomic multi-child submissions/reservations, independent guardian companion invitations, bank-transfer guidance and notification, application deposits/returns and single Payment mapping, ADMIN settings and secure repeat-child capabilities. Existing Phase18 privacy, authorization and accounting boundaries are retained.
+- Latest focused correction: CompletionGuide actions remain disabled until client commit, preventing the observed initial click/native-copy boundary failure; SSR regression added. First native copy now called/resolved once, fresh success18ms; all three exact clipboard checks pass without retries, forced focus or increased budgets.
+- Migration: additive 20261006090000_phase20_reservation_application_enhancements. Approved Preview has all13 migrations applied. Production migration has not run; required human schema gate is still waiting.
+- Local validation: 116 unit files / 1011 tests PASS; lint, typecheck, Prisma validate and git diff --check PASS. Final production build session12723 actual exit0/chunk473ab3 after Next dev process count0.
+- Exact-head Preview: deployment dpl_2cR6snZdhbNRwrY1SoQSJFRFZJ3t READY at 5bfc90e327092c7fbe9bb33562441686442a41ea. Default runner45285 actual wrapper exit0/chunk1e7316; child0; selected29/passed29 and all other result counts0; COMPLETE/cleanup PASSED.
+- E2E sources: auth3, access2, core3, group/siblings3, finance/returns1, companion/repeat/privacy5, PostgreSQL concurrency12 — all PASS. Actual PostgreSQL cases cover duplicate confirmation, last capacity, deposit/return contention, group membership, revoke/use, atomic multi-child rollback and Payment mapping uniqueness on run-owned fixtures.
+- Final guarded read-only audit: active runner roles0; groups/leases/markerResources/advisoryLocks0/0/0/0 (audit exit0/chunk197b9d), exact owned run, both runtime identities, approved Preview/denied Production and all13 migrations verified. No broad cleanup or Production E2E.
+- Fresh QA: PASS. Fresh Review: PASS, no outstanding findings. Final live evidence satisfies the previously pending Preview gate.
+- Commit/push: 5bfc90e327092c7fbe9bb33562441686442a41ea, fix(reservation): enable completion actions after client readiness. Only the owned component, SSR regression and prior report checkpoint were committed; user .gitignore and env were excluded.
+- PR: https://github.com/gulatnaru/yaho-management/pull/49 — OPEN, exact head verified, mergeStateStatus BLOCKED.
+- CI: SUCCESS, https://github.com/gulatnaru/yaho-management/actions/runs/38014993951.
+- Required external approval: https://github.com/gulatnaru/yaho-management/actions/runs/38014992659 — Production Environment reviewer User; production-migrate WAITING with no steps executed; detect-schema-change SUCCESS. yaho-ship and ADR-051 prohibit merge before approved migration preflight/deploy/post-status and final schema gate succeed. No approval/protection bypass attempted.
+- Merge: pending required approval/gate. Production deployment and release verification: pending merge. METRICS post-merge entry and main/feature cleanup are deferred until release succeeds. No nonblocking implementation follow-up identified in this focused recovery.
+- This operational result is saved locally after the verified commit to preserve the exact tested SHA without a report-only redeploy loop. No new code change or separate report-only commit was made.
+- PC shutdown: NOT scheduled because required schema approval, merge and Production verification remain incomplete. Resume after the GitHub Production approval; keep all protection rules.
+
+## 2026-10-10 Production recovery continuation — BLOCKED before gate rerun
+
+- PR49 remains OPEN at exact approved/tested HEAD 5bfc90e327092c7fbe9bb33562441686442a41ea. Working tree preserves user .gitignore and this local operational report; no code/schema/migration changes.
+- Existing Production Schema Gate run38014992659 is FAILED in Production migration preflight. Apply approved migrations and verify status were SKIPPED; no migration application from that attempt is recorded.
+- Production availability checks: Supabase get_project reports INACTIVE. Two bounded BEGIN READ ONLY / SELECT1 / COMMIT probes, separated by45seconds, failed with connection timeout. No business rows, credentials, runtime raw identity or SQL error details were emitted.
+- Because Production connectivity remains unverified, the failed gate was not rerun and no Production migration/merge/release operation was attempted. Existing unit1011, Preview29/29, lint/typecheck/Prisma/build/QA/Review/CI PASS evidence is unchanged.
+- Remaining prerequisite: Production project must report ready and pass the read-only connection probe. Then safely rerun the existing exact-head gate, honor any renewed Environment reviewer approval, verify preflight/deploy/post-status/final gate, merge and verify Production release before METRICS and branch cleanup.
+- PC shutdown NOT scheduled. This continuation is blocked by current Production connectivity, not by a new code or migration requirement.
+
+## 2026-10-10 second Production recovery continuation — connectivity still blocked
+
+- PR49 and local HEAD remain 5bfc90e327092c7fbe9bb33562441686442a41ea. Existing schema gate38014992659 attempt1 remains failed at preflight; no migration deployment from that run occurred.
+- Fresh Production get_project and project inventory still report INACTIVE for the approved Production ref; Preview inventory reports ACTIVE_HEALTHY. Fresh read-only SELECT1 probe again failed with connection timeout. No credential, raw connection error, business row or runtime identity was printed.
+- Requested confirmation that the restored dashboard project is the approved Production ref. No further repeated probe, schema gate rerun, migration, merge, Production verification, METRICS or branch cleanup is safe until connectivity is confirmed.
+- Code unchanged; previous1011 unit /29 Preview E2E /lint/typecheck/Prisma/build/QA/Review/CI PASS retained. Operational report saved locally, user changes preserved, PC shutdown NOT scheduled.
+
+## 2026-10-10 Production recovery verified — schema gate attempt2 awaiting approval
+
+- Production now reports ACTIVE_HEALTHY. BEGIN READ ONLY / SELECT1 / COMMIT succeeded with no business data access; prior connectivity blocker is resolved.
+- PR49 exact HEAD remains 5bfc90e327092c7fbe9bb33562441686442a41ea. No code/schema/migration changes.
+- Safely reran only failed jobs of existing Production Schema Gate38014992659 using gh run rerun --failed. Attempt2 detect-schema-change SUCCESS; production-migrate WAITING for the required Production Environment human reviewer. No migration step has executed in attempt2.
+- Approval URL: https://github.com/gulatnaru/yaho-management/actions/runs/38014992659. Approval/protection bypass not attempted. After approval, verify preflight/deploy/post-status/final gate before merge, then exact Production release verification, METRICS and branch cleanup.
+- Unit1011 / Preview29/29 /lint/typecheck/Prisma/build/QA/Review/CI PASS remain valid for unchanged HEAD. PC shutdown NOT scheduled while approval, migration, merge and release verification remain pending.
+
+## 2026-10-11 SHIP continuation — existing attempt2 still awaiting Production approval
+
+- Reconfirmed PR49 OPEN and exact HEAD5bfc90e327092c7fbe9bb33562441686442a41ea; quality CI SUCCESS. Production recovery/read-only connection success is retained from the preceding verified check.
+- Existing Production Schema Gate38014992659 attempt2 remains WAITING at production-migrate, with no migration steps executed. It is already rerun; no duplicate rerun was created. GitHub requires Production Environment human reviewer approval.
+- Approval URL: https://github.com/gulatnaru/yaho-management/actions/runs/38014992659. Preflight/deploy/verify/final gate and subsequent merge/release/METRICS/main cleanup await this approval. No protection bypass, code change, migration or merge attempted. PC shutdown NOT scheduled.
+
+## 2026-10-11 SHIP progress — PR49 merged, Production release verification approval pending
+
+- Production Schema Gate38014992659 attempt2 SUCCESS at exact PR HEAD5bfc90e327092c7fbe9bb33562441686442a41ea. Production migration preflight, approved migration deployment and post-status verification all SUCCESS; final production-schema-gate SUCCESS. Additive migration20261006090000_phase20_reservation_application_enhancements applied through the approved workflow.
+- All PR checks SUCCESS, QA/Review PASS and Preview29/29 evidence retained. PR49 merged by exact-head guarded squash; merge SHA b7f1324bef421d7d343cf980f66c6513d6c905c4.
+- Vercel Production deployment dpl_DbSC3wvz223UDja9J2EarLLPFZtu READY, production target and exact merge SHA verified. READY alone is not release completion; authoritative alias stability and invalid-login smoke remain pending.
+- Production Release Verification38103025470 detect-schema-change SUCCESS; production-verify WAITING for a separate required Production Environment human reviewer. Approval URL: https://github.com/gulatnaru/yaho-management/actions/runs/38103025470. No verification step bypass or secret handling workaround attempted.
+- After approval, require exact Production checkpoint A, read-only migration verify, stable checkpoint B/C invalid-login smoke and final production-release-verify SUCCESS before METRICS/main synchronization/feature cleanup. Those steps remain pending under yaho-ship rules.
+- Local user .gitignore and operational report are preserved; no code change. Unit1011, Preview29/29, lint/typecheck/Prisma/build/QA/Review and PR CI PASS. PC shutdown will not be performed, following the user's latest instruction.
