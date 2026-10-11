@@ -34,6 +34,7 @@ Retrospective 에이전트의 입력이 되는 기록이다.
 | 43 | - | YAHO 개발 오케스트레이터 | 0 | 0 | 2 | 0 | 1 | OTHER |
 | 45 | - | Phase 18 예약자용 고객 예약신청 | 1 | 0 | 2 | 1 | 3 | PRIVACY |
 | 47 | - | Phase 19 Preview E2E infrastructure | 0 | 1 | 11 | 3 | 6 | VALIDATION |
+| 49 | - | Phase 20 예약 신청 고도화 | 0 | 0 | 9 | 4 | 6 | INTEGRITY |
 
 ## 원인 분류 코드
 반복 유형을 세기 위해 아래 코드 중 하나로 적는다.
