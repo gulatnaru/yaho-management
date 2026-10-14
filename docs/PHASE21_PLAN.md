@@ -1,5 +1,9 @@
 # Phase 21 — Approved Mock implementation plan
 
+## Continuation approval — 2026-10-15
+Latest user approval expands execution only to independently verified, separate nonproduction DB migration, synthetic PostgreSQL integration and Preview E2E, scoped cleanup, fresh local gates and independent QA/Review, followed by existing feature commit/PR. Production DB/access/migration/deployment, real Kakao/OpenAI/customer data, and automatic merge remain forbidden. The additive migration FILE and its explicitly approved Preview-only APPLY are distinct evidence. A temporary exact-content validation snapshot supports preliminary exact-SHA verification before committing the existing feature branch; safety guards are unchanged. Actual test results are tracked in BUILD/QA reports, never inferred from preparation.
+
+
 ## Approval ledger
 - Source: user-approved Phase 21 conversation PLAN, ADR-061 Accepted, SPEC AC21-01–17.
 - PLAN conditionally approved; four technical boundaries clarified below without changing business policy. BUILD authorized after clarification.

@@ -1,12 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadEnvConfig } from "@next/env";
 import { readKeys } from "@/lib/ai-consultations/crypto";
 import { readLimits } from "@/server/ai-consultations/ledger";
-import { readPreviewE2eConfiguration } from "@/lib/e2e/preview-runner";
+import { assertDeploymentMatchesRepository, readPreviewE2eConfiguration } from "@/lib/e2e/preview-runner";
+
+import { assertApprovedPreviewUrl } from "@/lib/e2e/preview-safety";
 
 export const PHASE21_RUNNER_ENV_KEYS = ["DATABASE_URL","DIRECT_URL","ADMIN_EMAIL","ADMIN_PASSWORD","VERCEL_AUTOMATION_BYPASS_SECRET","PREVIEW_E2E_HANDSHAKE_SECRET","PREVIEW_E2E_SUPABASE_PROJECT_REF","PRODUCTION_E2E_SUPABASE_PROJECT_REF","PREVIEW_E2E_DB_RUNTIME_IDENTITY_SHA256","PLAYWRIGHT_BASE_URL","PREVIEW_E2E_ALLOWED_BASE_URLS","PREVIEW_E2E_DEPLOYMENT_SHA"] as const;
 export const PHASE21_AI_ENV_KEYS = ["AI_ENCRYPTION_KEYS","AI_ENCRYPTION_ACTIVE","AI_HMAC_KEYS","AI_HMAC_ACTIVE","AI_MOCK_REQUEST_SECRET","AI_MOCK_LIMITS"] as const;
@@ -26,6 +28,17 @@ export function serializePhase21Environment(environment:NodeJS.ProcessEnv) {
     if (value.includes("'")) throw new Error("P21_ENV_QUOTING_DENIED");
     return key+"='"+value+"'";
   }).join("\n")+"\n";
+}
+export function stampPhase21DeploymentContent(content:string,url:string,sha:string) {
+  const origin=assertApprovedPreviewUrl(url,url);
+  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("P21_ENV_DEPLOYMENT_DENIED");
+  let updated=content;
+  for (const [key,value] of [["PLAYWRIGHT_BASE_URL",origin],["PREVIEW_E2E_ALLOWED_BASE_URLS",origin],["PREVIEW_E2E_DEPLOYMENT_SHA",sha]]) {
+    const pattern=new RegExp("^"+key+"=.*$","gm");
+    if ((updated.match(pattern)??[]).length!==1) throw new Error("P21_ENV_DEPLOYMENT_DENIED");
+    updated=updated.replace(pattern,key+"='"+value+"'");
+  }
+  return updated;
 }
 function explicitLocal(directory:string) {
   if (!path.isAbsolute(directory) || !existsSync(path.join(directory,".env.local"))) throw new Error("P21_ENV_SOURCE_DENIED");
@@ -53,7 +66,7 @@ async function capturedVercel(args:string[],input?:string) {
 }
 async function main() {
   const stage=process.argv[2];
-  if (stage!=="local" && stage!=="remote") throw new Error("P21_ENV_STAGE_DENIED");
+  if (stage!=="local" && stage!=="remote" && stage!=="deployment") throw new Error("P21_ENV_STAGE_DENIED");
   const source=process.env.PHASE21_ENV_SOURCE_DIR;
   if (!source || path.resolve(source)===process.cwd()) throw new Error("P21_ENV_SOURCE_DENIED");
   const approvedSource=explicitLocal(source);
@@ -75,6 +88,17 @@ async function main() {
     } else Object.assign(desired,createPhase21MockKeys());
   }
   assertTarget(desired);
+  if (stage==="deployment") {
+    if (!existing) throw new Error("P21_ENV_EXISTING_REQUIRED");
+    const url=process.env.PHASE21_VALIDATION_DEPLOYMENT_URL ?? "",sha=process.env.PHASE21_VALIDATION_DEPLOYMENT_SHA ?? "";
+    assertDeploymentMatchesRepository({deploymentSha:sha});
+    assertPhase21ValidationBranch(execFileSync("git",["branch","--show-current"],{encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim());
+    const content=readFileSync(localPath,"utf8");
+    const updated=stampPhase21DeploymentContent(content,url,sha);
+    writeFileSync(localPath,updated,{mode:0o600});
+    console.log(JSON.stringify({stage,result:"PASS",updatedKeys:3,allOtherValuesPreserved:true}));
+    return;
+  }
   if (stage==="local") {
     // Refuse a repository lacking ignore protection before creating secret material.
     try {execFileSync("git",["check-ignore","--no-index",".env.local"],{stdio:"pipe"});} catch {throw new Error("P21_ENV_NOT_IGNORED");}
