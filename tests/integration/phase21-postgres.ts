@@ -8,6 +8,7 @@ import {
 } from "@/server/ai-consultations/ledger";
 import { type Scope, RETENTION_MS } from "@/lib/ai-consultations/contracts";
 import type { Keyring } from "@/lib/ai-consultations/crypto";
+import { purgeExpired } from "@/server/ai-consultations/retention";
 import {
   syntheticSkill,
   phase21RequestScenarios,
@@ -69,6 +70,10 @@ export async function verifyPhase21Postgres(
         : [],
     );
     assert.equal(lastWon.length, 1);
+    // A losing lock contender must still be refused by the exhausted subject quota after the winner commits.
+    const acceptedKey = lastWon[0].requestKey;
+    const loser = scenarios.lastQuota.find(request => request.action.params.requestId !== acceptedKey)!;
+    await assert.rejects(claim(db,scope,loser,keys,limits,now,PG_TEST_TRANSACTION_MS));
     assert.equal(
       await db.aiConsultation.count({
         where: {
@@ -169,6 +174,16 @@ export async function verifyPhase21Postgres(
       row.expiresAt.getTime() - row.createdAt.getTime(),
       RETENTION_MS,
     );
+    const metricSelection={day:true,category:true,count:true,modelCalls:true,syntheticCost:true} as const;
+    const metricsBeforePurge=await db.aiDailyMetric.findMany({select:metricSelection,orderBy:[{day:"asc"},{category:"asc"}]});
+    const expiredOwned=await db.aiConsultation.count({where:{runId:scope.runId}});
+    assert.ok(expiredOwned>0);
+    // Fake cutoff affects only this owned run; lease authorization and job timestamps use real time.
+    const purge=await purgeExpired(db,scope,new Date(now.getTime()+RETENTION_MS+120000),()=>new Date(),PG_TEST_TRANSACTION_MS);
+    assert.deepEqual(purge,{deleted:expiredOwned,status:"SUCCEEDED"});
+    assert.equal(await db.aiConsultation.count({where:{runId:scope.runId}}),0);
+    assert.deepEqual(await db.aiDailyMetric.findMany({select:metricSelection,orderBy:[{day:"asc"},{category:"asc"}]}),metricsBeforePurge);
+    assert.equal((await db.aiRetentionJob.findUnique({where:{runId:scope.runId},select:{status:true}}))?.status,"SUCCEEDED");
   } finally {
     await a.$disconnect();
     await b.$disconnect();

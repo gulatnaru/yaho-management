@@ -175,6 +175,7 @@ export function memoryClient() {
     async $queryRaw(strings: TemplateStringsArray) {
       queries++;
       const text = strings.join("");
+      if (text.includes("SELECT pg_advisory_xact_lock")) throw new Error("PRISMA_VOID_RESULT_UNSUPPORTED");
       if (text.includes("current_database() AS"))
         return [
           {

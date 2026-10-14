@@ -1,5 +1,12 @@
 # Phase21 — Final local Mock / test-preparation QA and Review
 
+## Actual Preview failure and scoped recovery — 2026-10-15
+- Initial exact-SHA/sin1 Preview run executed3 scenarios:0PASS/3FAIL; it is not counted as successful verification. First ledger claim and cleanup hit Prisma P2010 because queryRaw attempted to deserialize PostgreSQL void from advisory-lock SELECTs. Read-only queryRaw-vs-executeRaw confirmation reproduced the defect without customer access.
+- Corrected ledger/cleanup use executeRaw for void lock SELECTs, following existing Prisma convention. Regression fixtures reject queryRaw void. Applied migration bytes are unchanged.
+- Exact failed-run scoped recovery passed under approved endpoint/ref/runtime/migration/global-lock guards:AI/program/class residuals0 and exactoldlease released only after all cleanup phases succeeded. No foreign Preview data or Production access.
+- New candidate local gates:132 files/1130 tests PASS; lint/typecheck/Prisma/diff PASS; rebuilt production build actual exit0,Next dev0. Actual rerun and fresh independent QA/Review remain PENDING.
+- Actual PG harness additionally verifies sequential post-race quota denial and physical owned-run90day expiry deletion with anonymous metrics preserved. Optional WAN budgets do not relax HTTP four-second runtime defaults. Safe reporter persists only allowlisted relative source/line/stage, never raw errors/body/absolute paths.
+
 ## Continuation verification checkpoint — 2026-10-15
 The user now explicitly authorizes isolated nonproduction migration and synthetic DB/Preview verification. The reviewed Phase21 migration was applied only to the independently confirmed Preview DB: preflight/deploy/verify PASS,14 applied migrations,0 pending. Local suite130 files/1125 tests, lint/typecheck/Prisma validate/diff checks PASS; full build exit0. Three actual guarded Preview scenarios are prepared but not yet executed at this checkpoint. Fresh independent QA/Review after actual verification remains PENDING. Prior PASS findings below apply only to their historical local Mock/preparation scope. Production, real integrations/customer processing and automatic merge remain forbidden.
 

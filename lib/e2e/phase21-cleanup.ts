@@ -73,7 +73,7 @@ export async function cleanupPhase21PreviewRun(
     return await client.$transaction(async (tx) => {
       await tx.$executeRaw`SET LOCAL statement_timeout = '5000ms'`;
       await tx.$executeRaw`SET LOCAL lock_timeout = '1000ms'`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"phase21:" + input.runId},0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"phase21:" + input.runId},0))`;
       await tx.$queryRaw`SELECT "id" FROM "PreviewE2eRunLease" WHERE "runId"=${input.runId} FOR UPDATE`;
       const lease = await tx.previewE2eRunLease.findUnique({
         where: { runId: input.runId },

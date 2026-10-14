@@ -104,7 +104,7 @@ export async function transaction<T>(
       async (tx) => {
         await tx.$executeRaw`SELECT set_config('statement_timeout',${Math.max(1, Math.floor(ms) - 40).toString()},true)`;
         await tx.$executeRaw`SET LOCAL lock_timeout = '60ms'`;
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"phase21:" + runId},0))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"phase21:" + runId},0))`;
         return fn(tx);
       },
       { maxWait: 40, timeout: ms },

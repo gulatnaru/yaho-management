@@ -5,7 +5,10 @@ import { PHASE20_PREVIEW_RUN_ID_PATTERN } from "@/lib/e2e/phase20-lease";
 import { previewTestSourcesForFocus } from "@/lib/e2e/preview-focus";
 import { buildSafePreviewTestCounts, type PreviewTestSource, type PreviewTestStatus } from "@/lib/e2e/preview-test-counts";
 
+import {phase21SafeFailureLocation} from "@/lib/e2e/phase21-safe-diagnostics";
+
 export default class PreviewSafeReporter implements Reporter {
+  private phase21Failures = new Map<string,ReturnType<typeof phase21SafeFailureLocation>>();
   private selected = new Map<PreviewTestSource, number>();
   private results = new Map<string, { source: PreviewTestSource; status: PreviewTestStatus }>();
   private unapprovedSource = false;
@@ -21,14 +24,20 @@ export default class PreviewSafeReporter implements Reporter {
     const source = this.source(test);
     // IDs stay in memory to overwrite retries with their final result. Neither
     // IDs nor titles, output, attachments or errors are serialized.
-    if (source) this.results.set(test.id, { source, status: result.status });
+    if (source) {
+      this.results.set(test.id, { source, status: result.status });
+      if(process.env.PREVIEW_E2E_FOCUS==="PHASE21") {
+        if(result.status==="passed")this.phase21Failures.delete(test.id);
+        else this.phase21Failures.set(test.id,phase21SafeFailureLocation(result.errors?.[0]?.stack,test.location.line));
+      }
+    }
   }
   onEnd(result: FullResult): void {
     const runId = process.env.YAHO_E2E_RUN_ID ?? "";
     if (process.env.PLAYWRIGHT_PREVIEW_E2E !== "1" || !PHASE20_PREVIEW_RUN_ID_PATTERN.test(runId)) throw new Error("P20_REPORT_RUN_GUARD_DENIED");
     const report = buildSafePreviewTestCounts({ selected: [...this.selected].map(([source, count]) => ({ source, count })), results: [...this.results.values()], status: result.status, unapprovedSource: this.unapprovedSource, focus: process.env.PREVIEW_E2E_FOCUS });
     const target = path.resolve("test-results", `preview-e2e-${runId}.safe-tests.json`);
-    mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, JSON.stringify(report) + "\n", { encoding: "utf8", mode: 0o600 });
+    mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, JSON.stringify(process.env.PREVIEW_E2E_FOCUS==="PHASE21"?{...report,failures:[...this.phase21Failures.values()]}:report) + "\n", { encoding: "utf8", mode: 0o600 });
     if (this.unapprovedSource) throw new Error("P20_REPORT_SOURCE_DENIED");
   }
 }

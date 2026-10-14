@@ -18,6 +18,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 describe("optional Phase21 safe reporter", () => {
+  it("persists fixed failure locations and clears them when a retry finally passes",()=>{
+    vi.stubEnv("PLAYWRIGHT_PREVIEW_E2E","1");vi.stubEnv("YAHO_E2E_RUN_ID","preview-abcdefghijklmnopqrstuv");vi.stubEnv("PREVIEW_E2E_FOCUS","PHASE21");
+    const reporter=new PreviewSafeReporter();
+    const item={id:"PRIVATE_ID",title:"PRIVATE_TITLE",location:{file:path.resolve("tests/e2e/phase21-ai-consultations.spec.ts"),line:26}} as TestCase;
+    reporter.onBegin({}, {allTests:()=>[item]} as unknown as Suite);
+    reporter.onTestEnd(item,{status:"failed",errors:[{stack:"PRIVATE_BODY\n at lib/e2e/phase21-cleanup.ts:244:11"}]} as TestResult);
+    reporter.onEnd({status:"failed"} as FullResult);
+    const failed=JSON.parse(fs.write.mock.calls[0][1]);
+    expect(failed.failures).toEqual([{stage:"CLEANUP",source:"lib/e2e/phase21-cleanup.ts",line:244,testLine:26}]);
+    expect(JSON.stringify(failed)).not.toContain("PRIVATE_");
+    reporter.onTestEnd(item,{status:"passed",errors:[]} as unknown as TestResult);reporter.onEnd({status:"passed"} as FullResult);
+    expect(JSON.parse(fs.write.mock.calls[1][1]).failures).toEqual([]);
+  });
   it("records fixed per-source counts without titles/ids/errors", () => {
     vi.stubEnv("PLAYWRIGHT_PREVIEW_E2E", "1");
     vi.stubEnv("YAHO_E2E_RUN_ID", "preview-abcdefghijklmnopqrstuv");

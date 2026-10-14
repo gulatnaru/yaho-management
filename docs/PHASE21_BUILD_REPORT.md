@@ -1,5 +1,12 @@
 # Phase21 BUILD report — 2026-10-15
 
+## Actual Preview failure and scoped recovery — 2026-10-15
+- Initial exact-SHA/sin1 Preview run executed3 scenarios:0PASS/3FAIL; it is not counted as successful verification. First ledger claim and cleanup hit Prisma P2010 because queryRaw attempted to deserialize PostgreSQL void from advisory-lock SELECTs. Read-only queryRaw-vs-executeRaw confirmation reproduced the defect without customer access.
+- Corrected ledger/cleanup use executeRaw for void lock SELECTs, following existing Prisma convention. Regression fixtures reject queryRaw void. Applied migration bytes are unchanged.
+- Exact failed-run scoped recovery passed under approved endpoint/ref/runtime/migration/global-lock guards:AI/program/class residuals0 and exactoldlease released only after all cleanup phases succeeded. No foreign Preview data or Production access.
+- New candidate local gates:132 files/1130 tests PASS; lint/typecheck/Prisma/diff PASS; rebuilt production build actual exit0,Next dev0. Actual rerun and fresh independent QA/Review remain PENDING.
+- Actual PG harness additionally verifies sequential post-race quota denial and physical owned-run90day expiry deletion with anonymous metrics preserved. Optional WAN budgets do not relax HTTP four-second runtime defaults. Safe reporter persists only allowlisted relative source/line/stage, never raw errors/body/absolute paths.
+
 ## Continuation checkpoint — approved nonproduction verification (2026-10-15)
 - Latest user authorization permits only independently verified nonproduction DB migration/application, synthetic PostgreSQL/Preview E2E, fresh local gates and independent QA/Review, then existing feature commit and PR. No automatic merge. Production DB/access/migration/deployment, real Kakao/OpenAI/customer data remain forbidden.
 - Approved Preview identity and environment provenance rechecked independently; both connection endpoints match the existing approved runtime fingerprint. Original protected worktree/env files preserved.

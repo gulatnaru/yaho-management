@@ -7,12 +7,13 @@ export async function purgeExpired(
   scope: Scope,
   now: Date,
   clock: () => Date = () => new Date(),
+  ms = 350,
 ): Promise<{
   deleted: number;
   status: "SUCCEEDED" | "FAILED";
 }> {
   try {
-    const deleted = await transaction(client, scope.runId, 350, async (tx) => {
+    const deleted = await transaction(client, scope.runId, ms, async (tx) => {
       await assertOwnedLease(tx, scope, clock());
       const state = await tx.aiRetentionJob.upsert({
         where: { runId: scope.runId },

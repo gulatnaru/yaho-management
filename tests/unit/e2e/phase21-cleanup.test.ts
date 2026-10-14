@@ -94,7 +94,10 @@ function fixture() {
   const reads: string[] = [];
   const tx: Record<string, unknown> = {
     $executeRaw: vi.fn(async () => 0),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (strings: TemplateStringsArray) => {
+      if (strings.join("").includes("SELECT pg_advisory_xact_lock")) throw new Error("PRISMA_VOID_RESULT_UNSUPPORTED");
+      return [];
+    }),
     previewE2eRunLease: {
       findUnique: vi.fn(async () => state.lease),
       update: vi.fn(async () => {
