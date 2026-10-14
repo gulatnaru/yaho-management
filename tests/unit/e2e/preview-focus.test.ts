@@ -41,3 +41,5 @@ describe("fixed Preview execution scopes", () => {
   });
   it.each(["", "../auth.spec.ts", "--headed", "MINIMAL.*", "LEGACY_FINANCE --headed", "LEGACY_FINANCE/../auth.spec.ts", "__proto__", "PUBLIC_COMPLETION_DIAGNOSTIC", "PUBLIC_COMPLETION_DURATION_DIAGNOSTIC"])("denies non-allowlisted scope %s", (scope) => expect(() => previewPlaywrightArguments(scope)).toThrow("P20_FOCUS_SELECTION_DENIED"));
 });
+
+it("PHASE21 is an optional fixed file and preserves default/old focus selections",()=>{expect(previewPlaywrightArguments("PHASE21")).toEqual(["test","tests/e2e/phase21-ai-consultations.spec.ts"]);expect(previewPlaywrightArguments(undefined)).toEqual(["test",...PREVIEW_E2E_TEST_FILES]);expect(PREVIEW_E2E_TEST_FILES).toHaveLength(7);for(const value of ["PHASE21 --headed","PHASE21.*","PHASE21/../auth.spec.ts"])expect(()=>previewPlaywrightArguments(value)).toThrow("P20_FOCUS_SELECTION_DENIED");});
