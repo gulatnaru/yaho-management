@@ -110,6 +110,11 @@ export async function cleanupPhase21PreviewRun(
           )
       )
         throw new Phase21CleanupError();
+      // ClassTeacher cascades on class deletion. Parent FOR UPDATE blocks concurrent
+      // FK KEY SHARE insertion until this check and all deletes commit atomically.
+      await tx.$queryRaw`SELECT "id" FROM "ClassSchedule" WHERE "id" IN (${Prisma.join([...manifest.classIds].sort())}) ORDER BY "id" FOR UPDATE`;
+      if (await tx.classTeacher.count({where:{classScheduleId:{in:manifest.classIds}}}))
+        throw new Phase21CleanupError();
       const [
         programs,
         classes,

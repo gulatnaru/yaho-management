@@ -1,5 +1,12 @@
 # Phase21 BUILD report — 2026-10-15
 
+## ADMIN rework checkpoint — 2026-10-15
+- Second actual guarded Preview run:2PASS/1FAIL,cleanupPASS. Actual PostgreSQL concurrency/fencing/physical90day owned-row purge and HTTP/privacy/replay passed. ADMIN mobile second publication toggle failed; the whole suite is NOT PASS. No stale lease required recovery.
+- Candidate rework keeps strict expectedVersion CAS and remounts publication/guidance forms by version, refreshes the existing short-lived owned proof per ADMIN mutation, and asserts actual submitted DOM properties against DB state plus HTTP and resulting UI separately. Stale form state is a hypothesis to be verified, not a conclusively identified cause. No Skill four-second or ADMIN timeout/authorization relaxation.
+- Additional cleanup review finding closed in code: lock owned ClassSchedule rows FOR UPDATE in ID order, then reject any ClassTeacher dependency before deletion; this blocks concurrent FK KEY SHARE insertion and prevents foreign cascade deletion. Unit denial proves no delete and manifest preservation; no real foreign Teacher/customer fixture was created. Applied migration unchanged.
+- Current local gates PASS:132 files/1132 tests,lint,typecheck,Prisma validate,diff; rebuilt production build exit0 with Next dev0. New exact-SHA Preview rerun and fresh independent QA/Review remain PENDING.
+- Safe failure diagnostics include only fixed ADMIN operation names and approved relative source/line fields; no body/HTML/header/key/raw error or arbitrary test title.
+
 ## Actual Preview failure and scoped recovery — 2026-10-15
 - Initial exact-SHA/sin1 Preview run executed3 scenarios:0PASS/3FAIL; it is not counted as successful verification. First ledger claim and cleanup hit Prisma P2010 because queryRaw attempted to deserialize PostgreSQL void from advisory-lock SELECTs. Read-only queryRaw-vs-executeRaw confirmation reproduced the defect without customer access.
 - Corrected ledger/cleanup use executeRaw for void lock SELECTs, following existing Prisma convention. Regression fixtures reject queryRaw void. Applied migration bytes are unchanged.

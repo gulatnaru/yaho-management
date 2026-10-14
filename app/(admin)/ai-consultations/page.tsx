@@ -57,7 +57,7 @@ export default async function AiConsultationsPage() {
           })),
         ].map((item) => (
           <form
-            key={item.kind + item.id}
+            key={item.kind + item.id + ":" + (item.version ?? 0)}
             action={savePublication}
             className="flex flex-wrap items-center gap-3"
           >
@@ -89,7 +89,7 @@ export default async function AiConsultationsPage() {
           const row = state.knowledge.find((x) => x.topic === topic);
           return (
             <form
-              key={topic}
+              key={topic + ":" + (row?.version ?? 0)}
               action={saveGuidance}
               className="flex flex-wrap gap-3"
             >

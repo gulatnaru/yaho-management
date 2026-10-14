@@ -67,16 +67,52 @@ test("Phase21 ADMIN owned synthetic mobile controls preserve proof confidentiali
     await page.getByLabel("이메일").fill(email);await page.getByLabel("비밀번호").fill(password);
     await page.getByRole("button",{name:"로그인",exact:true}).click();await expect(page).toHaveURL(/\/dashboard/);
     await page.setViewportSize({width:390,height:844});
-    const proof=skillProof(f,"","AI_ADMIN");
-    await context.setExtraHTTPHeaders({"x-vercel-protection-bypass":process.env.VERCEL_AUTOMATION_BYPASS_SECRET!,"x-yaho-phase20-preview-run":process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN!,[AI_PROOF_HEADER]:proof});
-    await page.goto("/ai-consultations");await expect(page.getByRole("heading",{name:"AI 상담 — 합성 데이터 검증"})).toBeVisible();
-    const html=await page.content();expect(html.includes(proof)).toBe(false);expect(html.includes(process.env.AI_MOCK_REQUEST_SECRET!)).toBe(false);
-    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);
+    async function refreshAdminProof() {
+      const proof=skillProof(f,"","AI_ADMIN");
+      await context.setExtraHTTPHeaders({"x-vercel-protection-bypass":process.env.VERCEL_AUTOMATION_BYPASS_SECRET!,"x-yaho-phase20-preview-run":process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN!,[AI_PROOF_HEADER]:proof});
+      return proof;
+    }
     const program=page.locator('form:has(input[name="kind"][value="PROGRAM"])');
-    await program.getByRole("button",{name:"공개 해제",exact:true}).click();await expect(program.getByRole("button",{name:"AI 공개 허용",exact:true})).toBeVisible();
-    const publication=await f.db.aiProgramPublication.findUnique({where:{runId_programId:{runId:f.scope.runId,programId:f.scope.manifest.programIds[0]}}});expect(publication?.enabled).toBe(false);
-    await program.getByRole("button",{name:"AI 공개 허용",exact:true}).click();await expect(program.getByRole("button",{name:"공개 해제",exact:true})).toBeVisible();
-    await page.getByRole("button",{name:"만료 합성 상담 삭제 재시도",exact:true}).click();
-    await expect(page.getByText(/상태: SUCCEEDED/)).toBeVisible();
+    await test.step("P21_ADMIN_CONTEXT",async()=>{
+      const proof=await refreshAdminProof();
+      await page.goto("/ai-consultations");
+      await expect(page.getByRole("heading",{name:"AI 상담 — 합성 데이터 검증"})).toBeVisible();
+      const html=await page.content();
+      expect(html.includes(proof)).toBe(false);
+      expect(html.includes(process.env.AI_MOCK_REQUEST_SECRET!)).toBe(false);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);
+    });
+    async function publication() {
+      return f.db.aiProgramPublication.findUniqueOrThrow({where:{runId_programId:{runId:f.scope.runId,programId:f.scope.manifest.programIds[0]}},select:{enabled:true,version:true}});
+    }
+    await test.step("P21_ADMIN_DISABLE",async()=>{
+      const before=await publication();
+      expect(await program.locator('input[name="expectedVersion"]').inputValue()).toBe(String(before.version));
+      const button=program.getByRole("button",{name:"공개 해제",exact:true});
+      expect(await button.evaluate(element=>(element as HTMLButtonElement).value)).toBe("false");
+      await refreshAdminProof();
+      const completed=page.waitForResponse(response=>response.request().method()==="POST" && new URL(response.url()).pathname==="/ai-consultations");
+      await button.click();
+      expect((await completed).status()).toBe(200);
+      await expect.poll(async()=>(await publication()).enabled).toBe(false);
+      await expect(program.getByRole("button",{name:"AI 공개 허용",exact:true})).toBeVisible();
+    });
+    await test.step("P21_ADMIN_ENABLE",async()=>{
+      const before=await publication();
+      await expect(program.locator('input[name="expectedVersion"]')).toHaveValue(String(before.version));
+      const button=program.getByRole("button",{name:"AI 공개 허용",exact:true});
+      expect(await button.evaluate(element=>(element as HTMLButtonElement).value)).toBe("true");
+      await refreshAdminProof();
+      const completed=page.waitForResponse(response=>response.request().method()==="POST" && new URL(response.url()).pathname==="/ai-consultations");
+      await button.click();
+      expect((await completed).status()).toBe(200);
+      await expect.poll(async()=>(await publication()).enabled).toBe(true);
+      await expect(program.getByRole("button",{name:"공개 해제",exact:true})).toBeVisible();
+    });
+    await test.step("P21_ADMIN_RETENTION",async()=>{
+      await refreshAdminProof();
+      await page.getByRole("button",{name:"만료 합성 상담 삭제 재시도",exact:true}).click();
+      await expect(page.getByText(/상태: SUCCEEDED/)).toBeVisible();
+    });
   } finally {await f.cleanup();}
 });

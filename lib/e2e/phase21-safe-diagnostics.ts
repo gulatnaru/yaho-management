@@ -20,3 +20,14 @@ export function phase21SafeFailureLocation(stack:string|undefined,testLine:numbe
  }
  return fallback;
 }
+
+const ADMIN_OPERATIONS=["P21_ADMIN_CONTEXT","P21_ADMIN_DISABLE","P21_ADMIN_ENABLE","P21_ADMIN_RETENTION"] as const;
+export function phase21SafeOperation(steps:readonly {title:string;error?:unknown;steps?:readonly unknown[]}[],depth=0):string {
+ if(depth>8)return "UNKNOWN";
+ for(const step of steps.slice(0,100)){
+   const nested=phase21SafeOperation((step.steps??[]) as typeof steps,depth+1);
+   if(nested!=="UNKNOWN")return nested;
+   if(step.error && (ADMIN_OPERATIONS as readonly string[]).includes(step.title))return step.title;
+ }
+ return "UNKNOWN";
+}

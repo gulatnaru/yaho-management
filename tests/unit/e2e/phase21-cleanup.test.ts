@@ -90,6 +90,7 @@ function fixture() {
   };
   let failClass = false;
   let residualClass = false;
+  let foreignTeacherLink = false;
   const deletes: string[] = [];
   const reads: string[] = [];
   const tx: Record<string, unknown> = {
@@ -98,6 +99,7 @@ function fixture() {
       if (strings.join("").includes("SELECT pg_advisory_xact_lock")) throw new Error("PRISMA_VOID_RESULT_UNSUPPORTED");
       return [];
     }),
+    classTeacher:{count:vi.fn(async()=>foreignTeacherLink?1:0)},
     previewE2eRunLease: {
       findUnique: vi.fn(async () => state.lease),
       update: vi.fn(async () => {
@@ -156,12 +158,18 @@ function fixture() {
     failClass() {
       failClass = true;
     },
+    addForeignTeacherLink() {foreignTeacherLink=true;},
     leaveClass() {
       residualClass = true;
     },
   };
 }
 describe("Phase21 exact-owned cleanup", () => {
+  it("refuses foreign ClassTeacher cascade dependencies before any deletion and retains ownership",async()=>{
+    const f=fixture();f.addForeignTeacherLink();const before=structuredClone(f.state);
+    await expect(cleanupPhase21PreviewRun(f.client,{runId,deploymentSha:sha,expectedManifest:manifest})).rejects.toThrow("AI_PREVIEW_CLEANUP_DENIED");
+    expect(f.deletes).toHaveLength(0);expect(f.state).toEqual(before);expect(f.state.lease?.aiFixtureManifest).toEqual(manifest);
+  });
   it("removes only exact run-owned synthetic rows and keeps anonymous metrics/foreign data", async () => {
     const f = fixture();
     const metrics = structuredClone(f.state.metrics);
