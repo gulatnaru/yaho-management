@@ -555,3 +555,16 @@
   - ADR-059의 Production 절대 차단, 승인 Preview URL·DB, migration 확인, 단일 실행, run-scoped 합성 데이터·정리, 비밀정보 비출력, CI 미실행은 유지한다. Phase 18 공개 접수는 현재 Preview에서 닫혀 있으므로 Phase 20 공개 E2E는 별도 안전 검토를 통과한 후보만 Preview-safe로 분류한다. 허용하더라도 그 E2E 실행이 소유한 합성 신청 그룹·링크 범위만 조건부로 열고 shared Preview의 일반 공개 접수를 열지 않는다. 이 제한을 지킬 수 없으면 전용 로컬 E2E DB에서 검증한다.
 - Reason: 클래스별 실제 금액을 ADMIN이 정하고 제출 시 고정하면 기본가격 변경이나 과거 결제 입력에 청구액이 흔들리지 않는다. 실제 은행 입금을 누적 원장으로 보존하면 부분·초과입금과 취소 반환을 숨기지 않으면서도 Reservation 이전 금액을 기존 Revenue에 조기 반영하지 않는다. 아이별 상태와 가족 단위 누적 입금을 함께 유지하려면 동일 금액의 중복 배정·반환을 막는 보존식이 필요하다. 친구 보호자의 별도 제출과 기기 capability는 계정·전화번호 조회 없이 개인정보·동의 대리 위험을 줄인다.
 - Consequences: ADR-052의 클래스 1건 링크와 완료 화면 금액 미표시, ADR-053의 입금 확인 시각만 기록·확정 시 Payment 미생성 조항은 Phase 20 신규 흐름에 한해 이 ADR로 대체된다. Phase 18의 만석 신청 허용, 공개 정원 비노출, ADMIN 최종 확정, 동의·보관·파기와 기존 링크·데이터 호환은 유지된다. additive·backward-compatible migration과 Production human approval schema gate가 필요하다. 기존 환경값·가격은 임의 추론·하드코딩할 수 없어 운영자가 실제 값을 설정해야 한다. 부분입금·초과입금·부분반환은 상태·동시성·금액 보존 테스트 범위를 늘리지만 기존 Payment/Refund/Revenue 정책과 고객 계정·자동 입금 매칭은 도입하지 않는다.
+
+
+## ADR-061: Phase 21 AI 공개 범위·Mock 전용 개발·상담 보관과 운영 전환 게이트를 확정한다
+- Status: Accepted — 사용자 정책 결정만 확정. PLAN·BUILD·운영 전환 승인 아님.
+- Date: 2026-10-14
+- Context: 카카오 AI 상담의 프로그램·일정·예약 가능 상태 조회는 ADR-052/060과 REQUIREMENTS20의 비인증 정보 공개 제한에 명시적 예외가 필요하다. 사용자가 Q21-01~03을 결정했다.
+- Decision: AI 공개 대상은 ADMIN이 명시 허용한 프로그램·일정만이며 기본 비공개다. 기존 예약신청 링크 설정과 독립적으로 관리한다. 서버가 실제 예약을 판정해 AVAILABLE/UNAVAILABLE/UNKNOWN만 전달하고 정원·예약 인원·잔여석 숫자는 고객·LLM에 제공하지 않는다. AI 공개 예외는 새 상담 경로에만 적용되며 Phase20 공개 신청 화면·만석 접수·ADMIN 확정과 기존 예약·결제·환불은 유지한다.
+- Agent Boundary: 승인된 서버 조회 Tool만 사용하며 임의 SQL/인터넷/관리자 API/고객 개인정보 조회/예약 쓰기/결제·환불 처리를 금지한다. 인증·Zod·권한·빈도/비용/시간 제한·입출력 최소화는 서버에서 강제한다.
+- Development Gate: 개인정보 처리방침·외부 LLM 전송 검토 전 Mock·합성 데이터로만 개발·테스트한다. 실제 고객정보/상담 기록의 OpenAI 전송과 운영 연결을 금지하고 운영 전환은 별도 명시 승인 gate다. 테스트 flags나 ADMIN 설정만으로 gate를 우회할 수 없다.
+- Readiness: 카카오 채널·Skill·Callback은 미확인/미준비다. Callback은 필수 전제가 아니며 실제 권한을 확인한 경우에만 별도 채택한다. 공식 운영정책·준비물·우천 원문도 미확보로 기록하고 없는 질문에는 추측 없이 담당자 상담을 안내한다.
+- Retention: 새 상담 원문만90일 보관·자동 삭제, 실패 재시도·ADMIN 확인을 제공한다. 카카오 식별값은 최소화·가명처리하고 삭제 후 원문·사용자 연결키 없는 비식별 통계만 유지한다. 가명 ID가 익명정보라는 가정이나 기존 예약 동의 재사용, 기존 Child/Application/거래 보관기간 변경은 허용하지 않는다.
+- Reason: 공개 허용·조회 경계와 실제 운영 전환을 분리하면 기존 도메인과 개인정보 정책을 유지하면서 합성 데이터로 상담 품질·보안·삭제 흐름을 검증할 수 있다.
+- Consequences: 현재 범위의 SPEC Open Questions는 없다. PLAN 승인 뒤에만 developer BUILD를 수행한다. migration 파일 작성/검증과 DB 적용은 분리하고 migration 적용·Production 배포·PR merge는 별도 명시 승인을 기다린다. ADR-030/051/059와 기존 Preview guard를 유지한다. 이 ADR은 기존 Accepted ADR을 수정하지 않으며 ADR-052/060의 AI 상담 경로에 한정한 예외만 확정한다.
