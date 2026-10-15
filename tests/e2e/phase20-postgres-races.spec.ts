@@ -10,7 +10,7 @@ import { createApplicationGroupCore, issueApplicationGroupLinkCore, issueCompani
 import { listOwnedRepeatChildrenCore, revokeApplicationDeviceCore } from "@/server/reservation-applications/devices";
 import { purgeExpiredPersonalDataCore } from "@/server/reservation-applications/retention";
 import { runPhase20PostgresRace, type Phase20RaceObserver, type Phase20RaceTransactionAdapter } from "./support/phase20-race-barrier";
-import { assertExactlyOneFulfilledPhase20Race } from "./support/phase20-race-diagnostic";
+import { assertExactlyOneFulfilledPhase20Race, classifyPhase20RaceOutcome } from "./support/phase20-race-diagnostic";
 
 const runId = process.env.YAHO_E2E_RUN_ID;
 if (process.env.PLAYWRIGHT_PREVIEW_E2E !== "1" || !runId || !/^preview-[A-Za-z0-9_-]{22}$/.test(runId)) throw new Error("Phase20 PostgreSQL races require the guarded Preview runner");
@@ -126,6 +126,7 @@ test.describe.serial("Phase 20 guarded PostgreSQL races", () => {
         (client) => purgeExpiredPersonalDataCore(client as never, { actorUserId: f.adminId, now: new Date(), scope: { childIds: [childId], applicationIds: [] } }),
         (client) => confirmApplicationSubmissionCore(client as never, { submissionId: pending.submissionId, choices: [{ applicationId: pending.applicationIds[0]!, childId }], actorUserId: f.adminId, now: new Date() }),
       );
+      if(result[0]?.status!=="fulfilled" || result[1]?.status!=="rejected") throw new Error(`PHASE20_RACE_OUTCOME:${result.map(classifyPhase20RaceOutcome).join(",")}`);
       expect(result.map((row) => row.status)).toEqual(["fulfilled", "rejected"]);
       const [purged, requested, deviceChildren, futureReservations, mappings, after] = await Promise.all([
         db.child.findUniqueOrThrow({ where: { id: childId }, select: { isActive: true, personalDataPurgedAt: true } }),

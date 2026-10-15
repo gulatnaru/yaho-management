@@ -1,12 +1,12 @@
 import { loadEnvConfig } from "@next/env";
+import {previewArtifactPolicy} from "./lib/e2e/preview-artifact-policy";
 import { defineConfig, devices } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./tests/e2e/support/db-safety";
 import { assertLocalE2eBaseUrl } from "./lib/e2e/local-origin-safety";
-import { previewPlaywrightArguments } from "./lib/e2e/preview-focus";
+import { previewPlaywrightArguments, previewTestSourcesForFocus } from "./lib/e2e/preview-focus";
 import {
   assertPreviewE2eRunnerProof,
   PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS,
-  PREVIEW_E2E_TEST_FILES,
   readPreviewE2eConfiguration,
 } from "./lib/e2e/preview-runner";
 
@@ -39,14 +39,15 @@ if (previewE2e) {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  ...(previewE2e?previewArtifactPolicy(process.env.PREVIEW_E2E_RUNNER_PROOF_PATH):{}),
   reporter: previewE2e ? [["./tests/e2e/support/preview-safe-reporter.ts"]] : undefined,
   testMatch: previewE2e
-    ? PREVIEW_E2E_TEST_FILES.map((file) => new RegExp(`${escapeRegExp(file).replaceAll("/", "[\\\\/]")}$`))
+    ? previewTestSourcesForFocus(process.env.PREVIEW_E2E_FOCUS).map((file) => new RegExp(`${escapeRegExp(file).replaceAll("/", "[\\\\/]")}$`))
     : undefined,
   // This suite intentionally throws before creating a client unless the Preview
   // runner proof is present. Ignore it during ordinary local discovery so the
   // local safety check can list the browser suite without weakening that guard.
-  testIgnore: previewE2e ? undefined : /phase20-postgres-races\.spec\.ts$/,
+  testIgnore: previewE2e ? undefined : /(?:phase20-postgres-races|phase21-ai-consultations)\.spec\.ts$/,
   // 로컬 Next dev cold compilation 환경에서 전체 E2E 실행의 결정성을 우선한다.
   workers: 1,
   // The outer runner adds cleanup/startup time beyond this browser budget.

@@ -36,6 +36,7 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
           { href: "/payments", label: "결제·환불" },
           { href: "/revenue", label: "매출 집계" },
           { href: "/accounts", label: "계정 관리" },
+          { href: "/ai-consultations", label: "AI 상담 (Mock)" },
         ]
       : []),
     { href: "/account/password", label: "비밀번호 변경" },
