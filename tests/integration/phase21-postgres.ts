@@ -1,0 +1,210 @@
+import assert from "node:assert/strict";
+import { PrismaClient } from "@prisma/client";
+import {pgVerificationClient,type PgFailureCode} from "./phase21-client";
+import type {PgVerificationStage} from "@/lib/e2e/phase21-safe-diagnostics";
+import {
+  claim,
+  dispatch,
+  settle,
+  recover,
+} from "@/server/ai-consultations/ledger";
+import { type Scope, RETENTION_MS } from "@/lib/ai-consultations/contracts";
+import type { Keyring } from "@/lib/ai-consultations/crypto";
+import { purgeExpired } from "@/server/ai-consultations/retention";
+import {
+  syntheticSkill,
+  phase21RequestScenarios,
+  globalBucketDelta,
+} from "../e2e/support/phase21-scenarios";
+const limits = {
+  subjectPerMinute: 1,
+  globalPerMinute: 50,
+  dailyCalls: 100,
+  dailyCost: 0 as const,
+};
+/** Real PostgreSQL semantics; callers must hold the guarded owned Preview run. */
+const PG_TEST_TRANSACTION_MS = 8000; // WAN harness only; HTTP four-second caps are unchanged.
+export async function verifyPhase21Postgres(
+  client: PrismaClient,
+  scope: Scope,
+  keys: Keyring,
+) {
+  let stage:PgVerificationStage="CONNECT",observedCode:PgFailureCode="UNKNOWN";
+  const observed=(code:PgFailureCode)=>{observedCode=code;};
+  const db=pgVerificationClient(client,observed),a=pgVerificationClient(new PrismaClient(),observed),b=pgVerificationClient(new PrismaClient(),observed);
+  const checkpoint=(value:PgVerificationStage)=>{stage=value;observedCode="UNKNOWN";};
+  try {
+    // Establish independent connections before measuring concurrent DB semantics.
+    await Promise.all([db.$connect(),a.$connect(),b.$connect()]);
+    const now = new Date();
+    const scenarios = phase21RequestScenarios(scope);
+    const before = await db.aiQuotaBucket.findMany({
+      where: { runId: scope.runId },
+    });
+    const input = scenarios.duplicate;
+    checkpoint("DUPLICATE");
+    const same = await Promise.allSettled([
+      claim(a, scope, input, keys, limits, now, PG_TEST_TRANSACTION_MS, new Date(now.getTime()+120000)),
+      claim(b, scope, input, keys, limits, now, PG_TEST_TRANSACTION_MS, new Date(now.getTime()+120000)),
+    ]);
+    const won = same.flatMap((result) =>
+      result.status === "fulfilled" && result.value.kind === "NEW"
+        ? [result.value.row]
+        : [],
+    );
+    assert.equal(won.length, 1);
+    assert.equal(
+      await db.aiConsultation.count({
+        where: {
+          runId: scope.runId,
+          requestKey: input.action.params.requestId,
+        },
+      }),
+      1,
+    );
+    checkpoint("PENDING");
+    assert.equal(
+      (await claim(db, scope, input, keys, limits, now, PG_TEST_TRANSACTION_MS)).kind,
+      "PENDING",
+    );
+    checkpoint("QUOTA");
+    const last = await Promise.allSettled(
+      scenarios.lastQuota.map((request, index) =>
+        claim(index === 0 ? a : b, scope, request, keys, limits, now, PG_TEST_TRANSACTION_MS, new Date(now.getTime()+120000)),
+      ),
+    );
+    const lastWon = last.flatMap((result) =>
+      result.status === "fulfilled" && result.value.kind === "NEW"
+        ? [result.value.row]
+        : [],
+    );
+    assert.equal(lastWon.length, 1);
+    // A losing lock contender must still be refused by the exhausted subject quota after the winner commits.
+    const acceptedKey = lastWon[0].requestKey;
+    const loser = scenarios.lastQuota.find(request => request.action.params.requestId !== acceptedKey)!;
+    await assert.rejects(claim(db,scope,loser,keys,limits,now,PG_TEST_TRANSACTION_MS));
+    assert.equal(
+      await db.aiConsultation.count({
+        where: {
+          runId: scope.runId,
+          requestKey: {
+            in: scenarios.lastQuota.map(
+              (request) => request.action.params.requestId,
+            ),
+          },
+        },
+      }),
+      1,
+    );
+    const row = won[0];
+    checkpoint("DISPATCH");
+    await dispatch(db, scope, row, new Date(), PG_TEST_TRANSACTION_MS);
+    const settlement = {
+      question: input.userRequest.utterance,
+      reply: { category: "HUMAN_HANDOFF" as const, text: "합성 안내" },
+      usedCalls: 1,
+      uncertain: false,
+    };
+    checkpoint("SETTLE");
+    const settled = await Promise.allSettled([
+      settle(a, scope, row, keys, settlement, new Date(), PG_TEST_TRANSACTION_MS),
+      settle(b, scope, row, keys, settlement, new Date(), PG_TEST_TRANSACTION_MS),
+    ]);
+    assert.equal(
+      settled.filter((result) => result.status === "fulfilled" && result.value)
+        .length,
+      1,
+    );
+    assert.equal(
+      await settle(db, scope, row, keys, settlement, new Date(), PG_TEST_TRANSACTION_MS),
+      false,
+    );
+    const after = await db.aiQuotaBucket.findMany({
+      where: { runId: scope.runId },
+    });
+    for (const key of [
+      "global-minute:" + now.toISOString().slice(0, 16),
+      "global-day:" + now.toISOString().slice(0, 10),
+    ])
+      assert.deepEqual(globalBucketDelta(before, after, key), {
+        accepted: 2,
+        usedCalls: 1,
+        reservedCalls: 2,
+      });
+    const owned = await db.aiConsultation.findMany({
+      where: { runId: scope.runId, id: { in: [row.id, lastWon[0].id] } },
+    });
+    assert.equal(owned.length, 2);
+    assert.equal(owned.find((item) => item.id === row.id)?.status, "DONE");
+    assert.equal(
+      owned.find((item) => item.id === lastWon[0].id)?.status,
+      "PROCESSING",
+    );
+    checkpoint("CONSTRAINTS");
+    await assert.rejects(
+      db.aiConsultation.update({
+        where: { id: row.id },
+        data: { expiresAt: new Date(row.expiresAt.getTime() + 1) },
+      }),
+    );
+    await assert.rejects(
+      db.aiConsultation.update({
+        where: { id: row.id },
+        data: { origin: "LIVE" },
+      }),
+    );
+    checkpoint("RECOVERY");
+    const future = new Date(now.getTime() + 60_000);
+    const crashed = await claim(
+      db,
+      scope,
+      syntheticSkill(scope, "PROGRAMS", undefined, 1),
+      keys,
+      limits,
+      future,
+      PG_TEST_TRANSACTION_MS,
+    );
+    if (crashed.kind !== "NEW") throw new Error("AI_RACE_CLAIM_REQUIRED");
+    await recover(db, scope, new Date(future.getTime() + 4000), PG_TEST_TRANSACTION_MS);
+    assert.equal(
+      await settle(
+        db,
+        scope,
+        crashed.row,
+        keys,
+        {
+          question: "synthetic",
+          reply: { category: "HUMAN_HANDOFF", text: "late" },
+          usedCalls: 0,
+          uncertain: false,
+        },
+        future,
+        PG_TEST_TRANSACTION_MS,
+      ),
+      false,
+    );
+    assert.equal(
+      row.expiresAt.getTime() - row.createdAt.getTime(),
+      RETENTION_MS,
+    );
+    checkpoint("PURGE");
+    const metricSelection={day:true,category:true,count:true,modelCalls:true,syntheticCost:true} as const;
+    const metricsBeforePurge=await db.aiDailyMetric.findMany({select:metricSelection,orderBy:[{day:"asc"},{category:"asc"}]});
+    const expiredOwned=await db.aiConsultation.count({where:{runId:scope.runId}});
+    assert.ok(expiredOwned>0);
+    // Fake cutoff affects only this owned run; lease authorization and job timestamps use real time.
+    const purge=await purgeExpired(db,scope,new Date(now.getTime()+RETENTION_MS+120000),()=>new Date(),PG_TEST_TRANSACTION_MS);
+    assert.deepEqual(purge,{deleted:expiredOwned,status:"SUCCEEDED"});
+    assert.equal(await db.aiConsultation.count({where:{runId:scope.runId}}),0);
+    assert.deepEqual(await db.aiDailyMetric.findMany({select:metricSelection,orderBy:[{day:"asc"},{category:"asc"}]}),metricsBeforePurge);
+    assert.equal((await db.aiRetentionJob.findUnique({where:{runId:scope.runId},select:{status:true}}))?.status,"SUCCEEDED");
+  } catch(error) {
+    const frame=error instanceof Error?error.stack?.replaceAll("\\","/").split(/\r?\n/).find(line=>line.includes("tests/integration/phase21-postgres.ts:")):undefined;
+    const line=Number(frame?.match(/:(\d+):\d+\)?$/)?.[1]);
+    const caller=Number.isSafeInteger(line)&&line>0&&line<=10000?line:0;
+    throw new Error("P21_PG_FAILURE:"+stage+":"+observedCode+":"+caller);
+  } finally {
+    await a.$disconnect();
+    await b.$disconnect();
+  }
+}

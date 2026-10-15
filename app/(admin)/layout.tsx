@@ -49,6 +49,7 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
           { href: "/reservation-applications/notifications", label: "알림 이력" },
           { href: "/payments", label: "결제·환불" },
           { href: "/revenue", label: "매출 집계" },
+          { href: "/ai-consultations", label: "AI 상담 (Mock)" },
         ]
       : [];
   const accountMenuItems =

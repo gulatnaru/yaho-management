@@ -25,15 +25,19 @@ export const PREVIEW_E2E_TEST_FILES = [
   "tests/e2e/phase20-postgres-races.spec.ts",
 ] as const;
 
+/** Optional suite: existing default files and case count remain unchanged. */
+export const PHASE21_PREVIEW_TEST_FILES = ["tests/e2e/phase21-ai-consultations.spec.ts"] as const;
+export const PREVIEW_E2E_SUPPORTED_TEST_FILES = [...PREVIEW_E2E_TEST_FILES, ...PHASE21_PREVIEW_TEST_FILES] as const;
+
 export const PREVIEW_E2E_LOCK_KEY = PHASE20_PREVIEW_LOCK_KEY;
 // Hard whole-run limit, not a promise that every per-case maximum fits.
 // Phase20 browser positives are bounded at 180s/240s/420s; each PostgreSQL
 // race case remains bounded at 180s. The unchanged global deadline may
-// interrupt a worst-case suite and still leaves cleanup within the 25m lock.
+// interrupt a worst-case suite and still leaves cleanup within the 26m lock.
 export const PREVIEW_E2E_BROWSER_GLOBAL_TIMEOUT_MS = 22 * 60 * 1000;
-// The outer transaction adds two 60-second cleanup phases and one startup
-// minute. It must exceed Playwright's global timeout rather than equal it.
-export const PREVIEW_E2E_LOCK_TIMEOUT_MS = 25 * 60 * 1000;
+// The outer transaction covers browser22m + startup1m + two (60s+10s wait)
+// cleanup phases + AI (15s+1s wait), with24s margin. Intake lease stays24m.
+export const PREVIEW_E2E_LOCK_TIMEOUT_MS = 26 * 60 * 1000;
 
 /** Node runs the Playwright CLI on every platform; this avoids Windows .cmd spawn semantics. */
 export function playwrightCliPath(workspace = process.cwd()) {
@@ -242,7 +246,7 @@ export async function withPreviewDatabaseLock<T>({
   heartbeatMs = 5_000,
 }: {
   client: PreviewDatabaseClient;
-  run: () => Promise<T>;
+  run: (session: PreviewDatabaseSession) => Promise<T>;
   onSessionLost: () => void;
   heartbeatMs?: number;
 }): Promise<T> {
@@ -265,7 +269,7 @@ export async function withPreviewDatabaseLock<T>({
     }, heartbeatMs);
 
     try {
-      const result = await run();
+      const result = await run(transaction);
       if (sessionLost) {
         throw new PreviewE2eSafetyError("LOCK_SESSION_LOST", "Preview E2E database lock session was lost");
       }

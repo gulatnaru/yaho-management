@@ -2161,6 +2161,37 @@ Now — Phase 18 흐름을 유지하면서 실제 다자녀·친구 동행·입�
 
 ---
 
+## Phase 21 — 카카오톡 AI 상담원 (SPEC 확정 — Mock 개발 범위)
+
+- Status: 현재 Mock·합성 데이터 개발 범위 SPEC 확정. PLAN 및 구현·운영 전환 승인은 별도다.
+- Source: 2026-10-14 사용자 Phase 21 요청. 상세: [Phase 21 SPEC](docs/PHASE21_SPEC.md), ADR-061 Accepted (정책 범위).
+- ADMIN이 명시 허용한 프로그램·일정만 AI 공개 대상이며 기본값은 비공개다. 예약신청 링크 설정과 독립적으로 관리한다.
+- 카카오톡 채널에서 보호자의 자유 질문에 OpenAI로 YAHO 숲체험 상담을 제공한다. 기존 Next.js Modular Monolith·Prisma·Supabase·Vercel을 유지하고 별도 microservice/MCP 서버는 만들지 않는다.
+- MVP: Skill API, YAHO 범위 상담, 공개 허용 프로그램·일정과 예약 가능 상태 조회, 승인된 운영정책·준비물·우천 안내, 담당자 연결, ADMIN 상담 내역, 원문90일 자동 삭제와 비식별 통계, 삭제 실패 재시도·관리자 확인.
+- 정원·예약 인원·잔여석 수치는 고객과 LLM에 제공하지 않는다. 실제 예약은 서버에서 조회하고 AVAILABLE/UNAVAILABLE/UNKNOWN만 허용한다. 상담은 예약 확정이나 자리 보장을 뜻하지 않는다.
+- Tool allowlist와 서버 검증을 사용한다. 임의 SQL·인터넷 검색·관리자 API·고객 개인정보 조회·예약 쓰기·결제·환불 처리는 금지한다. 입력·호출량·비용 제한, 외부 요청 인증, prompt injection 방어, 로그/에러의 PII·secret 금지를 검증한다.
+- 검토 완료와 별도 운영 전환 승인 전까지 Mock·합성 데이터만 개발·테스트하고 실제 고객정보/상담 기록 OpenAI 전송·운영 연결을 금지한다.
+- 상담 원문90일 보관은 새 상담 도메인 정책으로 확정됐다. 카카오 식별값 최소화·가명처리, 외부 LLM 전송 및 수집/이용 고지·적법 근거를 운영 전에 검토한다. 원문 삭제 후 통계에 재식별 가능한 원문·사용자 식별자를 남기지 않는다.
+- Phase20 및 기존 예약·결제·환불·개인정보 파기 정책은 변경하지 않는다. 상담90일 정책은 새 상담 기록에만 적용하며 기존 Child·Application·거래 기록 보관기간에 적용하지 않는다.
+- 실제 카카오 연결 전 Mock Skill·합성 데이터로 검증한다. Production DB/고객 데이터로 테스트하지 않는다. Production 배포·migration 적용·PR merge는 별도 명시적 승인 전 금지한다.
+
+### Acceptance Criteria
+- AC21-01~17: docs/PHASE21_SPEC.md의 확정 시나리오별 기준을 따른다. 특히 기본 비공개·독립 공개 설정·Mock 전용·운영 전환 gate를 검증한다.
+
+### Conflicts
+- REQUIREMENTS10.6/20 및 ADR-052/060: 다른 클래스·예약 가능 여부 비공개와 AI 일정·가용 상태 조회가 충돌한다. AI 상담만의 ADMIN 허용 대상/예약 상태 공개 예외를 이번 사용자 결정으로 확정한다. 기존 공개 신청 화면은 변경하지 않는다.
+- REQUIREMENTS20/20-1 및 ADR-055~058: 상담 원문·카카오 가명 ID 수집과 외부 전송은 새 처리 범위다. 기존 예약신청 동의를 상담 동의로 재사용하지 않고 검토 전 실제 전송·운영 연결을 차단한다(Q21-02 확정).
+- REQUIREMENTS24의 자동 개인정보 파기 미결정은 기존 고객·신청 기록에 관한 것이다. 이번 요청의 상담 원문 자동 삭제만 별도 범위로 추가하고 기존 파기 기능은 변경하지 않는다.
+- ADR-059/030/051: Preview 수동 E2E guard, migration 비자동화, Production human gate를 유지한다.
+
+### Open Questions
+없음 — 이번 개발 범위 질문 Q21-01~03은 사용자 결정으로 해소됐다. 카카오 채널/Skill/Callback과 공식 안내 원문은 미준비로 기록한다. 원문 없는 질문은 담당자 안내이며 Callback은 필수 전제가 아니다. 개인정보·외부 전송 검토, 실제 인증/연동 및 별도 운영 전환 승인은 배포/운영 gate로 남긴다.
+
+### Priority
+Now — SPEC 확정, PLAN으로 진행. PLAN 승인 전 BUILD를 시작하지 않는다.
+
+---
+
 # 23. Acceptance Criteria
 
 ### 아이
