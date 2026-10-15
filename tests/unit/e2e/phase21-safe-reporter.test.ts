@@ -73,3 +73,5 @@ describe("optional Phase21 safe reporter", () => {
     expect(fs.write.mock.calls[0][1]).not.toContain("PRIVATE");
   });
 });
+
+it("default regression reports contain only fixed failure metadata",()=>{vi.stubEnv("PLAYWRIGHT_PREVIEW_E2E","1");vi.stubEnv("YAHO_E2E_RUN_ID","preview-abcdefghijklmnopqrstuv");delete process.env.PREVIEW_E2E_FOCUS;const reporter=new PreviewSafeReporter();const item={id:"PRIVATE_ID",title:"PRIVATE_TITLE",location:{file:path.resolve("tests/e2e/phase20-postgres-races.spec.ts"),line:97}} as TestCase;reporter.onBegin({}, {allTests:()=>[item]} as unknown as Suite);reporter.onTestEnd(item,{status:"failed",errors:[{stack:"PRIVATE at tests/e2e/phase20-postgres-races.spec.ts:136:11",message:"PHASE20_RACE_OUTCOME:PRISMA_P2028,FULFILLED"}]} as TestResult);reporter.onEnd({status:"failed"} as FullResult);const data=String(fs.write.mock.calls[0][1]);expect(data).not.toContain("PRIVATE");expect(JSON.parse(data).failures[0]).toMatchObject({stage:"PHASE20_POSTGRES",line:136,testLine:97,diagnostic:"PHASE20_RACE_OUTCOME:PRISMA_P2028,FULFILLED"});});

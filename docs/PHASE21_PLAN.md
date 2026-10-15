@@ -52,7 +52,7 @@ Whole handler uses monotonic 4,000ms deadline: authentication/validation600, cla
 | AC21-08 | server ADMIN-only | ADMIN versus MANAGER/TEACHER/invalid | unit | admin.test.ts |
 | AC21-09/10/11/15 | encrypted TTL, purge and anonymous stats | 90d boundary, tamper, key rotation, deletion failure | unit/PG pending | crypto.test.ts, retention.test.ts |
 | AC21-16 | Phase20 and financial rules preserved | reuse existing application/reservation/payment tests | unit | existing tests/unit |
-| AC21-17 ADR059 | actual evidence, own fixtures | safe Preview integration, cleanup | E2E latest2/3,rerun pending | tests/e2e/phase21-ai-consultations.spec.ts |
+| AC21-17 ADR059 | actual evidence, own fixtures | safe Preview integration, cleanup | Phase21 actual3/3 PASS; default29 regression26PASS/2FAIL/1SKIP; rerun pending | tests/e2e/phase21-ai-consultations.spec.ts |
 
 ## Acceptance / risks / order
 AC21-01–17 in SPEC remains authoritative. Runtime guards -> schema/migration file -> tools/agent -> ledger/crypto/retention -> ADMIN UI/routes -> unit and authored guarded integration/E2E -> lint/typecheck/validate/build -> separate QA/Review. New code contains no real model provider, deployment cron schedule or real Skill connection. DB tests/migration application/Preview E2E require separate approval and must be reported NOT RUN. No code/DB rollout automatically follows PLAN approval.
@@ -63,3 +63,6 @@ AC21-01–17 in SPEC remains authoritative. Runtime guards -> schema/migration f
 - Global lock26m explicitly covers new bounded cleanup/acquisition time; browser22m/intake24m unchanged.
 - Authored PG scenarios use independent owned subjects and baseline global deltas. Preparation is not migration/execution/deployment approval.
 - Production Mock processing/context/actions are blocked; existing general ADMIN page authentication remains before disabled rendering.
+
+## Current execution addendum — 2026-10-15
+The later explicit user approval permitted approved Preview-only migration and synthetic PG/Preview execution. Migration verify:14 applied/0 pending. Actual Phase21 3/3 and cleanup PASS; default29 regression has2 failures and1 resulting skip, so fresh QA/Review/commit remain pending. Initial approval boundaries above describe historical preparation; Production/real integrations/customer data/merge remain prohibited.

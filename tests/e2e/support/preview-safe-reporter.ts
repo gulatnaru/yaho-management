@@ -1,3 +1,4 @@
+import {previewRegressionSafeFailure} from "@/lib/e2e/preview-regression-diagnostics";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { FullResult, Reporter, Suite, TestCase, TestResult } from "@playwright/test/reporter";
@@ -9,6 +10,7 @@ import {phase21SafeFailureLocation,phase21SafeOperation,phase21SafePgFailure} fr
 
 export default class PreviewSafeReporter implements Reporter {
   private phase21Failures = new Map<string,ReturnType<typeof phase21SafeFailureLocation>&ReturnType<typeof phase21SafePgFailure>&{operation:string}>();
+  private regressionFailures=new Map<string,ReturnType<typeof previewRegressionSafeFailure>>();
   private selected = new Map<PreviewTestSource, number>();
   private results = new Map<string, { source: PreviewTestSource; status: PreviewTestStatus }>();
   private unapprovedSource = false;
@@ -26,6 +28,10 @@ export default class PreviewSafeReporter implements Reporter {
     // IDs nor titles, output, attachments or errors are serialized.
     if (source) {
       this.results.set(test.id, { source, status: result.status });
+      if(process.env.PREVIEW_E2E_FOCUS!=="PHASE21") {
+        if(result.status==="passed")this.regressionFailures.delete(test.id);
+        else if(result.status!=="skipped")this.regressionFailures.set(test.id,previewRegressionSafeFailure(result.errors?.[0]?.stack,result.errors?.[0]?.message,test.location.line));
+      }
       if(process.env.PREVIEW_E2E_FOCUS==="PHASE21") {
         if(result.status==="passed")this.phase21Failures.delete(test.id);
         else this.phase21Failures.set(test.id,{...phase21SafeFailureLocation(result.errors?.[0]?.stack,test.location.line),operation:phase21SafeOperation(result.steps??[]),...phase21SafePgFailure(result.errors?.[0]?.message)});
@@ -37,7 +43,7 @@ export default class PreviewSafeReporter implements Reporter {
     if (process.env.PLAYWRIGHT_PREVIEW_E2E !== "1" || !PHASE20_PREVIEW_RUN_ID_PATTERN.test(runId)) throw new Error("P20_REPORT_RUN_GUARD_DENIED");
     const report = buildSafePreviewTestCounts({ selected: [...this.selected].map(([source, count]) => ({ source, count })), results: [...this.results.values()], status: result.status, unapprovedSource: this.unapprovedSource, focus: process.env.PREVIEW_E2E_FOCUS });
     const target = path.resolve("test-results", `preview-e2e-${runId}.safe-tests.json`);
-    mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, JSON.stringify(process.env.PREVIEW_E2E_FOCUS==="PHASE21"?{...report,failures:[...this.phase21Failures.values()]}:report) + "\n", { encoding: "utf8", mode: 0o600 });
+    mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, JSON.stringify(process.env.PREVIEW_E2E_FOCUS==="PHASE21"?{...report,failures:[...this.phase21Failures.values()]}:{...report,failures:[...this.regressionFailures.values()]}) + "\n", { encoding: "utf8", mode: 0o600 });
     if (this.unapprovedSource) throw new Error("P20_REPORT_SOURCE_DENIED");
   }
 }

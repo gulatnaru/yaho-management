@@ -1,3 +1,17 @@
+# Current continuation checkpoint — 2026-10-15
+
+- Latest user explicitly approved verified nonproduction DB migration and synthetic PG/Preview validation; Production, real Kakao/OpenAI/customer data and merge remain prohibited.
+- Approved Preview identity/runtime/checksum guards passed. Phase21 migration was applied through Prisma migrate deploy; verify reports 14 applied, 0 pending/failed. Seven AI tables have RLS enabled and no anon/authenticated CRUD grants. Production was untouched.
+- Candidate 754bcdb25acca25393147fb85eacb7e21a8f678e actual PHASE21 Preview: 3 selected / 3 PASS, cleanup PASS. This covers real PG claim/quota/fencing/physical synthetic TTL deletion, HTTP/privacy and mobile ADMIN publication/guidance/retention.
+- Additional shared-runner regression: 29 selected / 26 PASS / 2 FAIL / 1 SKIP; cleanup PASS. Failures: PRESENT attendance pending UI and scoped-purge race outcome. These failures are unresolved; final QA/Review and feature commit/PR remain pending.
+- Minimal diagnostic continuation preserves Phase20 domain behavior and original assertions/timeouts. Fixed request/DB enums and PG outcomes only are retained. Preview disables DOM snapshot collection and never preserves raw per-test output; temporary output is inside the owned proof directory and checked before removal. Two old run-owned error-context.md leaves were removed without reading/outputting their bodies.
+- Manual synthetic browser artifact proof: 2/2 PASS (intentional test failure and reporter exception), actual browser execution asserted, 0 retained raw artifacts. This proof is separate from npm test/CI; no browser E2E was added to CI.
+- Final local unit:136 files / 1,151 PASS; lint, standalone typecheck, Prisma validate and diff check PASS. Production build PASS actual exit0 (session74084, chunkd0733a; Next dev0 precheck); actual focused/full regression verification remains pending. No overall QA/Review/SHIP PASS is claimed.
+
+## Historical local-only checkpoint below
+
+The following original report records the earlier unapproved/unapplied state; the current checkpoint above supersedes its execution-status statements.
+
 # Phase21 — Final local Mock / test-preparation QA and Review
 
 ## PostgreSQL harness readiness checkpoint — 2026-10-15

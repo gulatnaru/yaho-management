@@ -24,6 +24,7 @@ import { cleanupPhase21PreviewRun } from "@/lib/e2e/phase21-cleanup";
 import { cleanupPreviewRunPhases } from "@/lib/e2e/preview-cleanup-phases";
 import { previewE2eSafeSummaryPath, writePreviewE2eSafeSummary } from "@/lib/e2e/preview-run-summary";
 import { previewPlaywrightArguments } from "@/lib/e2e/preview-focus";
+import {PREVIEW_NO_COPY_PROMPT} from "@/lib/e2e/preview-artifact-policy";
 import {readPreviewInvocationConfiguration} from "@/lib/e2e/preview-invocation";
 
 let activeSummaryPath: string | undefined;
@@ -165,6 +166,7 @@ async function main(): Promise<void> {
                 {
                   ...process.env,
                   PLAYWRIGHT_PREVIEW_E2E: "1",
+                  PLAYWRIGHT_NO_COPY_PROMPT: PREVIEW_NO_COPY_PROMPT,
                   PLAYWRIGHT_BASE_URL: configuration.baseUrl,
                   YAHO_E2E_RUN_ID: configuration.runId,
                   PREVIEW_E2E_RUNNER_PROOF_PATH: proofPath,
@@ -225,7 +227,11 @@ async function main(): Promise<void> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     stopChild();
-    if (proofDirectory) rmSync(proofDirectory, { recursive: true, force: true });
+    if (proofDirectory) {
+      const resolved=path.resolve(proofDirectory),temp=path.resolve(os.tmpdir());
+      if(!resolved.startsWith(temp+path.sep)||!path.basename(resolved).startsWith("yaho-preview-e2e-"))throw new Error("PREVIEW_ARTIFACT_PATH_DENIED");
+      rmSync(resolved, { recursive: true, force: true });
+    }
     await Promise.all([databaseClient.$disconnect(), directClient.$disconnect()]);
   }
 }

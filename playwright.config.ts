@@ -1,4 +1,5 @@
 import { loadEnvConfig } from "@next/env";
+import {previewArtifactPolicy} from "./lib/e2e/preview-artifact-policy";
 import { defineConfig, devices } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./tests/e2e/support/db-safety";
 import { assertLocalE2eBaseUrl } from "./lib/e2e/local-origin-safety";
@@ -38,6 +39,7 @@ if (previewE2e) {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  ...(previewE2e?previewArtifactPolicy(process.env.PREVIEW_E2E_RUNNER_PROOF_PATH):{}),
   reporter: previewE2e ? [["./tests/e2e/support/preview-safe-reporter.ts"]] : undefined,
   testMatch: previewE2e
     ? previewTestSourcesForFocus(process.env.PREVIEW_E2E_FOCUS).map((file) => new RegExp(`${escapeRegExp(file).replaceAll("/", "[\\\\/]")}$`))
