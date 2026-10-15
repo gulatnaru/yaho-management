@@ -5,10 +5,10 @@ import { PHASE20_PREVIEW_RUN_ID_PATTERN } from "@/lib/e2e/phase20-lease";
 import { previewTestSourcesForFocus } from "@/lib/e2e/preview-focus";
 import { buildSafePreviewTestCounts, type PreviewTestSource, type PreviewTestStatus } from "@/lib/e2e/preview-test-counts";
 
-import {phase21SafeFailureLocation,phase21SafeOperation} from "@/lib/e2e/phase21-safe-diagnostics";
+import {phase21SafeFailureLocation,phase21SafeOperation,phase21SafePgFailure} from "@/lib/e2e/phase21-safe-diagnostics";
 
 export default class PreviewSafeReporter implements Reporter {
-  private phase21Failures = new Map<string,ReturnType<typeof phase21SafeFailureLocation>&{operation:string}>();
+  private phase21Failures = new Map<string,ReturnType<typeof phase21SafeFailureLocation>&ReturnType<typeof phase21SafePgFailure>&{operation:string}>();
   private selected = new Map<PreviewTestSource, number>();
   private results = new Map<string, { source: PreviewTestSource; status: PreviewTestStatus }>();
   private unapprovedSource = false;
@@ -28,7 +28,7 @@ export default class PreviewSafeReporter implements Reporter {
       this.results.set(test.id, { source, status: result.status });
       if(process.env.PREVIEW_E2E_FOCUS==="PHASE21") {
         if(result.status==="passed")this.phase21Failures.delete(test.id);
-        else this.phase21Failures.set(test.id,{...phase21SafeFailureLocation(result.errors?.[0]?.stack,test.location.line),operation:phase21SafeOperation(result.steps??[])});
+        else this.phase21Failures.set(test.id,{...phase21SafeFailureLocation(result.errors?.[0]?.stack,test.location.line),operation:phase21SafeOperation(result.steps??[]),...phase21SafePgFailure(result.errors?.[0]?.message)});
       }
     }
   }

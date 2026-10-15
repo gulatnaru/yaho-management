@@ -1,5 +1,11 @@
 # Phase 21 — Approved Mock implementation plan
 
+## Current execution addendum — 2026-10-15
+- User-authorized nonproduction-only migration applied and verified on independently approved Preview:14 applied,0 pending. Production DB/migration/deployment and actual integrations/customer processing remain forbidden.
+- Latest actual3-case Preview run:HTTP and ADMIN (including guidance/retention) PASS; PostgreSQL harness FAIL; cleanup PASS. Earlier PG passes do not satisfy the latest all-three gate. Fresh independent QA/Review and feature commit/PR remain pending.
+- Exact current harness is tests/integration/phase21-postgres.ts invoked by tests/e2e/phase21-ai-consultations.spec.ts. Agent behavior is covered by tests/unit/ai-consultations/handler.test.ts and tools.test.ts; nonexistent planned filenames below were corrected without changing approved requirements.
+- WAN harness warms independent connections and applies its own bounded2s transaction acquisition wait; deployed Skill caps, ownership/global-lock checks and audited cleanup budgets remain unchanged. Known PG code/stage/caller diagnostics are fixed and exclude raw errors.
+
 ## Continuation approval — 2026-10-15
 Latest user approval expands execution only to independently verified, separate nonproduction DB migration, synthetic PostgreSQL integration and Preview E2E, scoped cleanup, fresh local gates and independent QA/Review, followed by existing feature commit/PR. Production DB/access/migration/deployment, real Kakao/OpenAI/customer data, and automatic merge remain forbidden. The additive migration FILE and its explicitly approved Preview-only APPLY are distinct evidence. A temporary exact-content validation snapshot supports preliminary exact-SHA verification before committing the existing feature branch; safety guards are unchanged. Actual test results are tracked in BUILD/QA reports, never inferred from preparation.
 
@@ -40,13 +46,13 @@ Whole handler uses monotonic 4,000ms deadline: authentication/validation600, cla
 | Requirement / ADR | Invariant | Positive / denial / race | Level | Location |
 |---|---|---|---|---|
 | AC21-01/13/14 ADR061 | Mock-only authenticated owned requests | valid, bad signature, Production, flag spoof, size | unit/route | tests/unit/ai-consultations/runtime.test.ts |
-| AC21-02/03/06/12 ADR061 | default private, approved tools/facts | both opt-in, unpublish, injection, absent guidance | unit | tools.test.ts, agent.test.ts |
-| AC21-04/05 ADR061 | no seat numbers, status only | full, available, DB failure, changing publication | unit/PG pending | tools.test.ts |
-| AC21-07 | atomic claim/quota/fenced settle | concurrent claim, retry, processing, refund, unknown | unit/PG pending | ledger.test.ts, tests/integration/phase21-postgres.test.ts |
+| AC21-02/03/06/12 ADR061 | default private, approved tools/facts | both opt-in, unpublish, injection, absent guidance | unit | tests/unit/ai-consultations/tools.test.ts, tests/unit/ai-consultations/handler.test.ts |
+| AC21-04/05 ADR061 | no seat numbers, status only | full, available, DB failure, changing publication | unit + guarded PG rerun pending | tools.test.ts |
+| AC21-07 | atomic claim/quota/fenced settle | concurrent claim, retry, processing, refund, unknown | unit/PG pending | ledger.test.ts, tests/integration/phase21-postgres.ts (through guarded Preview E2E) |
 | AC21-08 | server ADMIN-only | ADMIN versus MANAGER/TEACHER/invalid | unit | admin.test.ts |
 | AC21-09/10/11/15 | encrypted TTL, purge and anonymous stats | 90d boundary, tamper, key rotation, deletion failure | unit/PG pending | crypto.test.ts, retention.test.ts |
 | AC21-16 | Phase20 and financial rules preserved | reuse existing application/reservation/payment tests | unit | existing tests/unit |
-| AC21-17 ADR059 | actual evidence, own fixtures | safe Preview integration, cleanup | E2E NOT RUN | tests/e2e/phase21-ai-consultations.spec.ts |
+| AC21-17 ADR059 | actual evidence, own fixtures | safe Preview integration, cleanup | E2E latest2/3,rerun pending | tests/e2e/phase21-ai-consultations.spec.ts |
 
 ## Acceptance / risks / order
 AC21-01–17 in SPEC remains authoritative. Runtime guards -> schema/migration file -> tools/agent -> ledger/crypto/retention -> ADMIN UI/routes -> unit and authored guarded integration/E2E -> lint/typecheck/validate/build -> separate QA/Review. New code contains no real model provider, deployment cron schedule or real Skill connection. DB tests/migration application/Preview E2E require separate approval and must be reported NOT RUN. No code/DB rollout automatically follows PLAN approval.

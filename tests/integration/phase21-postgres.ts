@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { PrismaClient } from "@prisma/client";
+import {pgVerificationClient,type PgFailureCode} from "./phase21-client";
+import type {PgVerificationStage} from "@/lib/e2e/phase21-safe-diagnostics";
 import {
   claim,
   dispatch,
@@ -23,19 +25,24 @@ const limits = {
 /** Real PostgreSQL semantics; callers must hold the guarded owned Preview run. */
 const PG_TEST_TRANSACTION_MS = 8000; // WAN harness only; HTTP four-second caps are unchanged.
 export async function verifyPhase21Postgres(
-  db: PrismaClient,
+  client: PrismaClient,
   scope: Scope,
   keys: Keyring,
 ) {
-  const a = new PrismaClient(),
-    b = new PrismaClient();
+  let stage:PgVerificationStage="CONNECT",observedCode:PgFailureCode="UNKNOWN";
+  const observed=(code:PgFailureCode)=>{observedCode=code;};
+  const db=pgVerificationClient(client,observed),a=pgVerificationClient(new PrismaClient(),observed),b=pgVerificationClient(new PrismaClient(),observed);
+  const checkpoint=(value:PgVerificationStage)=>{stage=value;observedCode="UNKNOWN";};
   try {
+    // Establish independent connections before measuring concurrent DB semantics.
+    await Promise.all([db.$connect(),a.$connect(),b.$connect()]);
     const now = new Date();
     const scenarios = phase21RequestScenarios(scope);
     const before = await db.aiQuotaBucket.findMany({
       where: { runId: scope.runId },
     });
     const input = scenarios.duplicate;
+    checkpoint("DUPLICATE");
     const same = await Promise.allSettled([
       claim(a, scope, input, keys, limits, now, PG_TEST_TRANSACTION_MS, new Date(now.getTime()+120000)),
       claim(b, scope, input, keys, limits, now, PG_TEST_TRANSACTION_MS, new Date(now.getTime()+120000)),
@@ -55,10 +62,12 @@ export async function verifyPhase21Postgres(
       }),
       1,
     );
+    checkpoint("PENDING");
     assert.equal(
       (await claim(db, scope, input, keys, limits, now, PG_TEST_TRANSACTION_MS)).kind,
       "PENDING",
     );
+    checkpoint("QUOTA");
     const last = await Promise.allSettled(
       scenarios.lastQuota.map((request, index) =>
         claim(index === 0 ? a : b, scope, request, keys, limits, now, PG_TEST_TRANSACTION_MS, new Date(now.getTime()+120000)),
@@ -88,6 +97,7 @@ export async function verifyPhase21Postgres(
       1,
     );
     const row = won[0];
+    checkpoint("DISPATCH");
     await dispatch(db, scope, row, new Date(), PG_TEST_TRANSACTION_MS);
     const settlement = {
       question: input.userRequest.utterance,
@@ -95,6 +105,7 @@ export async function verifyPhase21Postgres(
       usedCalls: 1,
       uncertain: false,
     };
+    checkpoint("SETTLE");
     const settled = await Promise.allSettled([
       settle(a, scope, row, keys, settlement, new Date(), PG_TEST_TRANSACTION_MS),
       settle(b, scope, row, keys, settlement, new Date(), PG_TEST_TRANSACTION_MS),
@@ -129,6 +140,7 @@ export async function verifyPhase21Postgres(
       owned.find((item) => item.id === lastWon[0].id)?.status,
       "PROCESSING",
     );
+    checkpoint("CONSTRAINTS");
     await assert.rejects(
       db.aiConsultation.update({
         where: { id: row.id },
@@ -141,6 +153,7 @@ export async function verifyPhase21Postgres(
         data: { origin: "LIVE" },
       }),
     );
+    checkpoint("RECOVERY");
     const future = new Date(now.getTime() + 60_000);
     const crashed = await claim(
       db,
@@ -174,6 +187,7 @@ export async function verifyPhase21Postgres(
       row.expiresAt.getTime() - row.createdAt.getTime(),
       RETENTION_MS,
     );
+    checkpoint("PURGE");
     const metricSelection={day:true,category:true,count:true,modelCalls:true,syntheticCost:true} as const;
     const metricsBeforePurge=await db.aiDailyMetric.findMany({select:metricSelection,orderBy:[{day:"asc"},{category:"asc"}]});
     const expiredOwned=await db.aiConsultation.count({where:{runId:scope.runId}});
@@ -184,6 +198,11 @@ export async function verifyPhase21Postgres(
     assert.equal(await db.aiConsultation.count({where:{runId:scope.runId}}),0);
     assert.deepEqual(await db.aiDailyMetric.findMany({select:metricSelection,orderBy:[{day:"asc"},{category:"asc"}]}),metricsBeforePurge);
     assert.equal((await db.aiRetentionJob.findUnique({where:{runId:scope.runId},select:{status:true}}))?.status,"SUCCEEDED");
+  } catch(error) {
+    const frame=error instanceof Error?error.stack?.replaceAll("\\","/").split(/\r?\n/).find(line=>line.includes("tests/integration/phase21-postgres.ts:")):undefined;
+    const line=Number(frame?.match(/:(\d+):\d+\)?$/)?.[1]);
+    const caller=Number.isSafeInteger(line)&&line>0&&line<=10000?line:0;
+    throw new Error("P21_PG_FAILURE:"+stage+":"+observedCode+":"+caller);
   } finally {
     await a.$disconnect();
     await b.$disconnect();

@@ -1,6 +1,10 @@
 import {describe,expect,it} from "vitest";
-import {phase21SafeFailureLocation,phase21SafeOperation} from "@/lib/e2e/phase21-safe-diagnostics";
+import {phase21SafeFailureLocation,phase21SafeOperation,phase21SafePgFailure} from "@/lib/e2e/phase21-safe-diagnostics";
 describe("Phase21 fixed-only failure diagnostics",()=>{
+ it("accepts only fixed PG diagnostic stages/codes and bounded integration caller lines",()=>{
+   expect(phase21SafePgFailure("Error: P21_PG_FAILURE:SETTLE:P2028:123")).toEqual({pgStage:"SETTLE",pgObservedCode:"P2028",pgCallerLine:123});
+   for(const message of ["PRIVATE_BODY","P21_PG_FAILURE:PRIVATE_BODY:P2028:123","P21_PG_FAILURE:SETTLE:PRIVATE_KEY:123"]){const result=phase21SafePgFailure(message);expect(result).toEqual({pgStage:"UNKNOWN",pgObservedCode:"UNKNOWN",pgCallerLine:null});expect(JSON.stringify(result)).not.toMatch(/PRIVATE/);}
+ });
  it("emits only fixed operation names, ignoring private step titles and errors",()=>{
    expect(phase21SafeOperation([{title:"PRIVATE",error:"PRIVATE_ERROR",steps:[{title:"P21_ADMIN_ENABLE",error:"PRIVATE_BODY"}]}])).toBe("P21_ADMIN_ENABLE");
    expect(phase21SafeOperation([{title:"PRIVATE_BODY",error:"PRIVATE_ERROR"}])).toBe("UNKNOWN");

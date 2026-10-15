@@ -31,3 +31,13 @@ export function phase21SafeOperation(steps:readonly {title:string;error?:unknown
  }
  return "UNKNOWN";
 }
+
+export const PHASE21_PG_STAGES=["CONNECT","DUPLICATE","PENDING","QUOTA","DISPATCH","SETTLE","CONSTRAINTS","RECOVERY","PURGE"] as const;
+export type PgVerificationStage=typeof PHASE21_PG_STAGES[number];
+export function phase21SafePgFailure(message:string|undefined) {
+ const empty={pgStage:"UNKNOWN",pgObservedCode:"UNKNOWN",pgCallerLine:null as number|null};
+ const match=message?.match(/^(?:Error: )?P21_PG_FAILURE:(CONNECT|DUPLICATE|PENDING|QUOTA|DISPATCH|SETTLE|CONSTRAINTS|RECOVERY|PURGE):(P2028|P2010|P2002|P2034|UNKNOWN):(\d{1,5})$/);
+ if(!match)return empty;
+ const line=Number(match[3]);
+ return{pgStage:match[1],pgObservedCode:match[2],pgCallerLine:Number.isSafeInteger(line)&&line>0&&line<=10000?line:null};
+}

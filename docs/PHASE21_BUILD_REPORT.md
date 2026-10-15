@@ -1,5 +1,11 @@
 # Phase21 BUILD report — 2026-10-15
 
+## PostgreSQL harness readiness checkpoint — 2026-10-15
+- Latest actual Preview run:2PASS/1FAIL with cleanupPASS. HTTP/privacy and ADMIN mobile publication/guidance/retention PASS, confirming the explicit state wire works in that run. PostgreSQL verification failed behind the ledger's fixed denial; the whole gate remains NOT PASS.
+- Candidate warms two independent PG clients before timed concurrent assertions and uses a non-mutating harness-only Prisma Proxy with bounded2s acquisition/8s transaction timeout. The original fixture client is unchanged, so audited cleanup1s/15s budgets, deployed Skill4s caps, SQL locks and all ownership/quota/fencing assertions remain unchanged. Connection/acquisition readiness is a hypothesis until actual rerun.
+- Fixed PG stage/observed Prisma code/bounded integration caller line now survive safe reporting; raw diagnostics, SQL, URLs, keys and body data remain unrecorded.
+- Current local gates PASS:134 files/1146 tests,lint,typecheck,Prisma validate,diff; full build actual exit0 with Next dev0. New exact-SHA rerun and fresh independent QA/Review remain PENDING. PLAN test filename references corrected to actual handler/tools units and guarded integration entry point; approved design/policies unchanged.
+
 ## Explicit ADMIN state wire checkpoint — 2026-10-15
 - Latest actual Preview run still2PASS/1FAIL with cleanupPASS:PG physical TTL/concurrency and HTTP passed; ADMIN re-enable left DB enabled=false despite matching DOM version/true submitter value and HTTP200. The action previously coerced an absent enabled field tofalse; submitter omission is a consistent inference, not a proven general React bug.
 - Candidate uses explicit hidden enabled/approved fields independent of submitter serialization and strict Zod form parsing. Missing/invalid/duplicate/File booleans and invalid CAS versions fail closed with fixed errors; expectedVersion/auth/runtime limits remain strict. Actual E2E additionally checks FormData without a submitter and one synthetic guidance approval.

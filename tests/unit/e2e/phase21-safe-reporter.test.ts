@@ -26,7 +26,7 @@ describe("optional Phase21 safe reporter", () => {
     reporter.onTestEnd(item,{status:"failed",errors:[{stack:"PRIVATE_BODY\n at lib/e2e/phase21-cleanup.ts:244:11"}]} as TestResult);
     reporter.onEnd({status:"failed"} as FullResult);
     const failed=JSON.parse(fs.write.mock.calls[0][1]);
-    expect(failed.failures).toEqual([{stage:"CLEANUP",source:"lib/e2e/phase21-cleanup.ts",line:244,testLine:26,operation:"UNKNOWN"}]);
+    expect(failed.failures).toEqual([{stage:"CLEANUP",source:"lib/e2e/phase21-cleanup.ts",line:244,testLine:26,operation:"UNKNOWN",pgStage:"UNKNOWN",pgObservedCode:"UNKNOWN",pgCallerLine:null}]);
     expect(JSON.stringify(failed)).not.toContain("PRIVATE_");
     reporter.onTestEnd(item,{status:"passed",errors:[]} as unknown as TestResult);reporter.onEnd({status:"passed"} as FullResult);
     expect(JSON.parse(fs.write.mock.calls[1][1]).failures).toEqual([]);
