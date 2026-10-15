@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import {parsePublicationForm,parseGuidanceForm} from "@/lib/ai-consultations/admin-form";
 import { adminContext } from "@/server/ai-consultations/admin-context";
 import {
   updateGuidance,
@@ -10,12 +11,7 @@ import { recover } from "@/server/ai-consultations/ledger";
 export async function savePublication(form: FormData) {
   const ctx = await adminContext();
   try {
-    await updatePublication(ctx.client, ctx.scope, ctx.actor, {
-      kind: form.get("kind"),
-      id: form.get("id"),
-      enabled: form.get("enabled") === "true",
-      expectedVersion: Number(form.get("expectedVersion")),
-    });
+    await updatePublication(ctx.client, ctx.scope, ctx.actor, parsePublicationForm(form));
   } catch {
     throw new Error("AI_OPERATION_DENIED");
   }
@@ -24,11 +20,7 @@ export async function savePublication(form: FormData) {
 export async function saveGuidance(form: FormData) {
   const ctx = await adminContext();
   try {
-    await updateGuidance(ctx.client, ctx.scope, ctx.actor, {
-      topic: form.get("topic"),
-      approved: form.get("approved") === "true",
-      expectedVersion: Number(form.get("expectedVersion")),
-    });
+    await updateGuidance(ctx.client, ctx.scope, ctx.actor, parseGuidanceForm(form));
   } catch {
     throw new Error("AI_OPERATION_DENIED");
   }

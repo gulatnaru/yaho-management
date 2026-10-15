@@ -89,7 +89,7 @@ test("Phase21 ADMIN owned synthetic mobile controls preserve proof confidentiali
       const before=await publication();
       expect(await program.locator('input[name="expectedVersion"]').inputValue()).toBe(String(before.version));
       const button=program.getByRole("button",{name:"공개 해제",exact:true});
-      expect(await button.evaluate(element=>(element as HTMLButtonElement).value)).toBe("false");
+      expect(await program.evaluate(element=>new FormData(element as HTMLFormElement).get("enabled"))).toBe("false");
       await refreshAdminProof();
       const completed=page.waitForResponse(response=>response.request().method()==="POST" && new URL(response.url()).pathname==="/ai-consultations");
       await button.click();
@@ -101,13 +101,25 @@ test("Phase21 ADMIN owned synthetic mobile controls preserve proof confidentiali
       const before=await publication();
       await expect(program.locator('input[name="expectedVersion"]')).toHaveValue(String(before.version));
       const button=program.getByRole("button",{name:"AI 공개 허용",exact:true});
-      expect(await button.evaluate(element=>(element as HTMLButtonElement).value)).toBe("true");
+      expect(await program.evaluate(element=>new FormData(element as HTMLFormElement).get("enabled"))).toBe("true");
       await refreshAdminProof();
       const completed=page.waitForResponse(response=>response.request().method()==="POST" && new URL(response.url()).pathname==="/ai-consultations");
       await button.click();
       expect((await completed).status()).toBe(200);
       await expect.poll(async()=>(await publication()).enabled).toBe(true);
       await expect(program.getByRole("button",{name:"공개 해제",exact:true})).toBeVisible();
+    });
+    await test.step("P21_ADMIN_GUIDANCE",async()=>{
+      const guidance=page.locator('form:has(input[name="topic"][value="RAIN"])');
+      const before=await f.db.aiKnowledgeEntry.findUnique({where:{runId_topic:{runId:f.scope.runId,topic:"RAIN"}},select:{version:true}});
+      expect(await guidance.locator('input[name="expectedVersion"]').inputValue()).toBe(String(before?.version??0));
+      expect(await guidance.evaluate(element=>new FormData(element as HTMLFormElement).get("approved"))).toBe("true");
+      await refreshAdminProof();
+      const completed=page.waitForResponse(response=>response.request().method()==="POST" && new URL(response.url()).pathname==="/ai-consultations");
+      await guidance.getByRole("button",{name:"합성 자료 승인",exact:true}).click();
+      expect((await completed).status()).toBe(200);
+      await expect.poll(async()=>(await f.db.aiKnowledgeEntry.findUnique({where:{runId_topic:{runId:f.scope.runId,topic:"RAIN"}},select:{approved:true}}))?.approved).toBe(true);
+      await expect(guidance.getByRole("button",{name:"승인 해제",exact:true})).toBeVisible();
     });
     await test.step("P21_ADMIN_RETENTION",async()=>{
       await refreshAdminProof();

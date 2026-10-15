@@ -1,5 +1,11 @@
 # Phase21 — Final local Mock / test-preparation QA and Review
 
+## Explicit ADMIN state wire checkpoint — 2026-10-15
+- Latest actual Preview run still2PASS/1FAIL with cleanupPASS:PG physical TTL/concurrency and HTTP passed; ADMIN re-enable left DB enabled=false despite matching DOM version/true submitter value and HTTP200. The action previously coerced an absent enabled field tofalse; submitter omission is a consistent inference, not a proven general React bug.
+- Candidate uses explicit hidden enabled/approved fields independent of submitter serialization and strict Zod form parsing. Missing/invalid/duplicate/File booleans and invalid CAS versions fail closed with fixed errors; expectedVersion/auth/runtime limits remain strict. Actual E2E additionally checks FormData without a submitter and one synthetic guidance approval.
+- Current local gates PASS:133 files/1143 tests,lint,typecheck,Prisma validate,diff; full production build actual exit0 with Next dev0. New exact-SHA Preview rerun and fresh independent QA/Review remain PENDING. No feature commit or PR yet.
+- Independent root read-only approved Preview catalog verification PASS:all7 AI tables found,RLS enabled,no anon or authenticated SELECT/INSERT/UPDATE/DELETE privileges. No customer rows,Production query or DDL.
+
 ## ADMIN rework checkpoint — 2026-10-15
 - Second actual guarded Preview run:2PASS/1FAIL,cleanupPASS. Actual PostgreSQL concurrency/fencing/physical90day owned-row purge and HTTP/privacy/replay passed. ADMIN mobile second publication toggle failed; the whole suite is NOT PASS. No stale lease required recovery.
 - Candidate rework keeps strict expectedVersion CAS and remounts publication/guidance forms by version, refreshes the existing short-lived owned proof per ADMIN mutation, and asserts actual submitted DOM properties against DB state plus HTTP and resulting UI separately. Stale form state is a hypothesis to be verified, not a conclusively identified cause. No Skill four-second or ADMIN timeout/authorization relaxation.

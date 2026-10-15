@@ -73,7 +73,8 @@ export default async function AiConsultationsPage() {
               {item.id.slice(-6)}
             </span>
             <span>{item.enabled ? "허용" : "비공개"}</span>
-            <Button name="enabled" value={item.enabled ? "false" : "true"}>
+            <input type="hidden" name="enabled" value={item.enabled ? "false" : "true"} />
+            <Button type="submit">
               {item.enabled ? "공개 해제" : "AI 공개 허용"}
             </Button>
           </form>
@@ -102,7 +103,8 @@ export default async function AiConsultationsPage() {
               <span>
                 {topic} — {row?.approved ? "합성 승인" : "미승인"}
               </span>
-              <Button name="approved" value={row?.approved ? "false" : "true"}>
+              <input type="hidden" name="approved" value={row?.approved ? "false" : "true"} />
+              <Button type="submit">
                 {row?.approved ? "승인 해제" : "합성 자료 승인"}
               </Button>
             </form>
