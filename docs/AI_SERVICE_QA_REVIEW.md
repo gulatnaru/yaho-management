@@ -1,9 +1,22 @@
 # Phase21 follow-up — independent QA and Review
+
+## Latest Preview compatibility correction — 2026-10-17
+
+- Current source: feature/phase21-ai-service, validation snapshot HEAD3e1e42702c9d9647d165a07dac0e5ed6915690a8 plus the narrow uncommitted INTEGRITY correction below. This is BUILD evidence; independent QA/Review and exact new-SHA Preview reruns are pending. Earlier checkpoints are historical.
+- Actual 2026-10-16 Preview history remains: Sydney AI_SERVICE2/9 and Mock1/3 failed with cleanup PASS. Same-source Singapore(sin1) Mock3/3 passed; AI_SERVICE8/9 failed1, cleanup PASS. The existing safe artifact did not identify the dynamic scenario. Local/server clock difference was about1second, not a60second proof-TTL explanation. Regional latency affecting the existing450ms scope guard is consistent with the comparison, not an instrumented root-cause proof. No original guard/timeout/Mock source was changed; Production's Sydney configuration was not changed.
+- Same-source sin1 default regression28/29 failed only the saved-status UI assertion while fixed diagnostics showed HTTP2XX, COMPLETED and PRESENT. The unchanged fixed REGRESSION_DIAGNOSTIC3/3 subsequently passed with cleanup PASS. The initial UI failure remains recorded; its cause is unconfirmed and the old attendance implementation/assertions were not weakened.
+- A separate fresh disposable native PostgreSQL17.11 loopback probe rebuilt all15 migrations and reproduced an actual INTEGRITY failure: Prisma6 P2010/23505 exposed only key DETAIL, without the required constraint name. No raw message/SQL/rows/IDs were output. The strict expected-error matcher correctly rejected this unknown target.
+- Correction is confined to the new Preview scenario's fixed synthetic DML: anonymous DO blocks obtain RETURNED_SQLSTATE, TABLE_NAME and CONSTRAINT_NAME from the actual PostgreSQL exception; only the exact expected triple reissues fixed canonical MESSAGE and DETAIL. Unexpected errors are rethrown and no exception still fails. Existing Prisma6 brand/state/target matchers are unchanged. No DDL, new schema object, migration change, financial DELETE or protection bypass was introduced; all fixture records remain under always-rollback ownership.
+- Actual native retest: INTEGRITY positive PASS(all3 strict targets); six negative cases PASS(rejected wrong constraint, wrong SQLSTATE and no exception for UNIQUE_PIN and CONFIG_ENVIRONMENT). Every case verified zero service/program/class rows after rollback, external calls0. Early native setup/identity-format failures, the first CHECK canonical-primary mismatch, a bounded P1001 connection failure and duplicate hidden-start refusal are not PASS runs; the final explicit-loopback probe verified the already-rebuilt15 migration history and exited0. Owned cluster faststop0, then fresh pg_ctl status3/pg_isready2/TCP55421=false confirmed stopped/no listener. Temporary diagnostic files and stopped disposable data are outside Git; root owns their eventual safe disposal.
+- New synthetic regressions retain rejection of DETAIL-only key/failing-row text without a verified target(+6tests). Latest gates: focused1file62tests PASS, full148files1673tests PASS, lint0, typecheck(--incremental false)0, Prisma validate0 and diff0. Global Next dev count0 preceded final production build; static generation, optimization and trace collection completed with actualexit0. Local gates used explicit dummy loopback DATABASE_URL/DIRECT_URL; no Preview/Production query or provider call occurred in them. The initial usage-limit auto-review failure did not execute the requested gate; these are fresh successful executions after user continuation.
+- New/applied Mock migration SHA256 values remain BACD02B4A1C69E19C891D0C122F08BF9F715B6D0B2E43F5899D92C329FEE1B7F /26DC71BB2A44BB15F6DD3FD83ACEB3FA109E84D29275BECCC4F82D05F787026C. Preview15migration/11RLS and prior native independent race9/9 evidence remain valid; this correction does not alter those files. Original protected files, Mock26, Phase20 and root-owned LAST_RUN_REPORT were not edited.
+- Next: independent QA→Review on this frozen correction, then root-controlled commit/push and exact GitSource-SHA sin1 Preview AI_SERVICE9/Mock3/default29 reruns. Current correction has not been Preview-tested or published. Actual Kakao/OpenAI/customer processing, Production access/migration/deployment, merge, live cron and PC shutdown remain prohibited.
+
 ## Latest independent snapshot verdicts — 2026-10-16
 
 QA PASS and Review PASS, each Critical0/Major0/Minor0, before Preview execution. QA directly executed95focused tests(exit0); Review directly executed AST/hash and in-memory ingress checks(exit0, Productionbody0/client0, ingress503/no-store, ADMIN denied). Full1667/localgates/nativePG9 are reused BUILD evidence. Initial QA sandbox spawn EPERM and reviewer-only GUIDANCE literal-count expectation error remain failure histories; subsequent actual checks passed. Final source hash and migration hashes match. Actual Preview9/Mock3/regression29/HTTP/pooler/error wrapping/mobile remain NOT RUN and require a final verdict after execution.
 
-## Current DB / environment verification — 2026-10-16
+## Historical pre-Preview DB / environment checkpoint — 2026-10-16
 
 - 최신 독립 QA: PASS(Critical0/Major0/Minor0), focused4files/95tests actualexit0. 최초 sandbox spawn EPERM은 실패 이력으로 구분했고 escalation 재실행 PASS를 확인했다. 문서의 과거 미승인/NOT RUN/BLOCKED 표기는 historical로 표시했으며, 최신 Review는 root가 이어서 수행한다.
 
@@ -90,7 +103,7 @@ Automatic text validation has a bounded formal/lexical scope, not a proof of eve
 
 Preview planning must verify approved DB identity and migration state, serialize one E2E per DB, use synthetic run-owned fixtures and clean only that run's rows. Permanent financial aggregates/key pins/evidence must not be deleted or reset to make tests pass; define isolated/rollback fixture handling and preserve existing settings/data before approved DB tests.
 
-## Preserved state
+## Historical preserved state (before validation snapshot3e)
 
 PR53 remains a dependency to ship only under separate approval. Follow-up working changes are uncommitted/unpushed. Original root .gitignore/LAST_RUN_REPORT and existing Mock worktree files remain protected. No shutdown is scheduled; latest user instruction explicitly forbids PC shutdown.
 

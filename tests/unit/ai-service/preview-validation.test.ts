@@ -152,7 +152,7 @@ describe("Review: constraint failures must identify the expected PostgreSQL cont
  async function integrity(failureTarget?:Target,failure?:(target:Target)=>unknown){
   const fixture=await fakeClient(),original=fixture.tx.$executeRaw.bind(fixture.tx);
   fixture.tx.$executeRaw=(async(parts:TemplateStringsArray,...values:unknown[])=>{
-   const query=parts.join(""),target=query.startsWith('UPDATE "AiServiceKeyPin"')?"APPEND_ONLY":query.startsWith('INSERT INTO "AiServiceKeyPin"')?"UNIQUE_PIN":query.startsWith('INSERT INTO "AiServiceConfig"')?"CONFIG_ENVIRONMENT":undefined;
+   const query=parts.join(""),target=query.startsWith('UPDATE "AiServiceKeyPin"')?"APPEND_ONLY":query.includes('DO $ai_service_unique_probe$')?"UNIQUE_PIN":query.includes('DO $ai_service_environment_probe$')?"CONFIG_ENVIRONMENT":undefined;
    if(!target)return original(parts,...values);
    if(target===failureTarget){const error=failure?.(target);if(error===undefined)return 1;throw error;}
    throw rawError(contracts[target]);
@@ -170,6 +170,8 @@ describe("Review: constraint failures must identify the expected PostgreSQL cont
   {name:"lock timeout",error:(target:Target)=>rawError({...contracts[target],code:"55P03"})},
   {name:"wrong SQLSTATE",error:(target:Target)=>rawError({...contracts[target],code:"99999"})},
   {name:"wrong constraint or trigger",error:(target:Target)=>rawError({...contracts[target],message:'ERROR: unrelated failure "wrong_constraint"'})},
+  {name:"DETAIL-only key data without verified target",error:(target:Target)=>rawError({...contracts[target],message:"Key (environment, version)=(PREVIEW, v1) already exists."})},
+  {name:"DETAIL-only failing row without verified target",error:(target:Target)=>rawError({...contracts[target],message:"Failing row contains (synthetic-only)."})},
   {name:"missing structured metadata",error:()=>rawError({})},
   {name:"untrusted plain error object",error:(target:Target)=>({code:"P2010",meta:contracts[target]})},
   {name:"no exception",error:()=>undefined},
