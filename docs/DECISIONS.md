@@ -568,3 +568,20 @@
 - Retention: 새 상담 원문만90일 보관·자동 삭제, 실패 재시도·ADMIN 확인을 제공한다. 카카오 식별값은 최소화·가명처리하고 삭제 후 원문·사용자 연결키 없는 비식별 통계만 유지한다. 가명 ID가 익명정보라는 가정이나 기존 예약 동의 재사용, 기존 Child/Application/거래 보관기간 변경은 허용하지 않는다.
 - Reason: 공개 허용·조회 경계와 실제 운영 전환을 분리하면 기존 도메인과 개인정보 정책을 유지하면서 합성 데이터로 상담 품질·보안·삭제 흐름을 검증할 수 있다.
 - Consequences: 현재 범위의 SPEC Open Questions는 없다. PLAN 승인 뒤에만 developer BUILD를 수행한다. migration 파일 작성/검증과 DB 적용은 분리하고 migration 적용·Production 배포·PR merge는 별도 명시 승인을 기다린다. ADR-030/051/059와 기존 Preview guard를 유지한다. 이 ADR은 기존 Accepted ADR을 수정하지 않으며 ADR-052/060의 AI 상담 경로에 한정한 예외만 확정한다.
+
+## ADR-062: AI 실연동의 실제 청구액 목표 예산과 개인정보 검토 전 합성 전용 범위를 확정한다
+- Status: Accepted — 정책 확정 및 아래 후속 조건부 PLAN·합성 BUILD 승인 기록. 실호출·DB 적용·운영 전환 승인은 아니다.
+- Date: 2026-10-15
+- Context: Phase21 Mock PR53은 Draft/OPEN이고 실서비스 Skill/cron이 비활성화되어 있다. 후속 SPEC의 비용 범위와 실제 개인정보 처리 승인 여부 QLIVE-01~02에 사용자가 답했다. 현재 Mock schema와 guard는 SYNTHETIC/runId/zero-cost이며 실제 서비스 활성화로 재해석할 수 없다.
+- Budget Decision: 월 LLM 예산KRW10,000은 부가세·환율·해외 결제·카드 수수료 등을 포함한 실제 청구액 기준 목표 지출 상한이다. 예상 환율·세금·수수료에 보수적 여유를 적용해 신규 호출을 차단하고 소진시 담당자 안내로 전환한다. 실제 청구액은 사전 확정할 수 없어10,000원을 절대 초과하지 않는다고 보장하지 않는다. ADMIN/Provider 변경으로 목표 금액을 조용히 높이지 않는다.
+- Provider/Public/Retention Decision: OpenAI 경량 모델을 최초 평가하고 Gemini/Claude 등으로 교체 가능한 Provider 계약을 설계한다. ADMIN 승인 Program/ClassSchedule/공식 원문만 사용하고 정원·예약수·잔여석 숫자를 고객/LLM에 공개하지 않는다. 실제 상담 원문은 암호화90일 후 자동 삭제한다. 기존 Payment/Refund/Revenue와 LLM 운영 비용을 혼합하지 않는다.
+- Privacy Decision: 개인정보 처리방침·외부 AI 전송·국외 이전·보관/삭제·백업 승인 문서는 미확보다. 검토 완료 전 실제 고객 데이터·카카오 사용자 식별정보·실제 상담내용의 외부 LLM 전송을 금지하며 합성 데이터 기반 개발·검증만 허용한다. 기존 예약 동의를 재사용하거나 가명화/암호화를 법적 승인으로 간주하지 않는다. 실제 수집/보존/전송·백업/복구 정책과 서비스 연결은 별도 운영 승인 gate다.
+- PLAN Baseline: KST 매월1일00:00 갱신을 기본안으로 검토한다. 환율 출처/효력·세금/수수료 예비율·안전 여유·가격 버전·토큰별 비용·원자적 예약·중복/실패/불확실 usage·월경계/청구 보정은 yaho-plan이 제안한다. 구체적인 계수·월 갱신은 PLAN 승인 전 확정 구현 정책이 아니다.
+- Open Questions: 없음 — QLIVE-01/02는 위 사용자 결정으로 해소됐다. 개인정보 승인 문서 미확보·카카오 기능 미확인 등은 운영 전환 차단 조건으로 남으며 SPEC/합성 설계 질문과 구분한다. 상세: docs/AI_CONSULTATION_LIVE_SPEC.md.
+- Preserved Decisions: ADR-061의 Mock 전용·Production 차단·ADMIN opt-in·read-only Tool·90일/가명화·법적/운영 gate를 유지한다. ADR-052/060 예약신청과 기존 예약/결제/환불, ADR-055~058 개인정보, ADR-030/051/059 DB/migration/Preview guard도 유지하며 기존 Accepted ADR을 수정/supersede하지 않는다.
+- Execution Gate: PR53 Draft/OPEN·원격 HEAD 보존. 초기 SPEC/PLAN 문서 작업 승인 후, 아래 후속 절의 사용자 조건부 PLAN·합성 BUILD 승인이 추가됐다. 실제 외부 API 호출·실제 데이터·DB/migration/배포·Production schema gate 승인·PR53 merge 금지. 설계 승인은 각각의 실행 승인과 별개다.
+- Reason: 사전 추정 한계가 있는 실제 원화 청구액은 목표 예산과 보수적 admission/정산으로 관리하고 절대 보장을 주장하지 않는다. 실제 개인정보 승인 미확보 상태를 명시하면 합성 설계를 진행하면서 기존 Mock 보호 경계를 보존할 수 있다.
+- Consequences: 신규 schema 필요성·API/Provider·보안·budget·삭제 운영과 요건–테스트 추적표는 PLAN에서 검토하고 설계 승인을 기다린다. 이미 적용한 Mock migration 변경 금지. 후속 Phase 번호/구현 브랜치는 별도 착수 시 실제 저장소 상태로 결정한다. 이 정책 ADR은 서비스 활성화 근거가 아니다.
+
+### ADR-062 후속 조건부 PLAN·BUILD 승인 (2026-10-15)
+사용자는 호출승인8000원(Preview1000/Production7000), FX10%·세금10%·수수료5% 초기예비율과환경별DB hardcap/외부청구대조를승인했다. 기존Mock과migration불변·별도브랜치, 삭제worker하루1회기본안과정확히90일조회차단. 물리삭제지연·scheduler·백업은운영전별도검토/승인. 승인PLAN에따른코드·additive migration파일·합성unit/local검증/QA/Review만허용하며DB적용·실API·고객데이터·Preview E2E·Production·merge는포함하지않는다. 세부설계/종속merge순서는 docs/AI_CONSULTATION_LIVE_PLAN.md. 기존 ADR-061 Mock 정책은유지한다.

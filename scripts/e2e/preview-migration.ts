@@ -1,8 +1,9 @@
+import {evaluateAiServicePreviewMigration,previewMigrationScope} from "./ai-service-preview-migration-policy";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { loadEnvConfig } from "@next/env";
+import {readPreviewLocalEnvironment,previewPrismaEnvironment} from "@/lib/e2e/preview-environment";
 import { PrismaClient } from "@prisma/client";
 import { readPreviewE2eConfiguration, readRuntimeDatabaseIdentity, withPreviewDatabaseLock } from "@/lib/e2e/preview-runner";
 import { assertApprovedRuntimeDatabaseIdentity, PreviewE2eSafetyError, type PrismaMigrationRow } from "@/lib/e2e/preview-safety";
@@ -24,21 +25,22 @@ export function evaluatePhase21PreviewMigration(rows: PrismaMigrationRow[], migr
 export function runPreviewPrisma(command: "deploy" | "status", directUrl: string, signal?: AbortSignal, runner: typeof execFile = execFile) {
   return new Promise<void>((resolve,reject) => {
     runner(process.execPath, [path.resolve("node_modules/prisma/build/index.js"), "migrate", command, "--schema", path.resolve("prisma/schema.prisma")], {
-      env:{...process.env, DATABASE_URL:directUrl, DIRECT_URL:directUrl}, timeout:120_000, maxBuffer:1024*1024, signal,
+      env:previewPrismaEnvironment(directUrl,process.env), timeout:120_000, maxBuffer:1024*1024, signal,
     }, (error) => error ? reject(new Error("PREVIEW_MIGRATION_PRISMA_FAILED")) : resolve());
   });
 }
 async function main() {
   const stage = previewMigrationStage(process.argv[2]);
+  const scope = previewMigrationScope(process.env.PREVIEW_MIGRATION_SCOPE);
+  if(scope==="AI_SERVICE"&&process.env.AI_SERVICE_PREVIEW_MIGRATION_APPROVED!=="1")throw new Error("AI_SERVICE_MIGRATION_APPROVAL_REQUIRED");
   const source = process.env.PHASE21_ENV_SOURCE_DIR;
   const approvedRef = process.env.PHASE21_APPROVED_PREVIEW_PROJECT_REF;
   const deniedRef = process.env.PHASE21_DENIED_PRODUCTION_PROJECT_REF;
   if (!source || !path.isAbsolute(source) || !existsSync(path.join(source,".env.local"))) throw new Error("PREVIEW_MIGRATION_SOURCE_REQUIRED");
-  for (const key of ["DATABASE_URL","DIRECT_URL","PLAYWRIGHT_BASE_URL","PREVIEW_E2E_ALLOWED_BASE_URLS","PREVIEW_E2E_DEPLOYMENT_SHA","PREVIEW_E2E_SUPABASE_PROJECT_REF","PRODUCTION_E2E_SUPABASE_PROJECT_REF","PREVIEW_E2E_DB_RUNTIME_IDENTITY_SHA256","PREVIEW_E2E_HANDSHAKE_SECRET","VERCEL_AUTOMATION_BYPASS_SECRET"]) delete process.env[key];
-  loadEnvConfig(source,true,{info:()=>{},error:()=>{}},true);
+  const environment=readPreviewLocalEnvironment(source);
   // The operator must separately attest the documented nonproduction-only approval.
   if (process.env.PHASE21_PREVIEW_MIGRATION_APPROVED !== "1") throw new Error("PREVIEW_MIGRATION_APPROVAL_REQUIRED");
-  const config = readPreviewE2eConfiguration();
+  const config = readPreviewE2eConfiguration(environment);
   if (!approvedRef || !deniedRef || approvedRef===deniedRef || config.previewProjectRef!==approvedRef || config.productionProjectRef!==deniedRef) throw new Error("PREVIEW_MIGRATION_TARGET_DENIED");
   if (process.env.VERCEL_ENV === "production") throw new Error("PREVIEW_MIGRATION_PRODUCTION_DENIED");
   const db = new PrismaClient({datasourceUrl:config.databaseUrl});
@@ -48,7 +50,7 @@ async function main() {
     const identities = await Promise.all([readRuntimeDatabaseIdentity(db), readRuntimeDatabaseIdentity(direct)]);
     assertApprovedRuntimeDatabaseIdentity(identities[0],config.previewProjectRef,config.approvedRuntimeFingerprint,config.databaseSchema);
     assertApprovedRuntimeDatabaseIdentity(identities[1],config.previewProjectRef,config.approvedRuntimeFingerprint,config.directSchema);
-    const inspect = async () => evaluatePhase21PreviewMigration(await direct.$queryRaw<PrismaMigrationRow[]>`SELECT migration_name,checksum,finished_at,rolled_back_at FROM "_prisma_migrations" ORDER BY started_at ASC`,migrationRoot);
+    const inspect = async () => (scope==="AI_SERVICE"?evaluateAiServicePreviewMigration:evaluatePhase21PreviewMigration)(await direct.$queryRaw<PrismaMigrationRow[]>`SELECT migration_name,checksum,finished_at,rolled_back_at FROM "_prisma_migrations" ORDER BY started_at ASC`,migrationRoot);
     let state = await inspect();
     if (stage === "preflight") {
       console.log(JSON.stringify({stage,result:"PASS",target:"APPROVED_PREVIEW",pending:state.pendingMigrations,appliedCount:state.appliedMigrations.length}));
