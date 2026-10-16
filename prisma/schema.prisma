@@ -340,6 +340,7 @@ model Program {
 
   classes ClassSchedule[]
   aiPublications AiProgramPublication[]
+  aiServicePublications AiServiceProgramPublication[]
 
   @@index([status])
 }
@@ -381,6 +382,7 @@ model ClassSchedule {
   upgradedLegacyApplicationGroup ReservationApplicationGroup?       @relation("UpgradedLegacyApplicationGroup")
 
   aiPublications AiClassPublication[]
+  aiServicePublications AiServiceClassPublication[]
 
   @@index([startsAt])
   @@index([status])
@@ -1021,4 +1023,169 @@ model AiRetentionJob {
   nextRetryAt DateTime?
   errorCode String?
   updatedAt DateTime @updatedAt
+}
+
+ // Follow-up service storage is independent of Phase21 run-owned Mock data.
+model AiServiceConfig {
+  environment String @id
+  paused Boolean @default(true)
+  provider String @default("TEST_DOUBLE")
+  model String @default("gpt-6-luna")
+  priceVersion String
+  hmacVersions String[] @default([])
+  inputNanoUsdPerToken Int
+  outputNanoUsdPerToken Int
+  fxMilliKrwPerUsd Int
+  fxCheckedAt DateTime
+  fxSource String
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+}
+model AiServiceProgramPublication {
+  id String @id @default(cuid())
+  environment String
+  programId String
+  sourceUpdatedAt DateTime
+  sourceDigest String
+  enabled Boolean @default(false)
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+  program Program @relation(fields: [programId], references: [id], onDelete: Restrict)
+  @@unique([environment, programId])
+}
+model AiServiceClassPublication {
+  id String @id @default(cuid())
+  environment String
+  classScheduleId String
+  sourceUpdatedAt DateTime
+  sourceDigest String
+  enabled Boolean @default(false)
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+  classSchedule ClassSchedule @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
+  @@unique([environment, classScheduleId])
+}
+model AiServiceKnowledgeEntry {
+  id String @id @default(cuid())
+  environment String
+  topic String
+  content String
+  approved Boolean @default(false)
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+  @@unique([environment, topic])
+}
+model AiServiceRequest {
+  id String @id
+  environment String
+  month String
+  requestKey String
+  requestHashes String[]
+  payloadHash String
+  subjectHashes String[]
+  status String @default("PROCESSING")
+  attempt Int @default(1)
+  dispatched Boolean @default(false)
+  dispatchedAt DateTime?
+  dispatchGeneration Int?
+  reservedKrw Int
+  usedKrw Int @default(0)
+  provider String
+  model String
+  priceSnapshot Json
+  rawCiphertext String?
+  encryptionVersion String?
+  billingUsage Json?
+  inputTokens Int?
+  outputTokens Int?
+  category String?
+  createdAt DateTime
+  expiresAt DateTime
+  attemptDeadline DateTime
+  settledAt DateTime?
+  budget AiServiceBudgetMonth @relation(fields: [environment, month], references: [environment, month], onDelete: Restrict)
+  @@unique([environment, requestKey])
+  @@index([requestHashes], type: Gin)
+  @@index([environment, status, attemptDeadline])
+  @@index([environment, expiresAt])
+  @@index([environment, month])
+}
+model AiServiceBudgetMonth {
+  id String @id
+  environment String
+  month String
+  capKrw Int
+  reservedKrw Int @default(0)
+  usedKrw Int @default(0)
+  correctionKrw Int @default(0)
+  billedKrw Int @default(0)
+  unknownCount Int @default(0)
+  dispatchGeneration Int @default(0)
+  version Int @default(1)
+  reconciliationReference String?
+  reconciledById String?
+  reconciledAt DateTime?
+  requests AiServiceRequest[]
+  evidence AiServiceReconciliation[]
+  @@unique([environment, month])
+}
+model AiServiceQuotaBucket {
+  id String @id @default(cuid())
+  environment String
+  window String
+  kind String
+  aliases String[]
+  accepted Int @default(0)
+  expiresAt DateTime
+  @@index([environment, window, kind])
+}
+model AiServiceDailyMetric {
+  id String @id @default(cuid())
+  environment String
+  day DateTime @db.Date
+  category String
+  count Int @default(0)
+  modelCalls Int @default(0)
+  usedKrw Int @default(0)
+  @@unique([environment, day, category])
+}
+model AiServiceRetentionJob {
+  environment String @id
+  status String @default("IDLE")
+  attempts Int @default(0)
+  deletedCount Int @default(0)
+  nextRetryAt DateTime?
+  lastSuccessAt DateTime?
+  errorCode String?
+  updatedAt DateTime @updatedAt
+}
+
+model AiServiceKeyPin {
+  id String @id @default(cuid())
+  environment String
+  version String
+  fingerprint String
+  createdAt DateTime @default(now())
+  @@unique([environment, version])
+}
+model AiServiceReconciliation {
+  id String @id @default(cuid())
+  environment String
+  reference String
+  month String
+  coveredThroughGeneration Int
+  billedKrw Int
+  heldActualKrw Int
+  resolvesHeld Boolean
+  payloadDigest String
+  budgetVersionBefore Int
+  recordedById String
+  createdAt DateTime
+  budget AiServiceBudgetMonth @relation(fields: [environment, month], references: [environment, month], onDelete: Restrict)
+  @@unique([environment, reference])
+  @@index([environment, month])
 }

@@ -2192,6 +2192,19 @@ Now — SPEC 확정, PLAN으로 진행. PLAN 승인 전 BUILD를 시작하지 �
 
 ---
 
+## Phase 21 후속 — 카카오톡 AI 상담원 실연동 (SPEC 확정; 합성 전용)
+
+- Status: 후속 정책·조건부 PLAN·합성 BUILD/QA/Review 승인. PR #53 Mock 범위·AC21-01~17·ADR-061은 유지하며 실제 서비스 실행/운영 승인은 아니다. 후속 Phase 번호는 아직 부여하지 않는다.
+- 상세: [실연동 SPEC](docs/AI_CONSULTATION_LIVE_SPEC.md), ADR-062 Accepted(정책만). Open Questions 없음. 사용자 조건부 PLAN 및 합성 전용 BUILD 승인: 별도 feature/phase21-ai-service, daily 삭제 기본안, 환경별1000/7000원 hardcap. 최초 BUILD 승인 당시 DB/Preview는 미승인이었으나 아래 최신 사용자 승인 checkpoint가 이를 supersede한다. 상세 docs/AI_CONSULTATION_LIVE_PLAN.md.
+- 최신 승인/검증 checkpoint(2026-10-16): 사용자 승인 일회 Preview 업무 DELETE38개 및 User/스키마/history 보존 PASS, 승인 Preview15migration complete/11AiService RLS=true, 폐기 로컬PG15재구성·독립경합9/9 PASS. Preview 합성 E2E와 검증 후 feature commit/push·stacked Draft PR은 승인됐으나 Preview E2E는 아직 NOT RUN이다. 이전 backup/합성출처 선행조건은 최신 명시적 사용자 승인으로 이번 일회 정리에 한해 해소됐다. Production·실제 Kakao/OpenAI/고객상담·merge·운영활성화 금지는 유지한다.
+- 사용자 확정: OpenAI 경량 모델 최초 평가·Gemini/Claude 등으로 교체 가능한 Provider·예산 소진시 새 호출 차단/담당자 안내·ADMIN 승인 프로그램/클래스/원문만·고객/LLM 좌석 숫자 비공개·상담 원문 암호화90일 후 자동 삭제.
+- QLIVE-01 해소: 월KRW10,000은 부가세·환율·해외 결제·카드 수수료 등을 포함한 실제 청구액 목표 상한이다. 예상 환율/세금/수수료에 보수적 여유를 적용해 호출을 차단하며 실제 청구액의 절대 초과 방지를 보장하지 않는다. 조건부 PLAN은KST월초갱신·환율72시간·FX10%/세금10%/수수료5%·환경별1000/7000원원자예약/정산을승인했다.
+- QLIVE-02 해소: 개인정보 처리방침·외부 AI 전송·국외 이전·보관/삭제·백업 승인 문서는 미확보다. 검토 완료 전 실제 고객 데이터·카카오 사용자 식별정보·실제 상담내용의 외부 LLM 전송을 금지한다. 합성 데이터 개발·검증만 허용하며 기존 ADR-061 운영 전환 차단을 유지한다. 승인 문서/수집·전송 범위·백업·보존 검토는 별도 운영 gate다.
+- 후속 범위: 인증된 Kakao Skill·Responses Provider·승인 Tool/응답 검증·4초 예산/선택적 Callback·원자적 비용/중복 처리·삭제 worker/복구·ADMIN 운영·환경 격리·단계별 승인/테스트 추적(ACLIVE-01~20). 현재 실서비스 구현/검증 PASS가 아니다.
+- 최초 BUILD 범위의 금지 기록(과거 checkpoint): migration 적용·DB 접근·Preview E2E·실제 Kakao/OpenAI 호출·고객정보·배포·Production schema gate 승인·PR #53 변경 push/merge. 승인 범위의 BUILD·migration 파일 작성·합성 local 검증은 별도 feature에서 수행한다. 기존 코드·Phase20 데이터/정책·unstaged 파일 보존. PLAN은 파일을 수정하지 않고 출력하며 개별 실행 승인을 대신하지 않는다.
+
+---
+
 # 23. Acceptance Criteria
 
 ### 아이
