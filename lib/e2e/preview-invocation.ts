@@ -13,7 +13,7 @@ export function readPreviewInvocationConfiguration(
   ) => PreviewE2eConfiguration = readPreviewE2eConfiguration,
 ) {
   previewPlaywrightArguments(environment.PREVIEW_E2E_FOCUS);
-  if (environment.PREVIEW_E2E_FOCUS === "PHASE21") {
+  if ((environment.PREVIEW_E2E_FOCUS === "PHASE21" || environment.PREVIEW_E2E_FOCUS === "AI_SERVICE")) {
     readKeys(environment);
     readLimits(environment);
   }

@@ -27,7 +27,8 @@ export const PREVIEW_E2E_TEST_FILES = [
 
 /** Optional suite: existing default files and case count remain unchanged. */
 export const PHASE21_PREVIEW_TEST_FILES = ["tests/e2e/phase21-ai-consultations.spec.ts"] as const;
-export const PREVIEW_E2E_SUPPORTED_TEST_FILES = [...PREVIEW_E2E_TEST_FILES, ...PHASE21_PREVIEW_TEST_FILES] as const;
+export const AI_SERVICE_PREVIEW_TEST_FILES = ["tests/e2e/phase21-ai-service.spec.ts"] as const;
+export const PREVIEW_E2E_SUPPORTED_TEST_FILES = [...PREVIEW_E2E_TEST_FILES, ...PHASE21_PREVIEW_TEST_FILES, ...AI_SERVICE_PREVIEW_TEST_FILES] as const;
 
 export const PREVIEW_E2E_LOCK_KEY = PHASE20_PREVIEW_LOCK_KEY;
 // Hard whole-run limit, not a promise that every per-case maximum fits.

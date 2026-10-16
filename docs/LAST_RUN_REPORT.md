@@ -1,3 +1,202 @@
+# Phase21 AI service follow-up — Preview deletion approved / validation in progress
+
+Date: 2026-10-16 (Asia/Seoul).
+
+## Snapshot QA / Review PASS — Preview validation pending
+
+- Latest code is frozen:local PG script SHA256 2CD2C20B7444A686A3FDE040525A572226A6D65D4AE874BBB41C0036C1105B1B. Official isolated native PostgreSQL17.11 applied15 migrations and passed all9 independent scenarios, actualexit0. Both owned clusters stopped, final loopback port not listening; task-owned cluster files will be disposed after final verification.
+- Final local gates:148files/1667unit PASS; lint/typecheck(incremental false)/Prisma/diff/finalbuild actualexit0. Final build ran with Next dev0 and confirmed unchanged final script hash.
+- Fresh independent QA:PASS, Critical0/Major0/Minor0; actual4files/95tests exit0. Initial sandbox spawn EPERM failed before tests; approved escalation rerun PASS. Full/build/native9 evidence reused and distinguished from QA execution.
+- Fresh independent Review:PASS, Critical0/Major0/Minor0; direct AST/hash and in-memory runtime checks exit0. Production503/body0/client0, live ingress503/no-store/admin denied. Initial reviewer-only literal-count expectation was corrected from2 to3; no source change. Native9 and gates were reviewed evidence, not rerun by Review.
+- Protected6rawfiles and Mock26canonical paths remain unchanged. New and existing applied migration bytes unchanged. PR53 stillOPEN/Draft/head1171517. Production required reviewer remains configured; Production branch remainsmain. No Production secrets/DB access, live API/customer processing, merge or shutdown.
+- Next:selective snapshot commit/push only to feature/phase21-ai-service, verify exact GitSource Preview READY and identity, execute guarded AI_SERVICE9/PHASE213/default29 plus scoped cleanup, final QA/Review, then stacked Draft PR. This pre-E2E snapshot is required by the existing exact-SHA/clean-migration runner guard and is not a claim that Preview validation has passed.
+
+## Resumed verification checkpoint — 2026-10-16
+
+- Usage-limit interruptions of both BUILD agents are NOT PASS. User resumed the existing work; no implementation restart, reset or cleanup of protected files occurred.
+- Fresh full local gates completed:148files/1667unit PASS, lint0, typecheck(incremental false)0, Prisma validate0, diff0. Next dev process count0 before final build; final build actualexit0. Local PG script was unchanged during that build; later fixture correction requires relevant revalidation.
+- Portable official EDB PostgreSQL17.11 ZIP size341325378 and published SHA256 verified; isolated loopback cluster started and all15versioned migrations applied, actualexit0. No global service/PATH installation or other Docker container restart.
+- Correction to earlier settlement-failure diagnosis:only the initial claim55P03 was observed as lock timeout. Settlement failed because the new local integration fixture used category SYNTHETIC, outside the database CHECK allowlist. The native PostgreSQL run reproduced this after duplicate-claim PASS. This is a test-fixture defect; existing core and migration remain unchanged. Earlier speculation that settlement was a lock timeout is superseded by this observed diagnosis. Full9-case PASS is still pending after fixture correction.
+
+## Preview deletion and migration completed — 2026-10-16
+
+- Approved permanent business-data DELETE:PASS, actualexit0, one committed transaction across38 fixed business tables. All38 empty in fresh post-check. User authentication, schema/catalog, system/auth/storage and14 existing migration histories preserved. No PII/secret/raw rows exported.
+- First deletion attempt failed before DELETE at exact-table inventory guard(P0001); no mutation committed. Read-only diagnosis proved equal40-table sets but differing default/name collation order. Both inventories and lock order were changed only to explicit COLLATE C; exact allowlist and deletion scope stayed unchanged. Reviewed final SQL SHA256:AE1EE301D21C780456B36685DF638FFF7FB9AFD657FE3F275DB1688C81EA0EF7.
+- AI Service migration deploy and verify:PASS, each actualexit0, approved Preview only. Now15 applied, pending0. Independent catalog check confirms11 service tables with RLS. Approved SQL hash remains BACD02B4A1C69E19C891D0C122F08BF9F715B6D0B2E43F5899D92C329FEE1B7F.
+- Fresh disposable loopback PostgreSQL17 applied all15 versioned migrations successfully, actualexit0. This proves versioned schema reconstruction, not full consultation concurrency coverage.
+- Follow-up ignored local environment provision:12 runner+6 existing Mock values, all real/nonplaceholder. Original source env/Mock keys unchanged. First branch-scoped Vercel env attempt failed branch_not_found and configured0. Remote feature branch was created at unchanged approved Mock base1171517; no follow-up source was pushed. Retry configured12 Preview-only remote values successfully. This remote base branch is not a feature completion claim.
+- Initial real local concurrency runs failed:claim lock timeout; then duplicate claim once-only PASS before settlement lock timeout. Failures remain recorded. Latest9-case bounded-retry integration script is awaiting full execution. Docker replacement encountered read-only filesystem; no restart of other user containers. Portable official PostgreSQL alternative is being prepared.
+- New Preview E2E/regressions, final local gates, renewed independent QA/Review, feature commit/push, Draft PR and CI are pending. Production, actual external API/customer processing, merge and PC shutdown remain prohibited.
+
+## Latest Preview data deletion authorization — 2026-10-16
+
+The data owner explicitly approved permanent deletion of existing yaho-preview business data without backup or provenance proof. This supersedes the backup/provenance prerequisite in the historical checkpoint below; it does not authorize schema reset, DROP, truncate, Production access, or any live external integration.
+
+- Fresh Preview metadata: ACTIVE_HEALTHY; project/ref/host confirmed. Both selected Preview DSNs passed runtime identity verification. Repository migration preflight PASS, exit0:14 applied checksums match and only the approved AI Service migration is pending.
+- Read-only catalog review found no DELETE-blocking custom trigger. The sole custom trigger protects AiConsultation identity on UPDATE. Foreign keys are being used to prepare an ordered transactional DELETE without protection bypass.
+- Intended preservation: all existing User accounts including Preview ADMIN, schema, Prisma migration history and Supabase system/auth/storage schemas. Account-to-Teacher references or active Preview execution cause refusal.
+- Deletion, new migration, actual PG/Preview tests, commit/push and Draft PR are still pending at this in-progress checkpoint. Do not read earlier local PASS as current DB/Preview PASS.
+- PR53 remains OPEN/Draft at117151772552b16b6e81e3bbba23bb50e0826f0e. Original root protected files remain byte-identical. Production, real OpenAI/Kakao/customer processing, merge and PC shutdown remain prohibited.
+
+## Latest manual-backup attempt — 2026-10-16
+
+Status:BLOCKED / CUSTOMER_PROVENANCE_UNKNOWN. This checkpoint supersedes the previous automatic-backup/login prerequisite. User confirmed Free plan and approved manual logical backup plus disposable local PostgreSQL restore, without a plan change.
+
+- Backup creation timestamp:NOT_CREATED. No backup/archive/key/passfile was generated, exported or stored. Access restriction/encryption are planned prerequisites, not completed claims.
+- Preview target independently reconfirmed:yaho-preview ACTIVE_HEALTHY; approved project ref/direct host metadata and both selected DSN tenant refs verified; actual direct read-only runtime fingerprint matched. Production DB/credentials were not accessed or used.
+- First read-only presence check found customer/safety records. No names, IDs, contacts, row text, ciphertext or credentials were returned.
+- Developer prepared one fixed aggregate query from approved Phase11 complete synthetic tuples and exact owned Program/Class/Teacher/Reservation relations. Query checksum73149CB08493C7BA1441871E3FAF20042000640A9B33A9C904E6DCBE5F783178. No project source/test changes were made.
+- Root reviewed and executed that query once in REPEATABLE READ / READ ONLY after target/runtime checks. Result:UNKNOWN_STOP. Existing Child/Safety rows were not proven to match the complete synthetic profiles; customer references and financial data also require provenance review. This does NOT assert that real customers were identified. It means absence of real customer PII cannot be established safely under the approved bounded profiles.
+- No raw data export, permissive pattern retry, selective row omission, existing-data delete/reset/overwrite, backup or restore was performed. No unsafe archive was created.
+- Restore verification:NOT RUN. Recovery feasibility is NOT PROVEN. Therefore migration/PG concurrency/Preview E2E/regression execution, feature commit/push/new Draft PR remain NOT RUN.
+- Environment discovery only:Docker client25.0.3 exists but daemon is stopped; WSL Ubuntu20.04 is available but no pg_dump/pg_restore/postgres binary was found. No runtime was started, package installed, plan changed or remote project created after the privacy stop.
+- Root/original protected files and Mock source/migrations preserved; PR53 fresh GitHub metadata remains OPEN/Draft/head117151772552b16b6e81e3bbba23bb50e0826f0e. Production migration/deploy/merge, real OpenAI/Kakao/customer consultation/cron and PC shutdown remain forbidden.
+
+### Recovery procedure — proposed, NOT EXECUTED
+
+1. Data owner reviews the existing Preview customer/safety and linked records locally and supplies non-PII creation/ownership evidence. Do not send names/contacts/customer rows or secrets into chat. If real customer PII is present, keep this operation stopped under the current policy.
+2. Once the source is proven safe, independently recheck project/host/runtime/migration inventory and review every recovery dependency. Audit and dump must share the same exported REPEATABLE READ snapshot to avoid a check/dump race.
+3. Use official PostgreSQL/Supabase tooling to capture the approved app schema/data/_prisma_migrations, required extensions and secret-free role definitions. Do not blindly export role passwords/settings/vault keys or treat a public-only dump as full Supabase recovery.
+4. Stream the backup into authenticated encryption at an external user-only-ACL path; protect its separate random key with Windows CurrentUser DPAPI. Do not write plaintext dumps or secrets to Git/logs/report.
+5. Restore only into a fresh disposable local PostgreSQL environment, without changing the existing Preview. Fail on any unsupported role/extension/restore error; do not disable protections or skip failed objects to claim PASS.
+6. Verify required schema/functions/triggers/RLS/roles/extensions/data and all migration checksums. Only a successful actual restore can clear the recovery gate and permit the previously approved Preview migration/E2E workflow.
+
+Current application source remains the earlier frozen148files/1667tests/local BUILD-QA-Review PASS checkpoint. Those tests/build were not rerun for this source-unchanged read-only audit. The existing QA/Review finding and correction histories below are retained.
+
+## Changed
+
+- Branch: feature/phase21-ai-service.
+- Worktree: C:/Users/gulat/.codex/worktrees/phase21-ai-service/yaho-management.
+- HEAD/base:117151772552b16b6e81e3bbba23bb50e0826f0e. No new project commit, push or Draft PR.
+- Existing Provider/Skill/ADMIN/approved-tool/cost/encryption/retention implementation preserved. Actual service/admin routes remain unconditionally locked; real OpenAI/Kakao/customer processing and operational cron remain disabled.
+- Added fixed AI_SERVICE Preview suite9tests, signed ownership adapter, always-rollback fixtures, independent-connection lock diagnostics and exact approved15th migration policy. Default Phase20 and Phase21 Mock selection remains unchanged.
+- Preview .env.local reads select only12runner+6Mock variables. Child processes exclude unrelated Production/provider/Auth credentials and NODE_OPTIONS. Original env files are unchanged; no secret values were printed.
+- Synthetic service financial rows/pins/evidence never commit and are never deleted to clean tests. Nonempty service tables cause refusal. Test-only diagnostic25s/PG20s limits do not change the actual Skill4s contract.
+- Fixed Review finding: unrelated DB errors cannot pass constraint validation. Domain checks require ServiceDenied; raw constraint checks require installed Prisma6 known-error P2010, expected SQLSTATE and exact trigger/constraint target. Unknown errors fail closed without raw diagnostic logging.
+
+## Tests / Lint / Build
+
+| Check | Actual final evidence |
+|---|---|
+| Full synthetic local tests |148files /1667PASS, exit0|
+| New Preview validation unit file |56PASS, exit0|
+| Lint / Typecheck / Prisma validate |PASS, each exit0; no new lint warnings; dummy loopback DB URLs for local gates|
+| Final build |PASS, actualexit0 after routes/traces; Next dev process count0 checked first|
+| Independent revised QA |PASS, Critical0/Major0/Minor0; actual56unit plus independent12counterexamples and expected positive flow|
+| Independent revised Review |PASS, Critical0/Major0/Minor0; independent12counterexamples fail+rollback, expected errors pass, scoped parameters/rawlog0/Production body0-client0|
+| Git diff / preservation |PASS, source and final documentation diffcheck exit0; protected6rawhashes and Mock26canonicalGitpaths unchanged|
+| Actual PostgreSQL integration / new Preview E2E |NOT RUN, backup prerequisite blocked|
+| Phase20 / Mock regression Preview E2E |NOT RUN in this continuation; prior Mock report below remains historical|
+
+Full gates were executed by BUILD; QA and Review reused full/build evidence and independently executed the specific changed-risk checks. Repository doubles/serial savepoints are not actual PostgreSQL constraint, rollback or independent committed financial race proof.
+
+## Preview DB safety and migration
+
+- Approved Preview azlfamqrmbfsvjnpozmr (yaho-preview) independently confirmed ACTIVE_HEALTHY; project ID/ref, direct DB host and region differ from Production. Production metadata only; no Production DB connection or credential retrieval/use.
+- Actual read-only Prisma verification of both Preview pooled/direct connections: approved runtime fingerprint matched,14applied migration file checksums matched, pending exactly20261015090000_ai_service_followup, existing AiService tables0.
+- Strict parser on original approved .env.local and existing protected Mock worktree .env.local: all12runner+6Mock values present/nonplaceholder; approved Preview target/Production deny configuration PASS; no source mutation.
+- Existing configured Phase20 Preview app fingerprint and SHA5bfc90e327092c7fbe9bb33562441686442a41ea matched the runner. This is not follow-up deployment/E2E proof.
+- Approved migration: prisma/migrations/20261015090000_ai_service_followup/migration.sql; additive11tables/index/FK/check/RLS/functions/triggers, BEGIN/COMMIT, lock5s/statement60s, no existing-data mutation or destructive DDL.
+- SHA256:BACD02B4A1C69E19C891D0C122F08BF9F715B6D0B2E43F5899D92C329FEE1B7F, unchanged.
+- Existing applied Mock migration raw SHA256:26DC71BB2A44BB15F6DD3FD83ACEB3FA109E84D29275BECCC4F82D05F787026C, unchanged. All14applied file checksums matched.
+- New migration APPLIED:NO. No reset/db push/truncate/trigger bypass/manual DDL or Production migration.
+- BLOCKER: recoverable Preview backup/recovery evidence is not verified. Backups browser remains at Supabase sign-in; connector exposes no backup query; local pg_dump is absent and Docker daemon is not running. ACTIVE_HEALTHY and an additive transaction do not replace the user's explicit backup prerequisite.
+- Next required input: log in to the opened Supabase Preview Backups tab or provide the recoverable Preview backup timestamp/status. Revalidate target/history/backup and acquire the existing exclusive lock before applying only the approved migration with Prisma preflight/deploy/verify.
+
+## QA / Review / interruption history
+
+- Earlier follow-up: QA1(3MAJOR)→BUILD2→QA2PASS→Review1(2MAJOR)→BUILD3→QA3(Unicode MAJOR)→BUILD4→QA4PASS→Review2(number-word MAJOR)→BUILD5→QA5PASS→Review3(native numeral MAJOR)→BUILD6→QA6PASS→Review4(Sino copula MAJOR)→BUILD7 usage interruption before mutation→continuation BUILD7→QA7PASS→Review5PASS. Detailed retained evidence: AI_SERVICE_QA_REVIEW.md and AI_SERVICE_BUILD_REPORT.md.
+- Preview preparation initially had an unused-type lint warning, implicit-any and Next ProcessEnv type errors. Corrected before final gates; early failures were not relabeled PASS.
+- Initial preparation:1638tests PASS→independentQA78PASS→Review CHANGES_REQUIRED1MAJOR (three unrelated DB errors falsely passed INTEGRITY)→developer correction with29additional regressions→1667tests PASS and final build actual0.
+- Revised QA turn was interrupted by usage limit and was not PASS. User resumed; independent QA56+12counterexamples PASS→independent Review12counterexamples PASS. All failures/interruption remain recorded.
+- Older Phase20 Preview regression2failures later did not reproduce; their cause remains unconfirmed. Original Mock report below is preserved unchanged, not reused as new execution evidence.
+
+## Git / PR / CI / deployment
+
+- PR53 https://github.com/gulatnaru/yaho-management/pull/53 remains OPEN/Draft/unmerged at117151772552b16b6e81e3bbba23bb50e0826f0e. Dependency merge-base matches. Existing quality CI SUCCESS; production-migrate WAITING for human Environment approval; no approval performed.
+- Intended subsequent Draft PR base is feature/phase21-kakao-ai-consultation. PR53 ships first only under separate approval; follow-up rebasing/transplant after squash must exclude inherited Mock changes and never force push.
+- Vercel yaho-management project/team/repository confirmed, Production branch main, build/install overrides null. GitHub Production required human reviewer remains configured. No deployment/protection settings were changed.
+- New commit SHA / push / Draft PR URL / new CI / new Preview deployment / merge: NONE or NOT RUN. Publication is withheld until required actual DB/Preview checks pass.
+- Original C:/projects/yaho-management remains main1fb8c77 with exactly its protected .gitignore and docs/LAST_RUN_REPORT.md unstaged. Mock worktree4dirty docs and26canonical paths remain unchanged. No reset/clean/stash/restore/checkout/force push or original-root commit.
+- Local changes remain uncommitted/unstaged in the follow-up worktree. Agent Memory current.md updated separately and locally committed asc60e7e88f3d5611ade5a89d138114e5909d226c5; Memory worktree clean, no push.
+
+## Risks / Next
+
+- Actual PG error wrapping, constraints/RLS, rollback, independent locks/timeouts and Preview9+Phase20/Mock regression E2E remain NOT RUN. Exact GitSource SHA/Preview target/READY and complete migration history must match before tests create synthetic data.
+- Commit-mediated independent financial races and Prisma pool maxWait remain UNVERIFIED; serial savepoints and advisory/row-lock diagnostics do not substitute for them. Immutable ledger/pins/evidence cannot be removed to force cleanup.
+- Actual OpenAI/Kakao calls, customer data/privacy/foreign transfer/provider retention, official guidance/manual ADMIN review, account quality/usage/billing/4s latency, operational scheduler/deletion lag/backups/restore purge and Production remain separate approval gates.
+- Real OpenAI/Kakao API calls, Production access/migration/deploy, operational activation/cron and PR merges remain forbidden. Stop before real OpenAI call approval.
+- Latest user instruction:DO NOT shut down the PC. No shutdown scheduled or executed.
+
+## Changed files
+
+- REQUIREMENTS.md
+- docs/DECISIONS.md
+- docs/LAST_RUN_REPORT.md
+- lib/e2e/preview-focus.ts
+- lib/e2e/preview-invocation.ts
+- lib/e2e/preview-runner.ts
+- playwright.config.ts
+- prisma/schema.prisma
+- scripts/e2e/phase21-preview-environment.ts
+- scripts/e2e/preview-migration.ts
+- scripts/e2e/preview.ts
+- app/(admin)/ai-service/[id]/page.tsx
+- app/(admin)/ai-service/actions.ts
+- app/(admin)/ai-service/error.tsx
+- app/(admin)/ai-service/loading.tsx
+- app/(admin)/ai-service/page.tsx
+- app/api/ai-service/v1/retention/route.ts
+- app/api/ai-service/v1/skill/route.ts
+- app/api/e2e/ai-service-validation/route.ts
+- docs/AI_CONSULTATION_LIVE_PLAN.md
+- docs/AI_CONSULTATION_LIVE_SPEC.md
+- docs/AI_SERVICE_BUILD_REPORT.md
+- docs/AI_SERVICE_QA_REVIEW.md
+- docs/AI_SERVICE_TEST_TRACE.md
+- lib/e2e/preview-environment.ts
+- prisma/migrations/20261015090000_ai_service_followup/migration.sql
+- scripts/e2e/ai-service-preview-migration-policy.ts
+- server/ai-service/admin-context.ts
+- server/ai-service/admin.ts
+- server/ai-service/billing.ts
+- server/ai-service/contracts.ts
+- server/ai-service/cost.ts
+- server/ai-service/crypto.ts
+- server/ai-service/handler.ts
+- server/ai-service/keys.ts
+- server/ai-service/ledger.ts
+- server/ai-service/openai-transport.ts
+- server/ai-service/preview/handler.ts
+- server/ai-service/preview/locks.ts
+- server/ai-service/preview/rollback.ts
+- server/ai-service/preview/scenarios.ts
+- server/ai-service/provider.ts
+- server/ai-service/public-numerals.ts
+- server/ai-service/public-text.ts
+- server/ai-service/publication-digest.ts
+- server/ai-service/repository.ts
+- server/ai-service/retention.ts
+- server/ai-service/runtime.ts
+- server/ai-service/tools.ts
+- server/ai-service/transport.ts
+- tests/e2e/phase21-ai-service.spec.ts
+- tests/unit/ai-service/actions.test.ts
+- tests/unit/ai-service/cost-provider.test.ts
+- tests/unit/ai-service/fake-db.ts
+- tests/unit/ai-service/handler-runtime.test.ts
+- tests/unit/ai-service/keys.test.ts
+- tests/unit/ai-service/korean-quantity.test.ts
+- tests/unit/ai-service/ledger.test.ts
+- tests/unit/ai-service/migration.test.ts
+- tests/unit/ai-service/openai-transport.test.ts
+- tests/unit/ai-service/preview-validation.test.ts
+- tests/unit/ai-service/privacy-tools.test.ts
+- tests/unit/ai-service/qa-regressions.test.ts
+- tests/unit/ai-service/review-regressions.test.ts
+
+## Preserved previous Mock report
+
 # Phase21 — Mock/nonproduction validation complete, ready for PR
 
 - Date:2026-10-15 (Asia/Seoul). Branch:feature/phase21-kakao-ai-consultation; existing feature HEAD/index remain at base1fb8c77 and uncommitted. Tested validation-only candidate:1db777a4929f5ac684a54520cfd8fa4cae252b4e.

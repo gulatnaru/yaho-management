@@ -13,7 +13,7 @@ import {
 // Playwright 테스트 러너는 Next.js 와 별도 프로세스라 .env 를 자동으로 읽지 않는다.
 // Next.js 가 실제로 쓰는 로더(@next/env)를 그대로 재사용해 .env/.env.local 을 로드한다
 // (dev 서버가 읽는 값과 완전히 동일한 우선순위/병합 규칙을 보장하기 위함 — dotenv 를 별도로 추가하지 않는다).
-loadEnvConfig(process.cwd());
+if(process.env.PLAYWRIGHT_PREVIEW_E2E!=="1")loadEnvConfig(process.cwd());
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -47,7 +47,7 @@ export default defineConfig({
   // This suite intentionally throws before creating a client unless the Preview
   // runner proof is present. Ignore it during ordinary local discovery so the
   // local safety check can list the browser suite without weakening that guard.
-  testIgnore: previewE2e ? undefined : /(?:phase20-postgres-races|phase21-ai-consultations)\.spec\.ts$/,
+  testIgnore: previewE2e ? undefined : /(?:phase20-postgres-races|phase21-ai-consultations|phase21-ai-service)\.spec\.ts$/,
   // 로컬 Next dev cold compilation 환경에서 전체 E2E 실행의 결정성을 우선한다.
   workers: 1,
   // The outer runner adds cleanup/startup time beyond this browser budget.

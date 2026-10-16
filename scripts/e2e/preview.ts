@@ -1,9 +1,11 @@
+import {countServiceRows} from "@/server/ai-service/preview/rollback";
+import type {Tx} from "@/server/ai-service/repository";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadEnvConfig } from "@next/env";
+import {previewExecutionEnvironment} from "@/lib/e2e/preview-environment";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   assertPreviewDatabasePreflight,
@@ -102,8 +104,8 @@ function runPlaywright(
 }
 
 async function main(): Promise<void> {
-  loadEnvConfig(process.cwd());
-  const configuration = readPreviewInvocationConfiguration(process.env);
+  const environment=previewExecutionEnvironment(process.cwd(),process.env);
+  const configuration = readPreviewInvocationConfiguration(environment);
   activeSummaryPath = previewE2eSafeSummaryPath(configuration.runId);
   // This artifact exists before the child inherits stdout, so a lost terminal
   // result cannot be mistaken for a passing or empty guarded run.
@@ -164,7 +166,7 @@ async function main(): Promise<void> {
               updateSafeSummary({ phase: "RUNNING", playwright: "RUNNING", cleanup: "PENDING", errorCode: "NONE", childExitCode: null });
               const exitCode = await runPlaywright(
                 {
-                  ...process.env,
+                  ...environment,
                   PLAYWRIGHT_PREVIEW_E2E: "1",
                   PLAYWRIGHT_NO_COPY_PROMPT: PREVIEW_NO_COPY_PROMPT,
                   PLAYWRIGHT_BASE_URL: configuration.baseUrl,
@@ -194,8 +196,10 @@ async function main(): Promise<void> {
           cleanup: async () => {
             const legacy = await cleanupPreviewRunPhases({
               phase21: async () => {
+                let serviceFailure=false;
+                if(environment.PREVIEW_E2E_FOCUS==="AI_SERVICE"){try{serviceFailure=await countServiceRows(databaseClient as unknown as Tx)!==0;}catch{serviceFailure=true;}}
                 const report = await cleanupPhase21PreviewRun(databaseClient, {runId: configuration.runId, deploymentSha: configuration.deploymentSha});
-                if (report.residualAiRows || report.residualPrograms || report.residualClasses) throw new Error("Phase21 cleanup left owned rows");
+                if (report.residualAiRows || report.residualPrograms || report.residualClasses || serviceFailure) throw new Error("Preview cleanup ownership verification failed");
               },
               phase20: async () => {
                 const report = await cleanupPhase20PreviewRun(databaseClient, configuration.runId);
