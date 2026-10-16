@@ -92,8 +92,46 @@ export async function runScenario(c:ValidationContext,scenario:Scenario,locks?:(
    const pin=await c.tx.aiServiceKeyPin.findFirstOrThrow();
    const changed=(pin.fingerprint.startsWith("f")?"e":"f")+pin.fingerprint.slice(1);
    await pgDenied("APPEND_ONLY",()=>c.db.$transaction(tx=>tx.$executeRaw`UPDATE "AiServiceKeyPin" SET "fingerprint"=${changed} WHERE "id"=${pin.id} AND "environment"='PREVIEW'`));checks.appendOnlyPinUpdateDenied=true;
-   await pgDenied("UNIQUE_PIN",()=>c.db.$transaction(tx=>tx.$executeRaw`INSERT INTO "AiServiceKeyPin" ("id","environment","version","fingerprint") VALUES (${"synthetic-duplicate-"+c.scope.runId},'PREVIEW',${pin.version},${pin.fingerprint})`));checks.uniquePinDenied=true;
-   await pgDenied("CONFIG_ENVIRONMENT",()=>c.db.$transaction(tx=>tx.$executeRaw`INSERT INTO "AiServiceConfig" ("environment","priceVersion","inputNanoUsdPerToken","outputNanoUsdPerToken","fxMilliKrwPerUsd","fxCheckedAt","fxSource","updatedById","updatedAt") VALUES ('INVALID','synthetic',1,1,1400000,${c.now},'synthetic','synthetic',${c.now})`));checks.environmentCheckDenied=true;
+   // Prisma6 can expose only PostgreSQL DETAIL for 23505/23514. The database
+   // therefore verifies the real state/table/constraint before emitting fixed,
+   // nonprivate DETAIL for the existing strict matcher. This DO is DML only;
+   // it defines no schema object and cannot turn another error into a PASS.
+   // All PREVIEW/v1 pins here were created in this empty, locked rollback fixture.
+   await pgDenied("UNIQUE_PIN",()=>c.db.$transaction(tx=>tx.$executeRaw`
+DO $ai_service_unique_probe$
+DECLARE actual_state text; actual_table text; actual_constraint text;
+BEGIN
+ BEGIN
+  INSERT INTO "AiServiceKeyPin" ("id","environment","version","fingerprint")
+   SELECT "id" || '-duplicate',"environment","version","fingerprint"
+   FROM "AiServiceKeyPin" WHERE "environment"='PREVIEW' AND "version"='v1';
+ EXCEPTION WHEN OTHERS THEN
+  GET STACKED DIAGNOSTICS actual_state=RETURNED_SQLSTATE, actual_table=TABLE_NAME, actual_constraint=CONSTRAINT_NAME;
+  IF actual_state='23505' AND actual_table='AiServiceKeyPin' AND actual_constraint='AiServiceKeyPin_environment_version_key' THEN
+   RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='duplicate key value violates unique constraint "AiServiceKeyPin_environment_version_key"',
+    DETAIL='ERROR: duplicate key value violates unique constraint "AiServiceKeyPin_environment_version_key"';
+  END IF;
+  RAISE;
+ END;
+END
+$ai_service_unique_probe$`));checks.uniquePinDenied=true;
+   await pgDenied("CONFIG_ENVIRONMENT",()=>c.db.$transaction(tx=>tx.$executeRaw`
+DO $ai_service_environment_probe$
+DECLARE actual_state text; actual_table text; actual_constraint text;
+BEGIN
+ BEGIN
+  INSERT INTO "AiServiceConfig" ("environment","priceVersion","inputNanoUsdPerToken","outputNanoUsdPerToken","fxMilliKrwPerUsd","fxCheckedAt","fxSource","updatedById","updatedAt")
+   VALUES ('INVALID','synthetic',1,1,1400000,CURRENT_TIMESTAMP,'synthetic','synthetic',CURRENT_TIMESTAMP);
+ EXCEPTION WHEN OTHERS THEN
+  GET STACKED DIAGNOSTICS actual_state=RETURNED_SQLSTATE, actual_table=TABLE_NAME, actual_constraint=CONSTRAINT_NAME;
+  IF actual_state='23514' AND actual_table='AiServiceConfig' AND actual_constraint='ai_service_config_environment' THEN
+   RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='new row for relation "AiServiceConfig" violates check constraint "ai_service_config_environment"',
+    DETAIL='ERROR: new row for relation "AiServiceConfig" violates check constraint "ai_service_config_environment"';
+  END IF;
+  RAISE;
+ END;
+END
+$ai_service_environment_probe$`));checks.environmentCheckDenied=true;
   }
  }
  if(scenario==="LOCKS"){ensure(locks);Object.assign(checks,await locks());}
