@@ -47,9 +47,8 @@ export class ManualTestFlow {
   async session(request: Request, runId: string, scope: "OPERATOR" | "RESERVATION") {
     runBodySchema.parse({ runId });
     return this.auth.withSession(request, runId, scope, (run, session) => {
-      const csrf = opaqueToken();
-      session.csrfHash = tokenHash("csrf", csrf);
-      if (scope === "OPERATOR") return { runId, scope, csrf, expiresAt: session.expiresAt, mode: run.mode, fixtureTeacherIds: ["teacher-1", "teacher-2"], data: run.data };
+      const issued = this.auth.refreshSession(session);
+      if (scope === "OPERATOR") return { runId, scope, ...issued, expiresAt: session.expiresAt, mode: run.mode, fixtureTeacherIds: ["teacher-1", "teacher-2"], data: run.data };
       const applications = (session.applicationIds ?? (session.applicationId ? [session.applicationId] : [])).map((id) => {
         const application = run.data.applications[id];
         requireManual(application && application.classId === session.classId, "UNAUTHORIZED", 401);
@@ -58,7 +57,7 @@ export class ManualTestFlow {
       });
       // Only this session's application IDs, fixture IDs and status cross reservation scope.
       const first = applications[0];
-      return { runId, scope, csrf, expiresAt: session.expiresAt, classStatus: session.classId ? run.data.classes[session.classId]?.status : undefined,
+      return { runId, scope, ...issued, expiresAt: session.expiresAt, classStatus: session.classId ? run.data.classes[session.classId]?.status : undefined,
         applications, application: first ? { id: first.id, status: first.status } : null };
     });
   }

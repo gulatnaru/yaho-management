@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { emptyMockData, type ManualTestDatabase, type MockRun, type MockSession } from "@/lib/db/manual-test-prisma";
 import { bootstrapSchema, exchangeSchema, tokenSchema } from "./contracts";
@@ -12,6 +12,36 @@ export const MANUAL_COOKIES = {
   cleanup: "__Host-yaho-manual-test-cleanup",
 } as const;
 export const MOCK_TTL = { run: 60 * 60_000, session: 15 * 60_000, grant: 5 * 60_000, challenge: 5 * 60_000 } as const;
+
+const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const payloadSchema = z.object({ h: hashSchema, c: hashSchema, exp: z.number().int().positive().max(8.64e15) }).strict();
+const signedTokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/);
+type SignedPayload = z.infer<typeof payloadSchema>;
+type TokenPurpose = "challenge" | "session:OPERATOR" | "session:RESERVATION";
+
+function payloadSignature(encoded: string, secret: string, purpose: TokenPurpose) {
+  return createHmac("sha256", secret).update(`yaho-manual-test:${purpose}\0${encoded}`).digest();
+}
+export function signPayload(payload: SignedPayload, secret: string, purpose: TokenPurpose) {
+  const encoded = Buffer.from(JSON.stringify(payloadSchema.parse(payload))).toString("base64url");
+  return `${encoded}.${payloadSignature(encoded, secret, purpose).toString("base64url")}`;
+}
+export function verifyPayload(token: string, secret: string, purpose: TokenPurpose, now = Date.now()): SignedPayload {
+  requireManual(signedTokenSchema.safeParse(token).success, "UNAUTHORIZED", 401);
+  const [encoded, signature] = token.split(".");
+  const supplied = Buffer.from(signature, "base64url");
+  const expected = payloadSignature(encoded, secret, purpose);
+  requireManual(supplied.length === expected.length && supplied.toString("base64url") === signature && timingSafeEqual(supplied, expected), "UNAUTHORIZED", 401);
+  let value: unknown;
+  try {
+    const decoded = Buffer.from(encoded, "base64url");
+    requireManual(decoded.toString("base64url") === encoded, "UNAUTHORIZED", 401);
+    value = JSON.parse(decoded.toString("utf8"));
+  } catch { throw new ManualTestError("UNAUTHORIZED", 401); }
+  const parsed = payloadSchema.safeParse(value);
+  requireManual(parsed.success && parsed.data.exp > now, "UNAUTHORIZED", 401);
+  return parsed.data;
+}
 
 const configSchema = z.object({
   enabled: z.boolean(), nodeEnv: z.string(), deploymentEnv: z.string().optional(),
@@ -34,7 +64,9 @@ export async function verifyManualTestAdminSession(): Promise<boolean> {
 export const opaqueToken = () => randomBytes(32).toString("base64url");
 export const tokenHash = (domain: string, token: string) => createHash("sha256").update(`${domain}\0${token}`).digest("hex");
 function equalHash(left: string, right: string) {
-  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+  const leftBytes = Buffer.from(left, "hex");
+  const rightBytes = Buffer.from(right, "hex");
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 export function manualCookie(name: string, value: string, maxAge: number) {
   return `${name}=${value}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAge / 1000))}; Secure; HttpOnly; SameSite=Lax`;
@@ -42,18 +74,25 @@ export function manualCookie(name: string, value: string, maxAge: number) {
 export function readManualCookie(request: Request, name: string) {
   const values = (request.headers.get("cookie") ?? "").split(";").map((part) => part.trim())
     .filter((part) => part.startsWith(`${name}=`)).map((part) => part.slice(name.length + 1));
-  requireManual(values.length === 1 && tokenSchema.safeParse(values[0]).success, "UNAUTHORIZED", 401);
+  const schema = name === MANUAL_COOKIES.cleanup ? tokenSchema : signedTokenSchema;
+  requireManual(values.length === 1 && schema.safeParse(values[0]).success, "UNAUTHORIZED", 401);
   return values[0];
 }
 
 export class ManualTestAuth {
   private readonly config: z.output<typeof configSchema>;
-  private readonly challenges = new Map<string, { csrfHash: string; expiresAt: number }>();
   constructor(readonly db: ManualTestDatabase, config: ManualMockConfig, readonly now = Date.now,
     private readonly verifyAdminSession: () => Promise<boolean> = verifyManualTestAdminSession) {
     const parsed = configSchema.safeParse(config);
     requireManual(parsed.success, "MOCK_RUNTIME_DISABLED", 503);
     this.config = parsed.data;
+  }
+
+  private signingSecret() {
+    // Shared deployment credentials survive cold starts; never fall back to a process-local key.
+    const secret = this.config.syntheticBootstrapSecret ?? process.env.AUTH_SECRET;
+    requireManual(secret && secret.length >= 32, "MOCK_RUNTIME_DISABLED", 503);
+    return secret;
   }
 
   assertRuntime() {
@@ -73,24 +112,16 @@ export class ManualTestAuth {
 
   async issueChallenge(request: Request) {
     this.assertOrigin(request);
-    for (const [key, value] of this.challenges) if (value.expiresAt <= this.now()) this.challenges.delete(key);
-    requireManual(this.challenges.size < 256, "MOCK_CHALLENGE_LIMIT", 429);
-    const token = opaqueToken();
     const csrf = opaqueToken();
-    const hash = tokenHash("challenge", token);
-    const challenge = { csrfHash: tokenHash("csrf", csrf), expiresAt: this.now() + MOCK_TTL.challenge };
-    if (this.db.issueChallenge) await this.db.issueChallenge(hash, challenge.csrfHash, challenge.expiresAt);
-    else this.challenges.set(hash, challenge);
+    const token = signPayload({ h: tokenHash("challenge", opaqueToken()), c: tokenHash("csrf", csrf), exp: this.now() + MOCK_TTL.challenge }, this.signingSecret(), "challenge");
     return { csrf, cookie: manualCookie(MANUAL_COOKIES.challenge, token, MOCK_TTL.challenge) };
   }
 
   private async consumeChallenge(request: Request) {
     this.assertOrigin(request);
-    const hash = tokenHash("challenge", readManualCookie(request, MANUAL_COOKIES.challenge));
-    const challenge = this.db.consumeChallenge ? await this.db.consumeChallenge(hash) : this.challenges.get(hash);
-    requireManual(challenge && challenge.expiresAt > this.now(), "UNAUTHORIZED", 401);
-    this.verifyCsrf(request, challenge.csrfHash);
-    this.challenges.delete(hash);
+    // Stateless challenges remain valid until expiry; exchange grants retain one-use semantics.
+    const challenge = verifyPayload(readManualCookie(request, MANUAL_COOKIES.challenge), this.signingSecret(), "challenge", this.now());
+    this.verifyCsrf(request, challenge.c);
   }
 
   verifyCsrf(request: Request, hash: string) {
@@ -99,13 +130,19 @@ export class ManualTestAuth {
   }
 
   issueSession(run: MockRun, scope: MockSession["scope"], classId?: string) {
-    const token = opaqueToken();
-    const csrf = opaqueToken();
-    const hash = tokenHash("session", token);
+    const hash = tokenHash("session", opaqueToken());
     const expiresAt = Math.min(run.expiresAt, this.now() + MOCK_TTL.session);
-    run.sessions[hash] = { hash, csrfHash: tokenHash("csrf", csrf), scope, runId: run.id, classId, expiresAt, revoked: false };
-    const name = scope === "OPERATOR" ? MANUAL_COOKIES.operator : MANUAL_COOKIES.reservation;
-    return { csrf, cookie: manualCookie(name, token, expiresAt - this.now()) };
+    const session = { hash, scope, runId: run.id, classId, expiresAt, revoked: false };
+    const issued = this.refreshSession(session);
+    run.sessions[hash] = session;
+    return issued;
+  }
+
+  refreshSession(session: MockSession) {
+    const csrf = opaqueToken();
+    const token = signPayload({ h: session.hash, c: tokenHash("csrf", csrf), exp: session.expiresAt }, this.signingSecret(), `session:${session.scope}`);
+    const name = session.scope === "OPERATOR" ? MANUAL_COOKIES.operator : MANUAL_COOKIES.reservation;
+    return { csrf, cookie: manualCookie(name, token, session.expiresAt - this.now()) };
   }
 
   async bootstrap(request: Request, input: unknown) {
@@ -137,11 +174,11 @@ export class ManualTestAuth {
   async withSession<T>(request: Request, runId: string, scope: MockSession["scope"], operation: (run: MockRun, session: MockSession) => T | Promise<T>): Promise<T> {
     this.assertOrigin(request);
     const name = scope === "OPERATOR" ? MANUAL_COOKIES.operator : MANUAL_COOKIES.reservation;
-    const hash = tokenHash("session", readManualCookie(request, name));
+    const payload = verifyPayload(readManualCookie(request, name), this.signingSecret(), `session:${scope}`, this.now());
     return this.transaction(runId, (run) => {
-      const session = run.sessions[hash];
+      const session = run.sessions[payload.h];
       requireManual(run.status === "ACTIVE" && run.expiresAt > this.now() && session && !session.revoked && session.expiresAt > this.now() && session.scope === scope && session.runId === runId, "UNAUTHORIZED", 401);
-      if (request.method !== "GET") this.verifyCsrf(request, session.csrfHash ?? "");
+      if (request.method !== "GET") this.verifyCsrf(request, payload.c);
       return operation(run, session);
     });
   }
