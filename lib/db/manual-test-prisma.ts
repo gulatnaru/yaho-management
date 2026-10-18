@@ -3,20 +3,23 @@
  */
 export type MockSession = {
   hash: string; csrfHash: string; scope: "OPERATOR" | "RESERVATION";
-  runId: string; classId?: string; applicationId?: string; expiresAt: number; revoked: boolean;
+  runId: string; classId?: string; applicationId?: string; applicationIds?: string[]; expiresAt: number; revoked: boolean;
 };
 export type MockGrant = { hash: string; runId: string; classId: string; expiresAt: number; consumed: boolean };
 export type MockClass = {
   id: string; capacity: number; teacherIds: string[]; quotedAmount: number;
   startsAt: number; endsAt: number; status: "SCHEDULED" | "CANCELLED";
+  cancelledAt?: number; cancellationReason?: "SYNTHETIC_OPERATOR_CANCELLATION";
 };
 export type MockApplication = {
   id: string; classId: string; childId: string; quotedAmount: number;
-  status: "PENDING" | "CONFIRMED"; reservationId?: string;
+  status: "PENDING" | "CONFIRMED" | "CANCELLED"; reservationId?: string;
+  cancelledAt?: number; cancellationReason?: "SYNTHETIC_OPERATOR_CANCELLATION";
 };
 export type MockReservation = {
   id: string; applicationId: string; classId: string; childId: string;
   status: "RESERVED" | "CANCELLED" | "NO_SHOW"; attendance?: "PRESENT" | "ABSENT";
+  cancelledAt?: number; cancellationReason?: "SYNTHETIC_OPERATOR_CANCELLATION";
 };
 export type MockPayment = {
   id: string; reservationId: string; amount: number; refundedAmount: number;

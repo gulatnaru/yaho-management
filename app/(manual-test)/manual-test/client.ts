@@ -3,7 +3,7 @@ import { z } from "zod";
 export const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 export const uuid = z.string().uuid();
 const money = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const application = z.object({ id: uuid, classId: uuid, childId: z.string(), quotedAmount: money, status: z.enum(["PENDING", "CONFIRMED"]), reservationId: uuid.optional() });
+const application = z.object({ id: uuid, classId: uuid, childId: z.string(), quotedAmount: money, status: z.enum(["PENDING", "CONFIRMED", "CANCELLED"]), reservationId: uuid.optional() });
 export const operatorSession = z.object({
   runId: uuid, scope: z.literal("OPERATOR"), csrf: token, expiresAt: z.number(), mode: z.literal("MOCK_ONLY"),
   data: z.object({
@@ -16,7 +16,9 @@ export const operatorSession = z.object({
     refunds: z.array(z.object({ id: uuid, paymentId: uuid, amount: money, reason: z.string(), detail: z.string().optional() })),
   }),
 });
-export const reservationSession = z.object({ runId: uuid, scope: z.literal("RESERVATION"), csrf: token, expiresAt: z.number(), application: z.object({ id: uuid, status: z.enum(["PENDING", "CONFIRMED"]) }).nullable() });
+export const ownApplication = z.object({ id: uuid, childId: z.string().regex(/^child-(?:[1-9]|1[0-2])$/), status: z.enum(["PENDING", "CONFIRMED", "CANCELLED"]) });
+export const submissionResult = z.object({ applicationId: uuid, status: z.literal("PENDING"), applications: z.array(ownApplication).min(1) });
+export const reservationSession = z.object({ runId: uuid, scope: z.literal("RESERVATION"), csrf: token, expiresAt: z.number(), classStatus: z.enum(["SCHEDULED", "CANCELLED"]), applications: z.array(ownApplication), application: z.object({ id: uuid, status: z.enum(["PENDING", "CONFIRMED", "CANCELLED"]) }).nullable() });
 export const revenueSchema = z.object({ gross: money, refunds: money, net: z.number().int() });
 export const csrfSchema = z.object({ csrf: token });
 export const bootstrapResult = csrfSchema.extend({ runId: uuid, expiresAt: z.number(), mode: z.literal("MOCK_ONLY") });
@@ -26,7 +28,7 @@ export const cleanedResult = z.object({ runId: uuid, status: z.literal("CLEANED"
 export type OperatorSession = z.infer<typeof operatorSession>;
 export type ReservationSession = z.infer<typeof reservationSession>;
 export type Revenue = z.infer<typeof revenueSchema>;
-type Endpoint = "csrf" | "bootstrap" | "session" | "classes" | "links" | "exchange" | "submission" | "deposit" | "confirm" | "payment" | "refunds" | "revenue" | "close" | "cleanup";
+type Endpoint = "csrf" | "bootstrap" | "session" | "classes" | "links" | "exchange" | "submission" | "deposit" | "confirm" | "cancel" | "payment" | "refunds" | "revenue" | "close" | "cleanup";
 
 export class ManualClientError extends Error {
   constructor(readonly code: string, readonly status: number) { super(code); }
