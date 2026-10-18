@@ -3,7 +3,7 @@ import "server-only";
  * search_path is a simulation, not PostgreSQL ACL or pooler verification.
  */
 export type MockSession = {
-  hash: string; csrfHash: string; scope: "OPERATOR" | "RESERVATION";
+  hash: string; csrfHash?: string; scope: "OPERATOR" | "RESERVATION";
   runId: string; classId?: string; applicationId?: string; applicationIds?: string[]; expiresAt: number; revoked: boolean;
 };
 export type MockGrant = { hash: string; runId: string; classId: string; expiresAt: number; consumed: boolean };
@@ -147,19 +147,19 @@ export class DatabaseManualTestPrisma implements ManualTestDatabase {
       } finally { tx.finish(); }
     });
   }
+  private readonly challenges = new Map<string, { csrfHash: string; expiresAt: number }>();
   async issueChallenge(hash: string, csrfHash: string, expiresAt: number) {
-    await this.client.$transaction(async (tx) => {
-      await setManualSearchPath(tx);
-      await tx.$executeRaw(Prisma.sql`DELETE FROM "manual_test"."ManualTestChallenge" WHERE "expiresAt" <= CURRENT_TIMESTAMP`);
-      await tx.$executeRaw(Prisma.sql`INSERT INTO "manual_test"."ManualTestChallenge" ("tokenHash", "csrfHash", "expiresAt") VALUES (${hash}, ${csrfHash}, ${new Date(expiresAt)})`);
-    });
+    // In-memory challenge store (no DB table for challenges)
+    const now = Date.now();
+    for (const [k, v] of this.challenges) {
+      if (v.expiresAt <= now) this.challenges.delete(k);
+    }
+    this.challenges.set(hash, { csrfHash, expiresAt });
   }
   async consumeChallenge(hash: string) {
-    return this.client.$transaction(async (tx) => {
-      await setManualSearchPath(tx);
-      const rows = await tx.$queryRaw<{ csrfHash: string; expiresAt: Date }[]>(Prisma.sql`DELETE FROM "manual_test"."ManualTestChallenge" WHERE "tokenHash" = ${hash} RETURNING "csrfHash", "expiresAt"`);
-      return rows[0] ? { csrfHash: rows[0].csrfHash, expiresAt: rows[0].expiresAt.getTime() } : undefined;
-    });
+    const c = this.challenges.get(hash);
+    if (c) this.challenges.delete(hash);
+    return c && c.expiresAt > Date.now() ? c : undefined;
   }
 }
 

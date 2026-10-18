@@ -66,7 +66,6 @@ export async function hydrateManualRun(client: ManualSqlClient, root: Row): Prom
   // service contract before any ledger reads or refund insertion.
   await client.$queryRaw(Prisma.sql`SELECT "id" FROM "manual_test"."PaymentItem" WHERE "runId" = ${runId} FOR UPDATE`);
   const run: MockRun = { id: runId, mode: "DATABASE", status: z.enum(["ACTIVE", "CLOSED", "CLEANED"]).parse(root.status), expiresAt: time(root.expiresAt), sessions: {}, grants: {}, receipts: {}, data: emptyMockData() };
-  if (root.cleanupHash) run.cleanup = { hash: text(root, "cleanupHash"), csrfHash: text(root, "cleanupCsrfHash"), expiresAt: time(root.cleanupExpiresAt) };
   if (run.status === "CLEANED") return run;
   const rows = {} as Record<Table, Row[]>;
   for (const table of tables) rows[table] = z.array(z.record(z.unknown())).parse(await client.$queryRaw(Prisma.sql`SELECT * FROM ${tableSql(table)} WHERE "runId" = ${runId}`));
@@ -83,7 +82,7 @@ export async function hydrateManualRun(client: ManualSqlClient, root: Row): Prom
     const status = z.enum(["SUBMITTED", "CONFIRMED", "CANCELLED"]).parse(row.status);
     run.data.applications[id] = { id, classId: text(row, "classScheduleId"), childId: fixtureName(runId, row.requestedChildId), quotedAmount: number(row, "quotedAmount"), status: status === "SUBMITTED" ? "PENDING" : status, ...(row.reservationId ? { reservationId: text(row, "reservationId") } : {}), ...(status === "CANCELLED" ? { cancelledAt: time(row.resolvedAt), cancellationReason: "SYNTHETIC_OPERATOR_CANCELLATION" as const } : {}) };
   }
-  for (const row of rows.ApplicationDeposit) run.data.deposits.push({ id: text(row, "id"), applicationId: text(row, "applicationId"), amount: number(row, "amount") });
+  for (const row of rows.ApplicationDeposit) run.data.deposits.push({ id: text(row, "id"), applicationId: text(row, "submissionId"), amount: number(row, "amount") });
   for (const row of rows.Reservation) {
     const id = text(row, "id");
     const application = rows.ReservationApplication.find((r) => r.reservationId === id);
@@ -111,7 +110,7 @@ export async function hydrateManualRun(client: ManualSqlClient, root: Row): Prom
   for (const row of rows.ManualTestSession) {
     const hash = text(row, "tokenHash");
     const ids = rows.ReservationApplication.filter((r) => row.submissionId && r.submissionId === row.submissionId).map((r) => text(r, "id"));
-    run.sessions[hash] = { hash, csrfHash: text(row, "csrfHash"), runId, scope: z.enum(["OPERATOR", "RESERVATION"]).parse(row.scope), expiresAt: time(row.expiresAt), revoked: !!row.revokedAt, ...(row.linkId ? { classId: classForLink(row.linkId) } : {}), ...(ids.length ? { applicationIds: ids, applicationId: ids[0] } : {}) };
+    run.sessions[hash] = { hash, runId, scope: z.enum(["OPERATOR", "RESERVATION"]).parse(row.scope), expiresAt: time(row.expiresAt), revoked: !!row.revokedAt, ...(row.linkId ? { classId: classForLink(row.linkId) } : {}), ...(ids.length ? { applicationIds: ids, applicationId: ids[0] } : {}) };
   }
   for (const row of rows.ManualTestAccessGrant) {
     const hash = text(row, "tokenHash");
@@ -164,7 +163,7 @@ export async function persistManualRun(client: ManualSqlClient, run: MockRun, pr
       if (!submission) throw new Error("MANUAL_DATABASE_BINDING");
       await put("ReservationApplication", { id: row.id, classScheduleId: row.classId, submissionId: submission, requestedChildId: fixtureId(runId, row.childId), quotedAmount: row.quotedAmount, status: row.status === "PENDING" ? "SUBMITTED" : row.status, childName: `TEST ${row.childId}`, childBirthDate: new Date("2020-01-01"), childGender: "UNSPECIFIED", programTermsAcknowledged: true, privacyConsentAgreed: true, legalGuardianConfirmed: true, refundTermsAcknowledged: true, photoShareConsentAgreed: false, photoMarketingConsentAgreed: false, consentVersion: "SYNTHETIC_TEST", resolvedAt: row.status === "PENDING" ? null : new Date(row.cancelledAt ?? now.getTime()), resolvedById: row.status === "PENDING" ? null : actor, resolutionNote: row.cancellationReason ?? null, childId: row.status === "CONFIRMED" ? fixtureId(runId, row.childId) : null, reservationId: row.reservationId ?? null, updatedAt: now });
     }
-    for (const row of run.data.deposits) if (!previous?.data.deposits.some((r) => r.id === row.id)) await put("ApplicationDeposit", { id: row.id, applicationId: row.applicationId, submissionId: submissions.get(row.applicationId), amount: row.amount, confirmedById: actor, confirmedAt: now, depositedAt: now });
+    for (const row of run.data.deposits) if (!previous?.data.deposits.some((r) => r.id === row.id)) await put("ApplicationDeposit", { id: row.id, submissionId: submissions.get(row.applicationId) ?? row.applicationId, amount: row.amount, confirmedById: actor, confirmedAt: now, depositedAt: now });
     for (const row of run.data.refunds) if (!previous?.data.refunds.some((r) => r.id === row.id)) await put("Refund", { id: row.id, paymentItemId: itemId(row.paymentId), amount: row.amount, reason: row.reason === "CUSTOMER_REQUEST" ? "PERSONAL" : row.reason, reasonDetail: row.detail ?? null, processedById: actor });
     for (const row of Object.values(run.data.payments)) if (!previous || JSON.stringify(previous.data.payments[row.id]) !== JSON.stringify(row)) {
       if (!previous?.data.payments[row.id]) await put("Payment", { id: row.id, method: "TRANSFER", totalAmount: row.amount, status: "PAID", updatedAt: now });
@@ -172,12 +171,12 @@ export async function persistManualRun(client: ManualSqlClient, run: MockRun, pr
       await put("Payment", { id: row.id, method: "TRANSFER", totalAmount: row.amount, status: row.status === "PARTIALLY_REFUNDED" ? "PARTIAL_REFUNDED" : row.status, updatedAt: now });
     }
 
-    for (const row of Object.values(run.sessions)) if (!previous || JSON.stringify(previous.sessions[row.hash]) !== JSON.stringify(row)) await put("ManualTestSession", { id: fixtureId(runId, row.hash), tokenHash: row.hash, csrfHash: row.csrfHash, scope: row.scope, actorUserId: row.scope === "OPERATOR" ? actor : null, linkId: row.classId ? linkId(runId, row.classId) : null, submissionId: row.applicationId ? submissionId(runId, row.hash) : null, expiresAt: new Date(row.expiresAt), revokedAt: row.revoked ? now : null });
+    for (const row of Object.values(run.sessions)) if (!previous || JSON.stringify(previous.sessions[row.hash]) !== JSON.stringify(row)) await put("ManualTestSession", { id: fixtureId(runId, row.hash), tokenHash: row.hash, scope: row.scope, actorUserId: row.scope === "OPERATOR" ? actor : null, linkId: row.classId ? linkId(runId, row.classId) : null, submissionId: row.applicationId ? submissionId(runId, row.hash) : null, expiresAt: new Date(row.expiresAt), revokedAt: row.revoked ? now : null });
     for (const row of Object.values(run.grants)) if (!previous || JSON.stringify(previous.grants[row.hash]) !== JSON.stringify(row)) await put("ManualTestAccessGrant", { id: fixtureId(runId, row.hash), tokenHash: row.hash, linkId: linkId(runId, row.classId), expiresAt: new Date(row.expiresAt), consumedAt: row.consumed ? new Date(Math.min(now.getTime(), row.expiresAt)) : null });
     for (const [key, row] of Object.entries(run.receipts)) if (!previous?.receipts[key]) {
       const [operation, requestKey] = key.split(":");
       await put("ManualTestOperationReceipt", { id: fixtureId(runId, key), operation, requestKey, payloadDigest: row.payload, resultIds: row.result });
     }
   }
-  await client.$executeRaw(Prisma.sql`UPDATE "manual_test"."ManualTestRun" SET "status" = ${run.status}::"manual_test"."ManualTestRunStatus", "closedAt" = CASE WHEN ${run.status !== "ACTIVE"} THEN COALESCE("closedAt", ${now}) ELSE NULL END, "cleanedAt" = CASE WHEN ${run.status === "CLEANED"} THEN COALESCE("cleanedAt", ${now}) ELSE NULL END, "cleanupHash" = ${run.cleanup?.hash ?? null}, "cleanupCsrfHash" = ${run.cleanup?.csrfHash ?? null}, "cleanupExpiresAt" = ${run.cleanup ? new Date(run.cleanup.expiresAt) : null} WHERE "id" = ${runId}`);
+  await client.$executeRaw(Prisma.sql`UPDATE "manual_test"."ManualTestRun" SET "status" = ${run.status}::"manual_test"."ManualTestRunStatus", "closedAt" = CASE WHEN ${run.status !== "ACTIVE"} THEN COALESCE("closedAt", ${now}) ELSE NULL END, "cleanedAt" = CASE WHEN ${run.status === "CLEANED"} THEN COALESCE("cleanedAt", ${now}) ELSE NULL END WHERE "id" = ${runId}`);
 }

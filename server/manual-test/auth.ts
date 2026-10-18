@@ -141,7 +141,7 @@ export class ManualTestAuth {
     return this.transaction(runId, (run) => {
       const session = run.sessions[hash];
       requireManual(run.status === "ACTIVE" && run.expiresAt > this.now() && session && !session.revoked && session.expiresAt > this.now() && session.scope === scope && session.runId === runId, "UNAUTHORIZED", 401);
-      if (request.method !== "GET") this.verifyCsrf(request, session.csrfHash);
+      if (request.method !== "GET") this.verifyCsrf(request, session.csrfHash ?? "");
       return operation(run, session);
     });
   }
