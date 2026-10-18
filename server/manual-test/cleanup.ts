@@ -1,3 +1,4 @@
+import "server-only";
 import { emptyMockData, type MockRun } from "@/lib/db/manual-test-prisma";
 import { ManualTestAuth, MANUAL_COOKIES, MOCK_TTL, manualCookie, opaqueToken, readManualCookie, tokenHash } from "./auth";
 import { runBodySchema } from "./contracts";

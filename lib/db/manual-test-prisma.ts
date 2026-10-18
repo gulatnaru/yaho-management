@@ -1,3 +1,4 @@
+import "server-only";
 /** In-memory Prisma-shaped test adapter. NEVER imports a generated/real Prisma client.
  * search_path is a simulation, not PostgreSQL ACL or pooler verification.
  */
@@ -33,7 +34,7 @@ export type MockData = {
   refunds: { id: string; paymentId: string; amount: number; reason: string; detail?: string }[];
 };
 export type MockRun = {
-  id: string; mode: "MOCK_ONLY"; status: "ACTIVE" | "CLOSED" | "CLEANED"; expiresAt: number;
+  id: string; mode: "MOCK_ONLY" | "DATABASE"; status: "ACTIVE" | "CLOSED" | "CLEANED"; expiresAt: number;
   sessions: Record<string, MockSession>; grants: Record<string, MockGrant>;
   cleanup?: { hash: string; csrfHash: string; expiresAt: number };
   receipts: Record<string, { payload: string; result: unknown }>;
@@ -63,7 +64,16 @@ export class MockManualTestTransaction {
   finish() { this.active = false; this.searchPath = undefined; }
 }
 
-export class MockManualTestPrisma {
+export interface ManualTestDatabase {
+  readonly mode: MockRun["mode"];
+  createRun(run: MockRun): Promise<void>;
+  $transaction<T>(runId: string, operation: (tx: MockManualTestTransaction) => Promise<T> | T): Promise<T>;
+  issueChallenge?(hash: string, csrfHash: string, expiresAt: number): Promise<void>;
+  consumeChallenge?(hash: string): Promise<{ csrfHash: string; expiresAt: number } | undefined>;
+  $disconnect?(): Promise<void>;
+}
+
+export class MockManualTestPrisma implements ManualTestDatabase {
   readonly mode = "MOCK_ONLY" as const;
   private readonly runs = new Map<string, MockRun>();
   private tail: Promise<void> = Promise.resolve();
@@ -100,4 +110,71 @@ export class MockManualTestPrisma {
       } finally { tx.finish(); }
     });
   }
+}
+
+/** Independently configured client; never imports lib/db/prisma or its public datasource. */
+export class DatabaseManualTestPrisma implements ManualTestDatabase {
+  readonly mode = "DATABASE" as const;
+  private readonly client: ManualPrismaClient;
+  constructor(url: string, factory: (url: string) => ManualPrismaClient = createManualPrismaClient) {
+    assertManualDatabaseUrl(url);
+    this.client = factory(url);
+  }
+  $disconnect() { return this.client.$disconnect(); }
+  async createRun(run: MockRun) {
+    if (run.mode !== "DATABASE") throw new Error("MANUAL_DATABASE_BINDING");
+    await this.client.$transaction(async (tx) => {
+      await setManualSearchPath(tx);
+      const createdAt = new Date(run.expiresAt - 60 * 60_000);
+      await tx.$executeRaw(Prisma.sql`INSERT INTO "manual_test"."ManualTestRun" ("id", "startRequestKey", "deploymentSha", "schemaVersion", "createdAt", "expiresAt") VALUES (${run.id}, ${run.id}, 'manual-test-runtime', 'relational-v1', ${createdAt}, ${new Date(run.expiresAt)})`);
+      await persistManualRun(tx, structuredClone(run));
+    });
+  }
+  async $transaction<T>(runId: string, operation: (tx: MockManualTestTransaction) => Promise<T> | T): Promise<T> {
+    return this.client.$transaction(async (client) => {
+      await setManualSearchPath(client);
+      const root = await lockManualRun(client, runId);
+      const previous = await hydrateManualRun(client, root);
+      const draft = structuredClone(previous);
+      const tx = new MockManualTestTransaction(draft);
+      try {
+        const result = await operation(tx);
+        tx.verifySearchPath();
+        if (draft.id !== runId || draft.mode !== "DATABASE") throw new Error("MANUAL_DATABASE_BINDING");
+        const detached = structuredClone(result);
+        await persistManualRun(client, draft, previous);
+        return detached;
+      } finally { tx.finish(); }
+    });
+  }
+  async issueChallenge(hash: string, csrfHash: string, expiresAt: number) {
+    await this.client.$transaction(async (tx) => {
+      await setManualSearchPath(tx);
+      await tx.$executeRaw(Prisma.sql`DELETE FROM "manual_test"."ManualTestChallenge" WHERE "expiresAt" <= CURRENT_TIMESTAMP`);
+      await tx.$executeRaw(Prisma.sql`INSERT INTO "manual_test"."ManualTestChallenge" ("tokenHash", "csrfHash", "expiresAt") VALUES (${hash}, ${csrfHash}, ${new Date(expiresAt)})`);
+    });
+  }
+  async consumeChallenge(hash: string) {
+    return this.client.$transaction(async (tx) => {
+      await setManualSearchPath(tx);
+      const rows = await tx.$queryRaw<{ csrfHash: string; expiresAt: Date }[]>(Prisma.sql`DELETE FROM "manual_test"."ManualTestChallenge" WHERE "tokenHash" = ${hash} RETURNING "csrfHash", "expiresAt"`);
+      return rows[0] ? { csrfHash: rows[0].csrfHash, expiresAt: rows[0].expiresAt.getTime() } : undefined;
+    });
+  }
+}
+
+import { Prisma, PrismaClient } from "@prisma/client";
+import { hydrateManualRun, lockManualRun, persistManualRun, setManualSearchPath, type ManualSqlClient } from "@/server/manual-test/persistence";
+export interface ManualPrismaClient {
+  $transaction<T>(operation: (tx: ManualSqlClient) => Promise<T>): Promise<T>;
+  $disconnect(): Promise<void>;
+}
+export function assertManualDatabaseUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (!["postgresql:", "postgres:"].includes(url.protocol) || !url.hostname || !url.pathname.slice(1) || url.searchParams.getAll("schema").length !== 1 || url.searchParams.get("schema") !== "manual_test") throw new Error();
+  } catch { throw new Error("MANUAL_DATABASE_CONFIG_INVALID"); }
+}
+function createManualPrismaClient(url: string): ManualPrismaClient {
+  return new PrismaClient({ datasources: { db: { url } }, log: [] });
 }

@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import "server-only";
+import { createHash, randomUUID } from "node:crypto";
 import type { MockRun } from "@/lib/db/manual-test-prisma";
 import { ManualTestAuth, MOCK_TTL, opaqueToken, tokenHash } from "./auth";
-import { classSchema, confirmSchema, depositSchema, linkSchema, paymentSchema, refundSchema, runBodySchema, submissionSchema } from "./contracts";
+import { cancellationSchema, classSchema, confirmSchema, depositSchema, linkSchema, paymentSchema, refundSchema, runBodySchema, submissionSchema } from "./contracts";
 import { requireManual } from "./errors";
 
 function sumMoney(values: number[]) {
@@ -14,7 +15,7 @@ function deposited(run: MockRun, applicationId: string) {
 }
 function once<T>(run: MockRun, operation: string, requestKey: string, input: unknown, execute: () => T): T {
   const key = `${operation}:${requestKey}`;
-  const payload = JSON.stringify(input);
+  const payload = createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const previous = run.receipts[key];
   if (previous) {
     requireManual(previous.payload === payload, "IDEMPOTENCY_CONFLICT", 409);
@@ -39,7 +40,7 @@ function checkPaymentIntegrity(run: MockRun) {
   }
 }
 
-/** Synthetic single-child fixture flow. Does not call production reservation or payment services. */
+/** Synthetic fixture flow. Does not call production reservation or payment services. */
 export class ManualTestFlow {
   constructor(readonly auth: ManualTestAuth) {}
 
@@ -48,15 +49,24 @@ export class ManualTestFlow {
     return this.auth.withSession(request, runId, scope, (run, session) => {
       const csrf = opaqueToken();
       session.csrfHash = tokenHash("csrf", csrf);
-      return scope === "OPERATOR"
-        ? { runId, scope, csrf, expiresAt: session.expiresAt, mode: run.mode, fixtureTeacherIds: ["teacher-1", "teacher-2"], data: run.data }
-        : { runId, scope, csrf, expiresAt: session.expiresAt, application: session.applicationId ? { id: session.applicationId, status: run.data.applications[session.applicationId]?.status } : null };
+      if (scope === "OPERATOR") return { runId, scope, csrf, expiresAt: session.expiresAt, mode: run.mode, fixtureTeacherIds: ["teacher-1", "teacher-2"], data: run.data };
+      const applications = (session.applicationIds ?? (session.applicationId ? [session.applicationId] : [])).map((id) => {
+        const application = run.data.applications[id];
+        requireManual(application && application.classId === session.classId, "UNAUTHORIZED", 401);
+        const reservation = application.reservationId && run.data.reservations[application.reservationId];
+        return { id, childId: application.childId, status: reservation && reservation.status === "CANCELLED" ? "CANCELLED" as const : application.status };
+      });
+      // Only this session's application IDs, fixture IDs and status cross reservation scope.
+      const first = applications[0];
+      return { runId, scope, csrf, expiresAt: session.expiresAt, classStatus: session.classId ? run.data.classes[session.classId]?.status : undefined,
+        applications, application: first ? { id: first.id, status: first.status } : null };
     });
   }
 
   async createClass(request: Request, input: unknown) {
     const body = classSchema.parse(input);
     return this.auth.withSession(request, body.runId, "OPERATOR", (run) => {
+      requireManual(run.mode !== "DATABASE" || body.quotedAmount <= 2147483647, "MONEY_OUT_OF_RANGE");
       requireManual(body.startsAt > this.auth.now(), "CLASS_TIME_INVALID");
       const id = randomUUID();
       run.data.classes[id] = {
@@ -84,20 +94,26 @@ export class ManualTestFlow {
     const body = submissionSchema.parse(input);
     return this.auth.withSession(request, body.runId, "RESERVATION", (run, session) => {
       const classRow = session.classId && run.data.classes[session.classId];
-      requireManual(!session.applicationId, "ALREADY_SUBMITTED", 409);
+      requireManual(!session.applicationId && !session.applicationIds?.length, "ALREADY_SUBMITTED", 409);
       requireManual(classRow && classRow.status === "SCHEDULED" && classRow.startsAt > this.auth.now(), "SUBMISSION_UNAVAILABLE", 409);
-      requireManual(run.data.children[body.childId], "SYNTHETIC_CHILD_REQUIRED");
-      const id = randomUUID();
-      run.data.applications[id] = { id, classId: classRow.id, childId: body.childId, quotedAmount: classRow.quotedAmount, status: "PENDING" };
-      session.applicationId = id;
+      const childIds = body.childIds ?? [body.childId!];
+      requireManual(childIds.every((id) => run.data.children[id]), "SYNTHETIC_CHILD_REQUIRED");
+      const applications = childIds.map((childId) => {
+        const id = randomUUID();
+        run.data.applications[id] = { id, classId: classRow.id, childId, quotedAmount: classRow.quotedAmount, status: "PENDING" };
+        return { id, childId, status: "PENDING" as const };
+      });
+      session.applicationIds = applications.map((row) => row.id);
+      session.applicationId = applications[0].id;
       // No capacity, prices, other applications or finance data crosses reservation scope.
-      return { applicationId: id, status: "PENDING" as const };
+      return { applicationId: applications[0].id, status: "PENDING" as const, applications };
     });
   }
 
   async deposit(request: Request, input: unknown) {
     const body = depositSchema.parse(input);
     return this.auth.withSession(request, body.runId, "OPERATOR", (run) => once(run, "deposit", body.requestKey, body, () => {
+      requireManual(run.mode !== "DATABASE" || body.amount <= 2147483647, "MONEY_OUT_OF_RANGE");
       const application = run.data.applications[body.applicationId];
       requireManual(application?.status === "PENDING", "APPLICATION_UNAVAILABLE", 409);
       sumMoney([deposited(run, application.id), body.amount]);
@@ -112,9 +128,13 @@ export class ManualTestFlow {
     return this.auth.withSession(request, body.runId, "OPERATOR", (run) => {
       const application = run.data.applications[body.applicationId];
       requireManual(application, "APPLICATION_UNAVAILABLE", 409);
-      if (application.reservationId) return { reservationId: application.reservationId };
       const classRow = run.data.classes[application.classId];
       requireManual(classRow?.status === "SCHEDULED" && classRow.endsAt > this.auth.now(), "CLASS_UNAVAILABLE", 409);
+      if (application.reservationId) {
+        requireManual(run.data.reservations[application.reservationId]?.status === "RESERVED", "RESERVATION_UNAVAILABLE", 409);
+        return { reservationId: application.reservationId };
+      }
+      requireManual(application.status === "PENDING", "APPLICATION_UNAVAILABLE", 409);
       requireManual(run.data.children[application.childId]?.active, "CHILD_INACTIVE", 409);
       const reservations = Object.values(run.data.reservations).filter((row) => row.classId === classRow.id);
       requireManual(!reservations.some((row) => row.childId === application.childId), "DUPLICATE_RESERVATION", 409);
@@ -128,9 +148,40 @@ export class ManualTestFlow {
     });
   }
 
+  async cancel(request: Request, input: unknown) {
+    const body = cancellationSchema.parse(input);
+    return this.auth.withSession(request, body.runId, "OPERATOR", (run) => {
+      const target = body.kind === "CLASS" ? run.data.classes[body.targetId]
+        : body.kind === "RESERVATION" ? run.data.reservations[body.targetId] : run.data.applications[body.targetId];
+      requireManual(target, "CANCELLATION_UNAVAILABLE", 409);
+      // Verified repeats are safe, including after a class was subsequently cancelled.
+      if (target.status === "CANCELLED") return { targetId: target.id, status: "CANCELLED" as const };
+      if (body.kind === "CLASS") {
+        const classRow = run.data.classes[body.targetId];
+        requireManual(classRow.status === "SCHEDULED" && classRow.endsAt >= this.auth.now(), "CANCELLATION_UNAVAILABLE", 409);
+      } else if (body.kind === "RESERVATION") {
+        const classId = "classId" in target ? target.classId : undefined;
+        const classRow = classId && run.data.classes[classId];
+        requireManual(classRow && classRow.status === "SCHEDULED" && classRow.endsAt >= this.auth.now(), "CLASS_UNAVAILABLE", 409);
+        requireManual(target.status === "RESERVED", "CANCELLATION_UNAVAILABLE", 409);
+      } else {
+        const classId = "classId" in target ? target.classId : undefined;
+        const classRow = classId && run.data.classes[classId];
+        requireManual(classRow && classRow.endsAt >= this.auth.now(), "CLASS_UNAVAILABLE", 409);
+        requireManual(target.status === "PENDING", "CANCELLATION_UNAVAILABLE", 409);
+      }
+      target.status = "CANCELLED";
+      target.cancelledAt = this.auth.now();
+      target.cancellationReason = body.reason;
+      // Class cancellation preserves original reservation statuses. No ledger mutations or automatic refunds.
+      return { targetId: target.id, status: "CANCELLED" as const };
+    });
+  }
+
   async payment(request: Request, input: unknown) {
     const body = paymentSchema.parse(input);
     return this.auth.withSession(request, body.runId, "OPERATOR", (run) => once(run, "payment", body.requestKey, body, () => {
+      requireManual(run.mode !== "DATABASE" || body.amount <= 2147483647, "MONEY_OUT_OF_RANGE");
       const reservation = run.data.reservations[body.reservationId];
       const application = reservation && run.data.applications[reservation.applicationId];
       requireManual(reservation && application?.status === "CONFIRMED", "RESERVATION_UNAVAILABLE", 409);
@@ -146,6 +197,7 @@ export class ManualTestFlow {
   async refund(request: Request, input: unknown) {
     const body = refundSchema.parse(input);
     return this.auth.withSession(request, body.runId, "OPERATOR", (run) => once(run, "refund", body.requestKey, body, () => {
+      requireManual(run.mode !== "DATABASE" || body.amount <= 2147483647, "MONEY_OUT_OF_RANGE");
       checkPaymentIntegrity(run);
       const payment = run.data.payments[body.paymentId];
       requireManual(payment, "PAYMENT_UNAVAILABLE", 409);

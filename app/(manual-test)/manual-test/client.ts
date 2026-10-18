@@ -5,7 +5,7 @@ export const uuid = z.string().uuid();
 const money = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const application = z.object({ id: uuid, classId: uuid, childId: z.string(), quotedAmount: money, status: z.enum(["PENDING", "CONFIRMED", "CANCELLED"]), reservationId: uuid.optional() });
 export const operatorSession = z.object({
-  runId: uuid, scope: z.literal("OPERATOR"), csrf: token, expiresAt: z.number(), mode: z.literal("MOCK_ONLY"),
+  runId: uuid, scope: z.literal("OPERATOR"), csrf: token, expiresAt: z.number(), mode: z.enum(["MOCK_ONLY", "DATABASE"]),
   data: z.object({
     children: z.record(z.object({ id: z.string(), active: z.boolean() })),
     classes: z.record(z.object({ id: uuid, capacity: z.number(), teacherIds: z.array(z.string()), quotedAmount: money, startsAt: z.number(), endsAt: z.number(), status: z.enum(["SCHEDULED", "CANCELLED"]) })),
@@ -21,7 +21,7 @@ export const submissionResult = z.object({ applicationId: uuid, status: z.litera
 export const reservationSession = z.object({ runId: uuid, scope: z.literal("RESERVATION"), csrf: token, expiresAt: z.number(), classStatus: z.enum(["SCHEDULED", "CANCELLED"]), applications: z.array(ownApplication), application: z.object({ id: uuid, status: z.enum(["PENDING", "CONFIRMED", "CANCELLED"]) }).nullable() });
 export const revenueSchema = z.object({ gross: money, refunds: money, net: z.number().int() });
 export const csrfSchema = z.object({ csrf: token });
-export const bootstrapResult = csrfSchema.extend({ runId: uuid, expiresAt: z.number(), mode: z.literal("MOCK_ONLY") });
+export const bootstrapResult = csrfSchema.extend({ runId: uuid, expiresAt: z.number(), mode: z.enum(["MOCK_ONLY", "DATABASE"]) });
 export const linkResult = z.object({ runId: uuid, grant: token, expiresAt: z.number() });
 export const closedResult = csrfSchema.extend({ runId: uuid, status: z.literal("CLOSED") });
 export const cleanedResult = z.object({ runId: uuid, status: z.literal("CLEANED") });
@@ -36,7 +36,7 @@ export class ManualClientError extends Error {
 export function errorMessage(error: unknown): string {
   if (error instanceof z.ZodError) return "TEST input or response is invalid. Check the selected fixtures, whole KRW amounts, and class dates.";
   if (!(error instanceof ManualClientError)) return "TEST request could not be verified. Check your connection and retry.";
-  if (error.code === "MOCK_RUNTIME_DISABLED") return "TEST mock runtime is disabled. An operator must enable the existing mock runtime on a non-production HTTPS environment.";
+  if (error.code === "MOCK_RUNTIME_DISABLED") return "TEST runtime is disabled. An operator must configure the isolated database on a non-production HTTPS environment.";
   if (error.status === 401) return "TEST session or link is invalid, expired, consumed, or closed. Request a new link or start a new test.";
   const known: Record<string, string> = {
     ORIGIN_DENIED: "TEST requests require the configured same-origin HTTPS environment.",

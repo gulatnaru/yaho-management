@@ -137,11 +137,11 @@ export default function ManualTestAdminClient() {
     {!session && <Panel title={closed ? "TEST run ended" : "Start a TEST run"}>
       {closed && <div className="space-y-3"><p className="font-semibold">{closed.cleaned ? "CLEANED · Synthetic data removed" : "CLOSED · Sessions revoked; cleanup still required"}</p><p className="text-sm">Run: <span className="break-all font-mono">{closed.runId}</span></p>{!closed.cleaned && <Button disabled={busy} onClick={() => void act(() => cleanup(closed))}>Retry TEST cleanup</Button>}</div>}
       {resumeRunId && !closed && <div className="space-y-3"><p className="text-sm">A TEST run ID is already present. Resume its operator session after a connection failure. If it has expired or closed, start another test.</p><Button disabled={busy} onClick={() => void act(() => refresh(resumeRunId))}>Resume existing TEST run</Button><Button disabled={busy} className="ml-3" onClick={() => { setResumeRunId(null); window.history.replaceState(null, "", "/manual-test/admin"); }}>Use a new TEST run</Button></div>}
-      {(!closed || closed.cleaned) && !resumeRunId && <form onSubmit={bootstrap} className="max-w-lg space-y-4"><p className="text-sm text-slate-600">Your current ADMIN session authorizes a new TEST run on the configured HTTPS mock origin. The runtime must be explicitly enabled outside production. Runs expire after at most one hour; sessions after 15 minutes.</p><Button disabled={busy}>Start TEST as ADMIN</Button></form>}
+      {(!closed || closed.cleaned) && !resumeRunId && <form onSubmit={bootstrap} className="max-w-lg space-y-4"><p className="text-sm text-slate-600">Your current ADMIN session authorizes a new TEST run on the configured HTTPS test origin. The runtime must be explicitly enabled outside production. Runs expire after at most one hour; sessions after 15 minutes.</p><Button disabled={busy}>Start TEST as ADMIN</Button></form>}
     </Panel>}
     {session && <>
       <Panel title="Active TEST session">
-        <p className="break-all font-mono text-sm">Run: {session.runId}</p><p className="text-sm">MOCK ONLY · Session expires {kst(session.expiresAt)}</p>
+        <p className="break-all font-mono text-sm">Run: {session.runId}</p><p className="text-sm">{session.mode === "DATABASE" ? "ISOLATED DATABASE" : "MOCK ONLY"} · Session expires {kst(session.expiresAt)}</p>
         {expired && <p role="alert" className="font-semibold text-red-800">TEST session expired or unavailable. Start a new run; old fixtures cannot be reused.</p>}
         <div className="flex flex-wrap gap-3"><Button disabled={busy || expired} onClick={() => void act(() => refresh(session.runId))}>Refresh TEST session &amp; totals</Button>
           <Button disabled={busy || expired} className="bg-red-800 hover:bg-red-700" onClick={() => void act(async () => {
@@ -185,7 +185,7 @@ export default function ManualTestAdminClient() {
         </Panel>
         <Panel title="5. TEST revenue (server ledger)">
           {revenue ? <dl className="grid gap-3 sm:grid-cols-3">{[["Gross payments", revenue.gross], ["Refunds", revenue.refunds], ["Net revenue", revenue.net]].map(([label, value]) => <div key={label} className="rounded bg-slate-50 p-4"><dt className="text-sm text-slate-600">{label}</dt><dd className="text-xl font-bold">{krw(Number(value))}</dd></div>)}</dl> : <p className="text-sm">TEST totals unavailable. Refresh to read the server ledger.</p>}
-          <p className="text-xs text-slate-500">Synthetic deposits are shown per application; revenue comes only from the mock payment/refund ledger.</p>
+          <p className="text-xs text-slate-500">Synthetic deposits are shown per application; revenue comes only from the test payment/refund ledger.</p>
         </Panel>
       </fieldset>
     </>}

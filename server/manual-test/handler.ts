@@ -1,3 +1,4 @@
+import "server-only";
 import { z, ZodError } from "zod";
 import { MANUAL_COOKIES, manualCookie } from "./auth";
 import { runIdSchema } from "./contracts";
@@ -8,7 +9,7 @@ const responseHeaders = {
   "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
   "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff",
 };
-type PostOperation = "bootstrap" | "exchange" | "classes" | "links" | "submission" | "deposit" | "confirm" | "payment" | "refunds" | "close" | "cleanup";
+type PostOperation = "bootstrap" | "exchange" | "classes" | "links" | "submission" | "deposit" | "confirm" | "cancel" | "payment" | "refunds" | "close" | "cleanup";
 type CookieResult = { cookie?: string };
 async function guarded(operation: () => Promise<unknown>, closing = false) {
   try {
@@ -46,6 +47,7 @@ export function createManualTestPostRoute(operation: PostOperation) {
       case "submission": return runtime.flow.submit(request, input);
       case "deposit": return runtime.flow.deposit(request, input);
       case "confirm": return runtime.flow.confirm(request, input);
+      case "cancel": return runtime.flow.cancel(request, input);
       case "payment": return runtime.flow.payment(request, input);
       case "refunds": return runtime.flow.refund(request, input);
       case "close": return runtime.cleanup.close(request, input);

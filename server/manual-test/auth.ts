@@ -1,6 +1,7 @@
+import "server-only";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { MockManualTestPrisma, emptyMockData, type MockRun, type MockSession } from "@/lib/db/manual-test-prisma";
+import { emptyMockData, type ManualTestDatabase, type MockRun, type MockSession } from "@/lib/db/manual-test-prisma";
 import { bootstrapSchema, exchangeSchema, tokenSchema } from "./contracts";
 import { ManualTestError, requireManual } from "./errors";
 
@@ -18,9 +19,18 @@ const configSchema = z.object({
     const url = new URL(value);
     return url.protocol === "https:" && url.origin === value;
   }),
-  syntheticBootstrapSecret: z.string().min(32).max(256),
+  syntheticBootstrapSecret: z.string().min(32).max(256).optional(),
 });
 export type ManualMockConfig = z.input<typeof configSchema>;
+/** Only bootstrap consults Auth.js; subsequent operations use isolated mock cookies. */
+export async function verifyManualTestAdminSession(): Promise<boolean> {
+  const [{ auth }, { resolveSessionPrincipal }] = await Promise.all([
+    import("@/auth"), import("@/lib/auth/principal"),
+  ]);
+  const session = await auth();
+  const principal = await resolveSessionPrincipal({ userId: session?.user?.id, authVersion: session?.user?.authVersion });
+  return principal?.role === "ADMIN" && !principal.mustChangePassword;
+}
 export const opaqueToken = () => randomBytes(32).toString("base64url");
 export const tokenHash = (domain: string, token: string) => createHash("sha256").update(`${domain}\0${token}`).digest("hex");
 function equalHash(left: string, right: string) {
@@ -39,12 +49,15 @@ export function readManualCookie(request: Request, name: string) {
 export class ManualTestAuth {
   private readonly config: z.output<typeof configSchema>;
   private readonly challenges = new Map<string, { csrfHash: string; expiresAt: number }>();
-  constructor(readonly db: MockManualTestPrisma, config: ManualMockConfig, readonly now = Date.now) {
-    this.config = configSchema.parse(config);
+  constructor(readonly db: ManualTestDatabase, config: ManualMockConfig, readonly now = Date.now,
+    private readonly verifyAdminSession: () => Promise<boolean> = verifyManualTestAdminSession) {
+    const parsed = configSchema.safeParse(config);
+    requireManual(parsed.success, "MOCK_RUNTIME_DISABLED", 503);
+    this.config = parsed.data;
   }
 
   assertRuntime() {
-    requireManual(this.config.enabled && this.config.deploymentEnv !== "production", "MOCK_RUNTIME_DISABLED", 503);
+    requireManual(this.config.enabled && this.config.deploymentEnv !== "production" && (this.db.mode === "DATABASE" || this.config.nodeEnv === "test"), "MOCK_RUNTIME_DISABLED", 503);
   }
 
   assertOrigin(request: Request) {
@@ -58,20 +71,23 @@ export class ManualTestAuth {
     requireManual(!site || site === "same-origin", "ORIGIN_DENIED", 403);
   }
 
-  issueChallenge(request: Request) {
+  async issueChallenge(request: Request) {
     this.assertOrigin(request);
     for (const [key, value] of this.challenges) if (value.expiresAt <= this.now()) this.challenges.delete(key);
     requireManual(this.challenges.size < 256, "MOCK_CHALLENGE_LIMIT", 429);
     const token = opaqueToken();
     const csrf = opaqueToken();
-    this.challenges.set(tokenHash("challenge", token), { csrfHash: tokenHash("csrf", csrf), expiresAt: this.now() + MOCK_TTL.challenge });
+    const hash = tokenHash("challenge", token);
+    const challenge = { csrfHash: tokenHash("csrf", csrf), expiresAt: this.now() + MOCK_TTL.challenge };
+    if (this.db.issueChallenge) await this.db.issueChallenge(hash, challenge.csrfHash, challenge.expiresAt);
+    else this.challenges.set(hash, challenge);
     return { csrf, cookie: manualCookie(MANUAL_COOKIES.challenge, token, MOCK_TTL.challenge) };
   }
 
-  private consumeChallenge(request: Request) {
+  private async consumeChallenge(request: Request) {
     this.assertOrigin(request);
     const hash = tokenHash("challenge", readManualCookie(request, MANUAL_COOKIES.challenge));
-    const challenge = this.challenges.get(hash);
+    const challenge = this.db.consumeChallenge ? await this.db.consumeChallenge(hash) : this.challenges.get(hash);
     requireManual(challenge && challenge.expiresAt > this.now(), "UNAUTHORIZED", 401);
     this.verifyCsrf(request, challenge.csrfHash);
     this.challenges.delete(hash);
@@ -94,11 +110,19 @@ export class ManualTestAuth {
 
   async bootstrap(request: Request, input: unknown) {
     this.assertOrigin(request);
-    const body = bootstrapSchema.parse(input);
-    requireManual(equalHash(tokenHash("bootstrap", body.syntheticBootstrapSecret), tokenHash("bootstrap", this.config.syntheticBootstrapSecret)), "UNAUTHORIZED", 401);
-    this.consumeChallenge(request);
+    bootstrapSchema.parse(input);
+    const suppliedSecret = request.headers.get("x-manual-test-bootstrap-secret");
+    if (suppliedSecret !== null) {
+      // This credential belongs only to server-to-server automation. Browser fetch
+      // metadata denies this path even for a valid credential and ADMIN cookie.
+      const browser = [...request.headers.keys()].some((name) => name.startsWith("sec-fetch-"));
+      requireManual(!browser && this.config.syntheticBootstrapSecret && suppliedSecret.length >= 32 && suppliedSecret.length <= 256 && equalHash(tokenHash("bootstrap", suppliedSecret), tokenHash("bootstrap", this.config.syntheticBootstrapSecret)), "UNAUTHORIZED", 401);
+    } else {
+      requireManual(await this.verifyAdminSession(), "UNAUTHORIZED", 401);
+    }
+    await this.consumeChallenge(request);
     const run: MockRun = {
-      id: randomUUID(), mode: "MOCK_ONLY", status: "ACTIVE", expiresAt: this.now() + MOCK_TTL.run,
+      id: randomUUID(), mode: this.db.mode, status: "ACTIVE", expiresAt: this.now() + MOCK_TTL.run,
       sessions: {}, grants: {}, receipts: {}, data: emptyMockData(),
     };
     for (let index = 1; index <= 12; index++) {
@@ -132,7 +156,7 @@ export class ManualTestAuth {
 
   async exchange(request: Request, input: unknown) {
     const body = exchangeSchema.parse(input);
-    this.consumeChallenge(request);
+    await this.consumeChallenge(request);
     const hash = tokenHash("grant", body.grant);
     return this.transaction(body.runId, (run) => {
       const grant = run.grants[hash];
