@@ -36,7 +36,6 @@ export type MockData = {
 export type MockRun = {
   id: string; mode: "MOCK_ONLY" | "DATABASE"; status: "ACTIVE" | "CLOSED" | "CLEANED"; expiresAt: number;
   sessions: Record<string, MockSession>; grants: Record<string, MockGrant>;
-  cleanup?: { hash: string; csrfHash: string; expiresAt: number };
   receipts: Record<string, { payload: string; result: unknown }>;
   data: MockData;
 };
@@ -68,8 +67,6 @@ export interface ManualTestDatabase {
   readonly mode: MockRun["mode"];
   createRun(run: MockRun): Promise<void>;
   $transaction<T>(runId: string, operation: (tx: MockManualTestTransaction) => Promise<T> | T): Promise<T>;
-  issueChallenge?(hash: string, csrfHash: string, expiresAt: number): Promise<void>;
-  consumeChallenge?(hash: string): Promise<{ csrfHash: string; expiresAt: number } | undefined>;
   $disconnect?(): Promise<void>;
 }
 
@@ -146,20 +143,6 @@ export class DatabaseManualTestPrisma implements ManualTestDatabase {
         return detached;
       } finally { tx.finish(); }
     });
-  }
-  private readonly challenges = new Map<string, { csrfHash: string; expiresAt: number }>();
-  async issueChallenge(hash: string, csrfHash: string, expiresAt: number) {
-    // In-memory challenge store (no DB table for challenges)
-    const now = Date.now();
-    for (const [k, v] of this.challenges) {
-      if (v.expiresAt <= now) this.challenges.delete(k);
-    }
-    this.challenges.set(hash, { csrfHash, expiresAt });
-  }
-  async consumeChallenge(hash: string) {
-    const c = this.challenges.get(hash);
-    if (c) this.challenges.delete(hash);
-    return c && c.expiresAt > Date.now() ? c : undefined;
   }
 }
 

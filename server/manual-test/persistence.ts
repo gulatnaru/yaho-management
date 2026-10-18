@@ -121,7 +121,7 @@ export async function hydrateManualRun(client: ManualSqlClient, root: Row): Prom
 }
 
 // Existing tables include unused dependencies. Remove only this run in FK-safe order;
-// preserve ManualTestRun and its cleanup credential as a retryable tombstone.
+// preserve ManualTestRun as a retryable tombstone — there is no cleanup credential anymore.
 const cleanupTables = ["ManualTestOperationReceipt", "ManualTestAccessGrant", "ManualTestSession", "DeviceChild", "DeviceSubmission", "ApplicationDevice", "ChildConsent", "FundAllocation", "ApplicationReturn", "ReturnObligation", "ApplicationDeposit", "ReservationApplicationPaymentMapping", "ReservationApplication", "Refund", "PaymentItem", "Payment", "Reservation", "ReservationApplicationSubmission", "ReservationApplicationLink", "ReservationApplicationGroupClass", "ReservationApplicationGroup", "ReservationApplicationSettings", "ClassTeacher", "ClassSchedule", "Program", "Teacher", "Child", "User"] as const;
 
 export async function persistManualRun(client: ManualSqlClient, run: MockRun, previous?: MockRun) {

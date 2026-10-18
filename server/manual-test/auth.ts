@@ -9,7 +9,6 @@ export const MANUAL_COOKIES = {
   operator: "__Host-yaho-manual-test-operator",
   reservation: "__Host-yaho-manual-test-reservation",
   challenge: "__Host-yaho-manual-test-challenge",
-  cleanup: "__Host-yaho-manual-test-cleanup",
 } as const;
 export const MOCK_TTL = { run: 60 * 60_000, session: 15 * 60_000, grant: 5 * 60_000, challenge: 5 * 60_000 } as const;
 
@@ -74,13 +73,21 @@ export function manualCookie(name: string, value: string, maxAge: number) {
 export function readManualCookie(request: Request, name: string) {
   const values = (request.headers.get("cookie") ?? "").split(";").map((part) => part.trim())
     .filter((part) => part.startsWith(`${name}=`)).map((part) => part.slice(name.length + 1));
-  const schema = name === MANUAL_COOKIES.cleanup ? tokenSchema : signedTokenSchema;
-  requireManual(values.length === 1 && schema.safeParse(values[0]).success, "UNAUTHORIZED", 401);
+  requireManual(values.length === 1 && signedTokenSchema.safeParse(values[0]).success, "UNAUTHORIZED", 401);
   return values[0];
 }
 
 export class ManualTestAuth {
   private readonly config: z.output<typeof configSchema>;
+  // Challenge one-use tracking is process-local (best-effort on serverless):
+  // the ManualTestChallenge table does not exist in the real schema and new
+  // migrations are forbidden. Residual cross-instance replay inside the 5-min
+  // TTL is accepted because a challenge alone is insufficient: bootstrap
+  // additionally requires an ADMIN session or the server-side bootstrap
+  // secret, exchange additionally requires a valid unexpired grant, and the
+  // CSRF header value is required but never present in the cookie.
+  private readonly consumedChallenges = new Map<string, number>();
+  private readonly challengeIssueTimes: number[] = [];
   constructor(readonly db: ManualTestDatabase, config: ManualMockConfig, readonly now = Date.now,
     private readonly verifyAdminSession: () => Promise<boolean> = verifyManualTestAdminSession) {
     const parsed = configSchema.safeParse(config);
@@ -112,6 +119,10 @@ export class ManualTestAuth {
 
   async issueChallenge(request: Request) {
     this.assertOrigin(request);
+    // Sliding-window limit: at most 120 challenges per rolling 60 seconds.
+    while (this.challengeIssueTimes.length > 0 && this.challengeIssueTimes[0] <= this.now() - 60_000) this.challengeIssueTimes.shift();
+    requireManual(this.challengeIssueTimes.length < 120, "RATE_LIMITED", 429);
+    this.challengeIssueTimes.push(this.now());
     const csrf = opaqueToken();
     const token = signPayload({ h: tokenHash("challenge", opaqueToken()), c: tokenHash("csrf", csrf), exp: this.now() + MOCK_TTL.challenge }, this.signingSecret(), "challenge");
     return { csrf, cookie: manualCookie(MANUAL_COOKIES.challenge, token, MOCK_TTL.challenge) };
@@ -119,9 +130,11 @@ export class ManualTestAuth {
 
   private async consumeChallenge(request: Request) {
     this.assertOrigin(request);
-    // Stateless challenges remain valid until expiry; exchange grants retain one-use semantics.
     const challenge = verifyPayload(readManualCookie(request, MANUAL_COOKIES.challenge), this.signingSecret(), "challenge", this.now());
     this.verifyCsrf(request, challenge.c);
+    for (const [hash, exp] of this.consumedChallenges) if (exp <= this.now()) this.consumedChallenges.delete(hash);
+    requireManual(!this.consumedChallenges.has(challenge.h), "CHALLENGE_REUSED", 401);
+    this.consumedChallenges.set(challenge.h, challenge.exp);
   }
 
   verifyCsrf(request: Request, hash: string) {
@@ -178,6 +191,35 @@ export class ManualTestAuth {
     return this.transaction(runId, (run) => {
       const session = run.sessions[payload.h];
       requireManual(run.status === "ACTIVE" && run.expiresAt > this.now() && session && !session.revoked && session.expiresAt > this.now() && session.scope === scope && session.runId === runId, "UNAUTHORIZED", 401);
+      if (request.method !== "GET") this.verifyCsrf(request, payload.c);
+      return operation(run, session);
+    });
+  }
+
+  /**
+   * Authorizes cleanup of a closed run by the surviving OPERATOR session.
+   * Unlike withSession this accepts CLOSED/CLEANED runs and does not require
+   * the run to be unexpired — cleanup is always the safe direction, so the
+   * operator credential that survives close() stays usable for it.
+   *
+   * Idempotency: cleanup wipes run.sessions, so a retry on an already CLEANED
+   * run has no session record left. In that case the HMAC-verified operator
+   * token plus the CSRF header authorize a no-op retry — the runId is an
+   * unguessable UUID, the token cannot be forged without the signing secret,
+   * and the CSRF plaintext is a second secret not derivable from the token.
+   */
+  async withClosedOperatorSession<T>(request: Request, runId: string, operation: (run: MockRun, session: MockSession | undefined) => T | Promise<T>): Promise<T> {
+    this.assertOrigin(request);
+    const payload = verifyPayload(readManualCookie(request, MANUAL_COOKIES.operator), this.signingSecret(), "session:OPERATOR", this.now());
+    return this.transaction(runId, (run) => {
+      const session = run.sessions[payload.h];
+      if (!session && run.status === "CLEANED") {
+        // Idempotent cleanup retry: sessions were wiped by the first cleanup.
+        if (request.method !== "GET") this.verifyCsrf(request, payload.c);
+        return operation(run, undefined);
+      }
+      requireManual(session && session.scope === "OPERATOR" && session.runId === runId && !session.revoked && session.expiresAt > this.now(), "UNAUTHORIZED", 401);
+      requireManual(run.status === "CLOSED" || run.status === "CLEANED", "UNAUTHORIZED", 401);
       if (request.method !== "GET") this.verifyCsrf(request, payload.c);
       return operation(run, session);
     });

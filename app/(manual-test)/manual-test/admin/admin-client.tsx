@@ -135,7 +135,7 @@ export default function ManualTestAdminClient() {
     <div><h1 className="text-2xl font-bold">TEST admin dashboard</h1><p className="mt-1 text-sm text-slate-600">Start → virtual class → reservation link → synthetic application → deposit → confirmation → payment / refund / cancellation → end test.</p></div>
     <Notice error={error} message={message} busy={busy} />
     {!session && <Panel title={closed ? "TEST run ended" : "Start a TEST run"}>
-      {closed && <div className="space-y-3"><p className="font-semibold">{closed.cleaned ? "CLEANED · Synthetic data removed" : "CLOSED · Sessions revoked; cleanup still required"}</p><p className="text-sm">Run: <span className="break-all font-mono">{closed.runId}</span></p>{!closed.cleaned && <Button disabled={busy} onClick={() => void act(() => cleanup(closed))}>Retry TEST cleanup</Button>}</div>}
+      {closed && <div className="space-y-3"><p className="font-semibold">{closed.cleaned ? "CLEANED · Synthetic data removed" : "CLOSED · Reservation sessions revoked; cleanup still required"}</p><p className="text-sm">Run: <span className="break-all font-mono">{closed.runId}</span></p>{!closed.cleaned && <Button disabled={busy} onClick={() => void act(() => cleanup(closed))}>Retry TEST cleanup</Button>}</div>}
       {resumeRunId && !closed && <div className="space-y-3"><p className="text-sm">A TEST run ID is already present. Resume its operator session after a connection failure. If it has expired or closed, start another test.</p><Button disabled={busy} onClick={() => void act(() => refresh(resumeRunId))}>Resume existing TEST run</Button><Button disabled={busy} className="ml-3" onClick={() => { setResumeRunId(null); window.history.replaceState(null, "", "/manual-test/admin"); }}>Use a new TEST run</Button></div>}
       {(!closed || closed.cleaned) && !resumeRunId && <form onSubmit={bootstrap} className="max-w-lg space-y-4"><p className="text-sm text-slate-600">Your current ADMIN session authorizes a new TEST run on the configured HTTPS test origin. The runtime must be explicitly enabled outside production. Runs expire after at most one hour; sessions after 15 minutes.</p><Button disabled={busy}>Start TEST as ADMIN</Button></form>}
     </Panel>}
@@ -148,7 +148,7 @@ export default function ManualTestAdminClient() {
             const result = await manualRequest("close", closedResult, { body: { runId: session.runId }, csrf: session.csrf });
             const current = { runId: result.runId, csrf: result.csrf, cleaned: false };
             setClosed(current); setSession(null); setRevenue(null); setLink(null);
-            // Closing revokes operator access; use only the returned cleanup capability.
+            // Closing revokes reservation sessions; the refreshed operator session survives for cleanup.
             await cleanup(current);
           })}>End TEST &amp; clean data</Button>
           {expired && <Button disabled={busy} onClick={() => { setSession(null); setRevenue(null); setLink(null); window.history.replaceState(null, "", "/manual-test/admin"); }}>Start another TEST</Button>}

@@ -17,10 +17,9 @@ async function guarded(operation: () => Promise<unknown>, closing = false) {
     const { cookie, ...body } = result as CookieResult & Record<string, unknown>;
     const response = Response.json(body, { headers: responseHeaders });
     if (cookie) response.headers.append("Set-Cookie", cookie);
-    if (closing) {
-      response.headers.append("Set-Cookie", manualCookie(MANUAL_COOKIES.operator, "", 0));
-      response.headers.append("Set-Cookie", manualCookie(MANUAL_COOKIES.reservation, "", 0));
-    }
+    // Close clears only the reservation cookie; the operator cookie is
+    // refreshed by close() itself and must survive to authorize cleanup.
+    if (closing) response.headers.append("Set-Cookie", manualCookie(MANUAL_COOKIES.reservation, "", 0));
     return response;
   } catch (error) {
     const status = error instanceof ManualTestError ? error.status : error instanceof ZodError ? 400 : 500;

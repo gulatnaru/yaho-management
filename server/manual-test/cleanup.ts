@@ -1,6 +1,6 @@
 import "server-only";
 import { emptyMockData, type MockRun } from "@/lib/db/manual-test-prisma";
-import { ManualTestAuth, MANUAL_COOKIES, MOCK_TTL, manualCookie, opaqueToken, readManualCookie, tokenHash } from "./auth";
+import type { ManualTestAuth } from "./auth";
 import { runBodySchema } from "./contracts";
 import { requireManual } from "./errors";
 
@@ -19,24 +19,20 @@ export class ManualTestCleanup {
 
   async close(request: Request, input: unknown) {
     const body = runBodySchema.parse(input);
-    return this.auth.withSession(request, body.runId, "OPERATOR", (run) => {
+    return this.auth.withSession(request, body.runId, "OPERATOR", (run, session) => {
       run.status = "CLOSED";
-      for (const session of Object.values(run.sessions)) session.revoked = true;
+      // Reservation sessions are revoked; the OPERATOR session survives so it
+      // can authorize cleanup via withClosedOperatorSession.
+      for (const s of Object.values(run.sessions)) if (s.scope !== "OPERATOR") s.revoked = true;
       for (const grant of Object.values(run.grants)) grant.consumed = true;
-      const token = opaqueToken();
-      const csrf = opaqueToken();
-      run.cleanup = { hash: tokenHash("cleanup", token), csrfHash: tokenHash("csrf", csrf), expiresAt: this.auth.now() + MOCK_TTL.session };
-      return { runId: run.id, status: run.status, csrf, cookie: manualCookie(MANUAL_COOKIES.cleanup, token, MOCK_TTL.session) };
+      const issued = this.auth.refreshSession(session);
+      return { runId: run.id, status: run.status, csrf: issued.csrf, cookie: issued.cookie };
     });
   }
 
   async cleanup(request: Request, input: unknown) {
     const body = runBodySchema.parse(input);
-    this.auth.assertOrigin(request);
-    const hash = tokenHash("cleanup", readManualCookie(request, MANUAL_COOKIES.cleanup));
-    return this.auth.transaction(body.runId, (run) => {
-      requireManual(run.cleanup && run.cleanup.hash === hash && run.cleanup.expiresAt > this.auth.now(), "UNAUTHORIZED", 401);
-      this.auth.verifyCsrf(request, run.cleanup.csrfHash);
+    return this.auth.withClosedOperatorSession(request, body.runId, (run) => {
       cleanClosedMockRun(run);
       return { runId: run.id, status: run.status };
     });
