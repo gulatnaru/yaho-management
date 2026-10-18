@@ -56,18 +56,34 @@
 --
 -- EXECUTION STATUS: reviewable file only; no database/activation authorization.
 -- Future execution requires explicit target/SQL/SHA/ACL approval and PG >= 15.
--- Use an approved provisioning identity, never the runtime role; this script aborts
--- atomically if manual_test or manual_test_role already exists (no IF NOT EXISTS).
--- Provisioner retains ownership; manual_test_role receives no ownership or memberships.
--- No passwords, LOGIN activation, DATABASE grants, default ACL changes, or REVOKE.
+-- Authentication / role flow:
+-- 1. Authenticate as an approved provisioner with permission to create roles/schema,
+--    grant/assume the migrator role, and reassign its objects to CURRENT_USER.
+--    CURRENT_USER must remain that provisioner outside the local SET ROLE below.
+-- 2. Create fresh manual_test_migrator (NOLOGIN) and manual_test_runtime (LOGIN).
+--    Abort atomically if manual_test or either new role exists; never reuse roles.
+--    Temporarily grant migrator membership/schema CREATE to the provisioner and
+--    SET LOCAL ROLE manual_test_migrator for enum/table/constraint/index/RLS DDL.
+-- 3. RESET ROLE, transfer all migrator-owned objects to the provisioner, revoke
+--    migrator schema privileges/membership, and retain NOLOGIN with PASSWORD NULL.
+--    The locked migrator owns nothing and cannot create/alter/drop these objects.
+-- 4. The server app connects as manual_test_runtime, using credentials provisioned
+--    externally through an approved secret flow. LOGIN with PASSWORD NULL does not
+--    supply working authentication; password auth fails until a password is set.
+--    Verify the target's authentication/pooler configuration before app activation.
+--    Runtime has schema USAGE, enum USAGE and table SELECT/INSERT/UPDATE/DELETE;
+--    it has no schema CREATE, object ownership, migrator membership or grant option.
+--    Browser Auth.js/manual-test cookies authorize app requests separately from
+--    this server-side database identity; never send DB credentials to the browser.
+-- No credentials, DATABASE grants, global PUBLIC changes or default ACL changes.
 --
--- DB diagnostic results (provided diagnostics; not rerun for this header update):
+-- Historical DB diagnostics (provided for the earlier single-role artifact; not rerun):
 -- * Project ref: azlfamqrmbfsvjnpozmr
 -- * PostgreSQL: 17.6
 -- * PUBLIC USAGE on public: yes
 -- * PUBLIC SELECT on public tables: 0
 -- * manual_test schema: not exists
--- * manual_test_role: not exists
+-- * legacy manual_test_role: not exists (neither new role was checked)
 --
 -- ACL design: DB-level isolation from public tables is achievable because public
 -- tables have no PUBLIC grants in the supplied diagnostic results. PUBLIC USAGE
@@ -75,23 +91,36 @@
 -- PostgreSQL PUBLIC privileges are additive, including outside this schema; NOINHERIT
 -- and search_path do NOT remove PUBLIC privileges or block schema-qualified access.
 -- Independently verify PUBLIC grants, SECURITY DEFINER paths, default ACLs, ownership,
--- role memberships, pooler behavior and all effective rights BEFORE future LOGIN.
+-- role memberships, pooler behavior and all effective rights BEFORE future runtime activation.
 -- Do not add manual_test to Supabase Data API exposed schemas, publications, or
 -- grant anon/authenticated/service_role access. Existing platform configuration and
 -- privileged/default ACL behavior are deliberately NOT changed by this artifact.
--- Private-schema RLS below permits only manual_test_role; it is defense in depth,
+-- Private-schema RLS below permits only manual_test_runtime; it is defense in depth,
 -- not a replacement for schema ACL checks (e.g. service_role can bypass RLS).
 -- References: https://www.postgresql.org/docs/current/ddl-priv.html
 -- https://www.postgresql.org/docs/current/sql-createtable.html
+-- https://www.postgresql.org/docs/17/sql-grant.html
+-- https://www.postgresql.org/docs/17/sql-reassign-owned.html
 -- https://supabase.com/docs/guides/api/using-custom-schemas
 
 BEGIN;
 SET LOCAL search_path = pg_catalog;
 
+-- The provisioner owns the schema throughout; object DDL runs as the migrator.
 CREATE SCHEMA "manual_test";
-CREATE ROLE "manual_test_role" WITH
-  NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-ALTER ROLE "manual_test_role" SET search_path = "manual_test";
+CREATE ROLE "manual_test_migrator" WITH
+  NOLOGIN PASSWORD NULL NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+CREATE ROLE "manual_test_runtime" WITH
+  LOGIN PASSWORD NULL NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE "manual_test_runtime" SET search_path = "manual_test";
+
+-- Only this newly created private schema is affected by these schema ACLs.
+REVOKE ALL PRIVILEGES ON SCHEMA "manual_test" FROM PUBLIC;
+REVOKE CREATE ON SCHEMA "manual_test" FROM "manual_test_runtime";
+GRANT USAGE ON SCHEMA "manual_test" TO "manual_test_runtime";
+GRANT "manual_test_migrator" TO CURRENT_USER;
+GRANT USAGE, CREATE ON SCHEMA "manual_test" TO "manual_test_migrator";
+SET LOCAL ROLE "manual_test_migrator";
 
 -- Independent enums, including their final current labels.
 
@@ -1003,147 +1032,155 @@ ALTER TABLE "manual_test"."DeviceChild" ADD CONSTRAINT "DeviceChild_runId_fkey"
 
 ALTER TABLE "manual_test"."ManualTestRun" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ManualTestRun"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ManualTestSession" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ManualTestSession"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ManualTestAccessGrant" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ManualTestAccessGrant"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ManualTestOperationReceipt" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ManualTestOperationReceipt"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."User" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."User"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."Teacher" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."Teacher"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."Program" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."Program"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ClassSchedule" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ClassSchedule"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ClassTeacher" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ClassTeacher"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."Child" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."Child"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ChildConsent" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ChildConsent"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplicationGroup" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplicationGroup"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplicationGroupClass" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplicationGroupClass"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplicationLink" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplicationLink"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplicationSubmission" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplicationSubmission"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplication" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplication"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ApplicationDeposit" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ApplicationDeposit"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplicationPaymentMapping" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplicationPaymentMapping"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReturnObligation" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReturnObligation"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ApplicationReturn" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ApplicationReturn"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."FundAllocation" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."FundAllocation"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ReservationApplicationSettings" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ReservationApplicationSettings"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."Reservation" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."Reservation"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."Payment" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."Payment"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."PaymentItem" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."PaymentItem"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."Refund" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."Refund"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."ApplicationDevice" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."ApplicationDevice"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."DeviceSubmission" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."DeviceSubmission"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 ALTER TABLE "manual_test"."DeviceChild" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "manual_test_runtime_access" ON "manual_test"."DeviceChild"
-  FOR ALL TO "manual_test_role" USING (true) WITH CHECK (true);
+  FOR ALL TO "manual_test_runtime" USING (true) WITH CHECK (true);
 
--- Only the new schema/types/tables: no CREATE, TRUNCATE, REFERENCES, TRIGGER,
--- grant option, role membership, public grants, or migration-history permissions.
-GRANT USAGE ON SCHEMA "manual_test" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."Gender" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ConsentType" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ConsentAction" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."GuardianRelationship" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ReservationApplicationStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ReturnObligationKind" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ProgramStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ClassStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ClassCancelReason" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ReservationStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ReservationCancelReason" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."AttendanceStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."PaymentStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."PaymentMethod" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."PayerType" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."RefundReason" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."RefundStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ManualTestRunStatus" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ManualTestSessionScope" TO "manual_test_role";
-GRANT USAGE ON TYPE "manual_test"."ManualTestGrantPurpose" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestRun" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestSession" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestAccessGrant" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestOperationReceipt" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."User" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Teacher" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Program" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ClassSchedule" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ClassTeacher" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Child" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ChildConsent" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationGroup" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationGroupClass" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationLink" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationSubmission" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplication" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ApplicationDeposit" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationPaymentMapping" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReturnObligation" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ApplicationReturn" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."FundAllocation" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationSettings" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Reservation" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Payment" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."PaymentItem" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Refund" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ApplicationDevice" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."DeviceSubmission" TO "manual_test_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."DeviceChild" TO "manual_test_role";
+-- Runtime grants on the new types/tables: no CREATE, TRUNCATE, REFERENCES,
+-- TRIGGER, grant option, role membership, or migration-history permissions.
+GRANT USAGE ON TYPE "manual_test"."Gender" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ConsentType" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ConsentAction" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."GuardianRelationship" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ReservationApplicationStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ReturnObligationKind" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ProgramStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ClassStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ClassCancelReason" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ReservationStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ReservationCancelReason" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."AttendanceStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."PaymentStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."PaymentMethod" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."PayerType" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."RefundReason" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."RefundStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ManualTestRunStatus" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ManualTestSessionScope" TO "manual_test_runtime";
+GRANT USAGE ON TYPE "manual_test"."ManualTestGrantPurpose" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestRun" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestSession" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestAccessGrant" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ManualTestOperationReceipt" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."User" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Teacher" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Program" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ClassSchedule" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ClassTeacher" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Child" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ChildConsent" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationGroup" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationGroupClass" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationLink" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationSubmission" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplication" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ApplicationDeposit" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationPaymentMapping" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReturnObligation" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ApplicationReturn" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."FundAllocation" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ReservationApplicationSettings" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Reservation" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Payment" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."PaymentItem" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."Refund" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."ApplicationDevice" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."DeviceSubmission" TO "manual_test_runtime";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "manual_test"."DeviceChild" TO "manual_test_runtime";
 -- No sequences exist (application-supplied TEXT IDs), so sequence grants are unnecessary.
 -- No ALTER DEFAULT PRIVILEGES: future objects require separate explicit grants/review.
 -- No _prisma_migrations table: this standalone review artifact is outside the default
 -- migration chain and has NOT been applied or registered as a Prisma migration.
+
+-- NOLOGIN alone cannot lock a role that still owns objects or can be assumed.
+-- This fresh role was created in this transaction, so all its owned objects belong
+-- to this bootstrap. Transfer ownership before removing its temporary DDL access.
+RESET ROLE;
+REASSIGN OWNED BY "manual_test_migrator" TO CURRENT_USER;
+REVOKE ALL PRIVILEGES ON SCHEMA "manual_test" FROM "manual_test_migrator";
+ALTER ROLE "manual_test_migrator" NOLOGIN PASSWORD NULL;
+REVOKE "manual_test_migrator" FROM CURRENT_USER;
 
 COMMIT;

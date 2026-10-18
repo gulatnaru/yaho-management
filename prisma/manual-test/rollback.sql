@@ -1,30 +1,90 @@
--- Safe rollback for manual_test schema
--- Removes ONLY objects created by migration.sql. No CASCADE on unrelated objects.
--- Run AFTER verifying no active sessions use manual_test_role.
+-- YAHO manual-test rollback SQL artifact. GENERATED OFFLINE; NOT APPLIED.
+-- Removes the 29 tables, 20 enum types, private schema and BOTH roles created by
+-- migration.sql. No public objects, global ACLs, or unrelated objects are changed.
+-- Future execution requires explicit target/SQL/SHA approval. Authenticate as the
+-- approved provisioner that owns the schema/objects and can drop both roles.
+-- Stop app traffic and close runtime connections BEFORE execution; keep new traffic
+-- disabled until COMMIT. The guard refuses active role sessions; it never terminates
+-- them. Privileged sessions that SET ROLE must also be closed by the operator.
+-- This is an atomic rollback of the complete bootstrap, not a partial-state repair:
+-- missing objects/roles or external dependencies abort the transaction for review.
+-- After rollback, verify the schema and both roles are absent and public is unchanged.
 
--- Step 1: Verify what will be removed (read-only, run first)
--- SELECT schemaname, tablename FROM pg_tables WHERE schemaname = 'manual_test' ORDER BY tablename;
--- SELECT rolname FROM pg_roles WHERE rolname = 'manual_test_role';
+BEGIN;
+SET LOCAL search_path = pg_catalog;
 
--- Step 2: Terminate active sessions (requires privileged role)
--- SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'manual_test_role';
+DO $manual_test_rollback$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_stat_activity
+    WHERE usename IN ('manual_test_migrator', 'manual_test_runtime')
+  ) THEN
+    RAISE EXCEPTION 'Close all manual-test role sessions before rollback';
+  END IF;
+END;
+$manual_test_rollback$;
 
--- Step 3: Drop objects in dependency order (reverse of creation)
--- NOTE: Replace <table_list> with actual tables from migration.sql, in reverse FK dependency order.
--- Example pattern (DO NOT run without verifying against migration.sql):
+-- One statement resolves all internal FK dependencies, including cycles. RESTRICT
+-- refuses dependencies from outside this explicit set rather than removing them.
+DROP TABLE
+  "manual_test"."DeviceChild",
+  "manual_test"."DeviceSubmission",
+  "manual_test"."ApplicationDevice",
+  "manual_test"."Refund",
+  "manual_test"."PaymentItem",
+  "manual_test"."Payment",
+  "manual_test"."Reservation",
+  "manual_test"."ReservationApplicationSettings",
+  "manual_test"."FundAllocation",
+  "manual_test"."ApplicationReturn",
+  "manual_test"."ReturnObligation",
+  "manual_test"."ReservationApplicationPaymentMapping",
+  "manual_test"."ApplicationDeposit",
+  "manual_test"."ReservationApplication",
+  "manual_test"."ReservationApplicationSubmission",
+  "manual_test"."ReservationApplicationLink",
+  "manual_test"."ReservationApplicationGroupClass",
+  "manual_test"."ReservationApplicationGroup",
+  "manual_test"."ChildConsent",
+  "manual_test"."Child",
+  "manual_test"."ClassTeacher",
+  "manual_test"."ClassSchedule",
+  "manual_test"."Program",
+  "manual_test"."Teacher",
+  "manual_test"."User",
+  "manual_test"."ManualTestOperationReceipt",
+  "manual_test"."ManualTestAccessGrant",
+  "manual_test"."ManualTestSession",
+  "manual_test"."ManualTestRun"
+  RESTRICT;
 
--- DROP TABLE IF EXISTS manual_test.refund CASCADE;
--- DROP TABLE IF EXISTS manual_test.payment CASCADE;
--- DROP TABLE IF EXISTS manual_test.reservation CASCADE;
--- ... (all 29 tables in reverse dependency order)
+DROP TYPE
+  "manual_test"."ManualTestGrantPurpose",
+  "manual_test"."ManualTestSessionScope",
+  "manual_test"."ManualTestRunStatus",
+  "manual_test"."RefundStatus",
+  "manual_test"."RefundReason",
+  "manual_test"."PayerType",
+  "manual_test"."PaymentMethod",
+  "manual_test"."PaymentStatus",
+  "manual_test"."AttendanceStatus",
+  "manual_test"."ReservationCancelReason",
+  "manual_test"."ReservationStatus",
+  "manual_test"."ClassCancelReason",
+  "manual_test"."ClassStatus",
+  "manual_test"."ProgramStatus",
+  "manual_test"."ReturnObligationKind",
+  "manual_test"."ReservationApplicationStatus",
+  "manual_test"."GuardianRelationship",
+  "manual_test"."ConsentAction",
+  "manual_test"."ConsentType",
+  "manual_test"."Gender"
+  RESTRICT;
 
--- Step 4: Drop schema (only if empty after table drops)
--- DROP SCHEMA IF EXISTS manual_test;
+DROP SCHEMA "manual_test" RESTRICT;
+-- Dropped tables remove RLS policies and object ACL references to the runtime role.
+-- DROP ROLE refuses any remaining ownership/ACL dependencies elsewhere; no DROP OWNED.
+DROP ROLE "manual_test_runtime";
+DROP ROLE "manual_test_migrator";
 
--- Step 5: Drop role (only after all objects removed)
--- DROP ROLE IF EXISTS manual_test_role;
-
--- Verification after rollback:
--- SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'manual_test'; -- should return 0 rows
--- SELECT rolname FROM pg_roles WHERE rolname = 'manual_test_role'; -- should return 0 rows
--- Verify public schema objects are untouched: compare pg_tables count before/after.
+COMMIT;
