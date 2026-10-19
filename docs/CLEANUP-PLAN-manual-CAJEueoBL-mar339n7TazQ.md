@@ -5,6 +5,50 @@
 - Exact runId: `manual-CAJEueoBL-mar339n7TazQ` (called `R` below).
 - Deliverable: this document only; no cleanup script, API call, migration, or runtime change.
 
+## Supplement (2026-10-20 00:46 KST) — Actual DB Facts
+
+User confirmed from yaho-preview actual DB:
+
+| Item | Value |
+|------|-------|
+| Program ID | `cmvf8y83f0000jq08kcidbqp0` |
+| Connected classes | 1 |
+| Target applications | 2 |
+| Connected ChildConsent records | 6 |
+
+### ChildConsent Preservation Impact
+
+Under current audit/consent preservation policy (ADR-008/054/055):
+
+- **6 ChildConsent rows are KEEP_AUDIT** — cannot be deleted
+- Each ChildConsent references:
+  - `childId → Child` (CASCADE — deleting Child would destroy consent)
+  - `reservationApplicationId → ReservationApplication` (RESTRICT — blocks application deletion)
+- **Consequence**: The 2 applications, their 2 Children, 2 Reservations, 1 ClassSchedule, and Program `cmvf8y83f0000jq08kcidbqp0` are all **blocked from deletion** by FK constraints
+- Payment/Refund records linked to these Reservations are also blocked
+
+### Non-deletable Scope (Definitive)
+
+| Record | Reason |
+|--------|--------|
+| 6 ChildConsent | Audit preservation policy |
+| 2 Child | Referenced by preserved consents (CASCADE would destroy) |
+| 2 ReservationApplication | Referenced by preserved consents (RESTRICT) |
+| 2 Reservation | Referenced by applications (RESTRICT) |
+| 1 ClassSchedule | Referenced by reservations/applications (RESTRICT) |
+| 1 Program (`cmvf8y83f0000jq08kcidbqp0`) | Referenced by class (RESTRICT) |
+| Payment/PaymentItem/Refund | Linked to blocked Reservations |
+
+**Result**: Complete physical deletion is **impossible** without violating audit policy.
+
+### Program Ownership Note
+
+Program `cmvf8y83f0000jq08kcidbqp0` has 1 connected class. However:
+- Program was created BEFORE runId assignment
+- Single class connection does not prove exclusive test ownership
+- Program has no `syntheticRunId` field
+- **Ownership remains UNPROVEN** — requires original creation evidence
+
 ## Goal
 
 Identify how a future, separately authorized cleanup could remove proven synthetic data for `R` in reverse foreign-key dependency order while preserving audit evidence, shared records, and all non-test data. Explain why a Program created before runId assignment needs independent ownership proof and why complete physical cleanup may be impossible under the audit-preservation rule.
@@ -244,6 +288,62 @@ Existing [`phase20-cleanup.test.ts`](../tests/unit/e2e/phase20-cleanup.test.ts),
 - Audit logs, consent history, non-test data, shared/unknown records, and their required parents are explicitly excluded.
 - The plan explains transaction rollback, unknown commit outcome, scoped post-commit restoration, and concurrency safeguards.
 - Only this Markdown document is added. No database changes, deletion scripts, execution claims, or new retention/financial policies are introduced.
+
+## Approach Comparison (2026-10-20)
+
+### Option A: Deactivation + Preservation (Recommended)
+
+**Concept**: Keep all records, disable test program/link from future use.
+
+| Action | Target | Expected Result |
+|--------|--------|-----------------|
+| Program status → INACTIVE | `cmvf8y83f0000jq08kcidbqp0` | Program hidden from new applications |
+| ClassSchedule status → CANCELLED | 1 connected class | Class not bookable |
+| Application links → disabled | Related `ReservationApplicationLink` | No new submissions via test links |
+| Group `syntheticRunId` → keep | Test group | Audit trail preserved |
+
+**Pros**:
+- Zero risk to audit/consent records
+- All FK constraints satisfied (no deletions)
+- Reversible (can reactivate if needed)
+- Complies with ADR-008/054/055
+
+**Cons**:
+- Test data remains in DB (storage cost negligible)
+- Program list shows inactive test entry (filterable)
+
+**Impact on existing data**: None. No rows deleted or modified except status fields on test-owned records.
+
+### Option B: Complete Physical Deletion (Blocked)
+
+**Concept**: Delete all test records in FK reverse order.
+
+| Step | Target | Status |
+|------|--------|--------|
+| 1-6 | Financial records, mappings | Blocked by consent FKs |
+| 7-10 | Applications, Reservations | **BLOCKED** — 6 ChildConsent RESTRICT |
+| 11-14 | Class, Child | **BLOCKED** — consent CASCADE/RESTRICT |
+| 15 | Program | **BLOCKED** — class RESTRICT |
+
+**Result**: Cannot proceed past Step 7 without deleting 6 ChildConsent records, which violates audit preservation policy.
+
+**To unblock**: Would require policy exception for consent deletion (ADR-057/058 narrow exception does not apply — this is not retention expiry).
+
+### Recommendation
+
+**Option A** is the only viable approach under current policy. The 6 ChildConsent records make complete deletion impossible without a policy change.
+
+## Decision Matrix for User
+
+| Question | Option A (Deactivate) | Option B (Delete) |
+|----------|----------------------|-------------------|
+| Audit compliance | ✅ Full | ❌ Violates |
+| Reversible | ✅ Yes | ❌ No |
+| Implementation risk | Low | High (blocked) |
+| Storage impact | Negligible | N/A (blocked) |
+| Policy change needed | No | Yes (ADR amendment) |
+
+**Suggested decision**: Approve Option A (deactivation). If complete deletion is required, first approve a policy exception for the 6 ChildConsent records.
 
 ## Risks
 
