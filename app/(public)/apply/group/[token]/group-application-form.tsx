@@ -65,10 +65,15 @@ export function GroupApplicationForm({ action, classes }: { action: (state: Grou
         <Select aria-label={`아이 ${index + 1} 성별`} disabled={reused} onChange={(event) => update(index,"childGender",event.target.value)} value={child.childGender}><option value="UNSPECIFIED">선택 안 함</option><option value="FEMALE">여아</option><option value="MALE">남아</option></Select>
         <div className="space-y-1"><Label htmlFor={`application-child-${index}-request-note`}>요청사항</Label><p className="text-xs text-slate-500" id={`application-child-${index}-request-note-guide`}>{APPLICATION_REQUEST_NOTE_GUIDE}</p><Textarea aria-describedby={`application-child-${index}-request-note-guide`} id={`application-child-${index}-request-note`} maxLength={APPLICATION_REQUEST_NOTE_MAX_LENGTH} onChange={(event) => update(index,"requestNote",event.target.value)} value={child.requestNote} /></div>
         <div className="space-y-2" data-testid="application-consents">
-          {APPLICATION_CONSENT_CONTENT.items.map((item) => <div className="rounded border p-3" key={item.key}>
+          {APPLICATION_CONSENT_CONTENT.items.map((item) => {
+            const error = !child[item.key] ? state.consentErrors?.[index]?.[item.key] : undefined;
+            const errorId = `application-child-${index}-${item.key}-error`;
+            return <div className="rounded border p-3" key={item.key}>
             <details><summary className="cursor-pointer font-medium">{item.required ? "[필수]" : "[선택]"} {item.title}</summary><div className="mt-2 space-y-1 text-xs text-slate-600">{item.body.map((line) => <p key={line}>{line}</p>)}</div></details>
-            <label className="mt-2 flex gap-2 text-sm"><input checked={child[item.key]} onChange={(event) => update(index,item.key,event.target.checked)} type="checkbox" />{item.checkLabel}</label>
-          </div>)}
+            <label className="mt-2 flex gap-2 text-sm"><input aria-describedby={error ? errorId : undefined} aria-invalid={error ? true : undefined} checked={child[item.key]} onChange={(event) => update(index,item.key,event.target.checked)} required={item.required} type="checkbox" />{item.checkLabel}</label>
+            {error ? <p className="text-sm text-red-600" id={errorId}>{error}</p> : null}
+          </div>;
+          })}
           <p className="text-xs text-slate-500">동의 문구 버전: {APPLICATION_CONSENT_CONTENT.version}. 아이마다 현재 동의를 새로 확인합니다.</p>
         </div>
         {children.length > 1 ? <Button onClick={() => setChildren((items) => items.filter((_, position) => position !== index))} type="button">이 아이 삭제</Button> : null}

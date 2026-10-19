@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/db/prisma";
 import { APPLICATION_CONSENT_CONTENT, isConsentContentReady } from "@/lib/reservation-applications/consent-content";
+import type { ApplicationConsentKey } from "@/lib/reservation-applications/consent-content";
 import { COMPLETION_COOKIE_NAME, COMPLETION_TTL_MS } from "@/lib/reservation-applications/completion";
 import { hashApplicationCapabilityToken, generateApplicationCapabilityToken } from "@/lib/reservation-applications/token";
 import { APPLICATION_DEVICE_TTL_MS } from "@/server/reservation-applications/devices";
@@ -13,7 +14,11 @@ import { getReservationApplicationSettings, isReservationApplicationSettingsRead
 import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun, PHASE20_PREVIEW_HEADER } from "@/lib/e2e/phase20-lease";
 import { resolvePreviewApplyAccess } from "@/lib/e2e/preview-manual-session";
 
-export type GroupSubmissionState = { submitted?: boolean; error?: string };
+export type GroupSubmissionState = {
+  submitted?: boolean;
+  error?: string;
+  consentErrors?: Partial<Record<number, Partial<Record<ApplicationConsentKey, string>>>>;
+};
 
 export async function submitApplicationGroup(token: string, _state: GroupSubmissionState, formData: FormData): Promise<GroupSubmissionState> {
   return submitApplicationGroupWithCompanion(token, undefined, _state, formData);
@@ -24,7 +29,20 @@ export async function submitApplicationGroupWithCompanion(token: string | undefi
   let payload: unknown;
   try { payload = JSON.parse(String(formData.get("payload") ?? "")); } catch { return { error: "입력 내용을 다시 확인해주세요." }; }
   const parsed = groupSubmissionSchema.safeParse(payload);
-  if (!parsed.success || formData.get("website") || !isConsentContentReady(process.env.VERCEL_ENV)) return { error: "입력 내용을 다시 확인해주세요." };
+  if (formData.get("website") || !isConsentContentReady(process.env.VERCEL_ENV)) return { error: "입력 내용을 다시 확인해주세요." };
+  if (!parsed.success) {
+    const consentErrors: NonNullable<GroupSubmissionState["consentErrors"]> = {};
+    for (const issue of parsed.error.issues) {
+      const [collection, index, key] = issue.path;
+      // Only the four fixed, required-consent messages may cross the action boundary.
+      if (issue.path.length !== 3 || collection !== "children" || typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= 10 || issue.code !== "invalid_literal") continue;
+      if (key !== "programTerms" && key !== "privacyConsent" && key !== "legalGuardianConfirmation" && key !== "refundTerms") continue;
+      consentErrors[index] = { ...consentErrors[index], [key]: issue.message };
+    }
+    return Object.keys(consentErrors).length
+      ? { error: "아이별 필수 확인·동의 항목을 확인해주세요.", consentErrors }
+      : { error: "입력 내용을 다시 확인해주세요." };
+  }
   const scoped = token
     ? await prisma.reservationApplicationLink.findFirst({ where: { tokenHash: hashApplicationCapabilityToken(token) }, select: { group: { select: { syntheticRunId: true, syntheticSettings: true } } } })
     : await prisma.companionInvite.findFirst({ where: { tokenHash: hashApplicationCapabilityToken(companionToken ?? "") }, select: { group: { select: { syntheticRunId: true, syntheticSettings: true } } } });
