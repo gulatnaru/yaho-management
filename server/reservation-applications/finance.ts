@@ -310,6 +310,7 @@ export async function confirmApplicationSubmissionCore(
       `;
     }
 
+    const devices = await tx.deviceSubmission.findMany({ where: { submissionId: input.submissionId }, select: { deviceId: true } });
     const reservationIds: string[] = [];
     for (const application of applications) {
       const choice = choices.find((candidate) => candidate.applicationId === application.id)!;
@@ -368,7 +369,6 @@ export async function confirmApplicationSubmissionCore(
         data: { status: "CONFIRMED", childId, reservationId: reservation.id, resolvedAt: input.now, resolvedById: input.actorUserId },
       });
       if (updated.count !== 1) throw new ApplicationNotPendingError();
-      const devices = await tx.deviceSubmission.findMany({ where: { submissionId: input.submissionId }, select: { deviceId: true } });
       if (devices.length > 0) {
         await tx.deviceChild.createMany({ data: devices.map((device) => ({ deviceId: device.deviceId, childId })), skipDuplicates: true });
       }
