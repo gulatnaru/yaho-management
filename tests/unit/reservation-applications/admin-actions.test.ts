@@ -7,6 +7,7 @@ import {
   ApplicationNotPendingError,
 } from "@/lib/reservation-applications/errors";
 import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
+import { ApplicationSubmissionOverbookingConfirmationError } from "@/server/reservation-applications/finance";
 import {
   ChildNotActiveError,
   ChildNotFoundError,
@@ -69,8 +70,8 @@ vi.mock("@/server/reservation-applications/settings", () => ({
   isReservationApplicationSettingsReady: vi.fn(),
   saveReservationApplicationSettingsCore: (...args: unknown[]) => saveSettingsCoreMock(...args),
 }));
-vi.mock("@/server/reservation-applications/finance", () => ({
-  ApplicationSubmissionOverbookingConfirmationError: class extends Error {},
+vi.mock("@/server/reservation-applications/finance", async (importOriginal) => ({
+  ApplicationSubmissionOverbookingConfirmationError: (await importOriginal<typeof import("@/server/reservation-applications/finance")>()).ApplicationSubmissionOverbookingConfirmationError,
   closeApplicationWithReturnCore: vi.fn(),
   confirmApplicationSubmissionCore: (...args: unknown[]) => confirmSubmissionCoreMock(...args),
   recordApplicationDepositCore: (...args: unknown[]) => recordDepositCoreMock(...args),
@@ -167,6 +168,99 @@ describe("reservation application admin actions", () => {
         choices: [expect.objectContaining({ confirmOverbooking: true, overbookingConfirmation: payload.choices[0]!.overbookingConfirmation })],
         actorUserId: "admin-1",
       }));
+    });
+
+    describe("submission confirmation failures", () => {
+      function submissionForm() {
+        return formData({ payload: JSON.stringify({
+          submissionId: "submission-1",
+          choices: [{ applicationId: "application-1", newChild: true, memo: "private form input" }],
+        }) });
+      }
+
+      it.each([
+        ["P2028", "예약 확정 처리 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."],
+        ["P2024", "데이터베이스 연결 대기 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."],
+        ["P1001", "데이터베이스 연결에 실패했습니다. 잠시 후 다시 시도해주세요."],
+      ])("classifies Prisma %s before the generic submission error and logs only its code", async (code, error) => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        confirmSubmissionCoreMock.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError("private database details", {
+          code, clientVersion: "6.19.3", meta: { privateDetails: "private input values" },
+        }));
+
+        await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({ error });
+
+        expect(consoleError.mock.calls).toEqual([
+          ["[reservation-applications] failed to confirm submission:", `prisma:${code}`],
+        ]);
+        expect(revalidatePath).not.toHaveBeenCalled();
+        expect(redirect).not.toHaveBeenCalled();
+      });
+
+      it("classifies and safely logs a Prisma initialization errorCode", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        confirmSubmissionCoreMock.mockRejectedValueOnce(new Prisma.PrismaClientInitializationError(
+          "private connection details", "6.19.3", "P1001",
+        ));
+
+        await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({
+          error: "데이터베이스 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        });
+
+        expect(consoleError.mock.calls).toEqual([
+          ["[reservation-applications] failed to confirm submission:", "prisma:P1001"],
+        ]);
+        expect(revalidatePath).not.toHaveBeenCalled();
+        expect(redirect).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["an unclassified Prisma request error", new Prisma.PrismaClientKnownRequestError("private database details", {
+          code: "P2002", clientVersion: "6.19.3", meta: { privateDetails: "private input values" },
+        }), "prisma:P2002"],
+        ["an unclassified initialization error", new Prisma.PrismaClientInitializationError(
+          "private connection details", "6.19.3", "P1000",
+        ), "prisma:P1000"],
+        ["an initialization error without a code", new Prisma.PrismaClientInitializationError(
+          "private connection details", "6.19.3",
+        ), "PrismaClientInitializationError"],
+        ["an unexpected Error", new Error("private input values"), "Error"],
+        ["a plain object with a matching code", { code: "P1001", message: "private input values" }, "unknown"],
+        ["a string", "private input values", "unknown"],
+        ["null", null, "unknown"],
+        ["undefined", undefined, "unknown"],
+      ])("retains the generic response and safe diagnostics for %s", async (_label, error, logDescription) => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        confirmSubmissionCoreMock.mockRejectedValueOnce(error);
+
+        await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({
+          error: "가용 입금액, 아이 정보, 클래스 상태와 정원을 다시 확인해주세요.",
+        });
+
+        expect(consoleError.mock.calls).toEqual([
+          ["[reservation-applications] failed to confirm submission:", logDescription],
+        ]);
+        expect(revalidatePath).not.toHaveBeenCalled();
+        expect(redirect).not.toHaveBeenCalled();
+      });
+
+      it("preserves the bound overbooking confirmation without logging or revalidating", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const selectionFingerprint = '[["application-1","NEW"]]';
+        confirmSubmissionCoreMock.mockRejectedValueOnce(new ApplicationSubmissionOverbookingConfirmationError(
+          "application-1", "class-1", "NEW", selectionFingerprint, 8, 8,
+        ));
+
+        await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({
+          overbookingConfirmation: {
+            applicationId: "application-1", classScheduleId: "class-1", childChoice: "NEW",
+            selectionFingerprint, capacity: 8, reservedCount: 8, overByAfterCreate: 1,
+          },
+        });
+        expect(consoleError).not.toHaveBeenCalled();
+        expect(revalidatePath).not.toHaveBeenCalled();
+        expect(redirect).not.toHaveBeenCalled();
+      });
     });
 
     it("confirms a new child and redirects to the reservation", async () => {
@@ -296,7 +390,7 @@ describe("reservation application admin actions", () => {
 
       expect(consoleError).toHaveBeenCalledTimes(1);
       expect(consoleError).toHaveBeenCalledWith(
-        "[reservation-applications] failed to confirm application:", "PrismaClientInitializationError",
+        "[reservation-applications] failed to confirm application:", "prisma:P1001",
       );
       expect(revalidatePath).not.toHaveBeenCalled();
       expect(redirect).not.toHaveBeenCalled();
@@ -308,7 +402,7 @@ describe("reservation application admin actions", () => {
       }), "prisma:P2002"],
       ["another Prisma initialization error", new Prisma.PrismaClientInitializationError(
         "private connection details", "6.19.3", "P1000",
-      ), "PrismaClientInitializationError"],
+      ), "prisma:P1000"],
       ["an unexpected Error", new Error("private input values"), "Error"],
       ["a non-Error object", { code: "P1001", message: "private input values" }, "unknown"],
       ["a string", "private input values", "unknown"],

@@ -1,7 +1,6 @@
 "use server";
 
 import { randomBytes } from "node:crypto";
-import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -16,6 +15,7 @@ import {
   ApplicationLinkNotFoundError,
   ApplicationNotFoundError,
   ApplicationNotPendingError,
+  classifyInfrastructureError,
   describeErrorForLog,
 } from "@/lib/reservation-applications/errors";
 import {
@@ -226,7 +226,7 @@ export async function confirmApplicationSubmission(formData: FormData): Promise<
       };
     }
     console.error("[reservation-applications] failed to confirm submission:", describeErrorForLog(error));
-    return { error: "가용 입금액, 아이 정보, 클래스 상태와 정원을 다시 확인해주세요." };
+    return { error: classifyInfrastructureError(error) ?? "가용 입금액, 아이 정보, 클래스 상태와 정원을 다시 확인해주세요." };
   }
 }
 
@@ -328,25 +328,6 @@ function describeConfirmFailure(error: unknown): string | null {
     return "이 아이의 해당 클래스 예약은 이미 참여완료·노쇼로 끝나 다시 예약할 수 없습니다.";
   }
   return null;
-}
-
-function classifyInfrastructureError(error: unknown): string | null {
-  const code = error instanceof Prisma.PrismaClientKnownRequestError
-    ? error.code
-    : error instanceof Prisma.PrismaClientInitializationError
-      ? error.errorCode
-      : undefined;
-
-  switch (code) {
-    case "P2028":
-      return "예약 확정 처리 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.";
-    case "P2024":
-      return "데이터베이스 연결 대기 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.";
-    case "P1001":
-      return "데이터베이스 연결에 실패했습니다. 잠시 후 다시 시도해주세요.";
-    default:
-      return null;
-  }
 }
 
 /**
