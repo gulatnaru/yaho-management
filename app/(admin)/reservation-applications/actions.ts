@@ -1,5 +1,7 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
@@ -51,6 +53,27 @@ import {
  */
 
 export type ApplicationActionResult = { error?: string };
+
+/** Preview-only group marking remains ADMIN-only under ADR-053, matching the hosting page. */
+export async function markGroupManualTestSession(groupId: string): Promise<{ error?: string; runId?: string }> {
+  await requireAdminPrincipal();
+  if (process.env.VERCEL_ENV !== "preview") return { error: "Preview 환경에서만 사용할 수 있습니다." };
+  const parsed = z.string().trim().min(1).safeParse(groupId);
+  if (!parsed.success) return { error: "잘못된 요청입니다." };
+  const group = await prisma.reservationApplicationGroup.findUnique({ where: { id: parsed.data }, select: { id: true, syntheticRunId: true, isActive: true } });
+  if (!group) return { error: "그룹을 찾을 수 없습니다." };
+  if (group.syntheticRunId) return { error: "이미 테스트 세션으로 지정된 그룹입니다." };
+  const settings = await getReservationApplicationSettings(prisma);
+  const checked = reservationApplicationSettingsSchema.safeParse(settings);
+  if (!checked.success || !isReservationApplicationSettingsReady(settings)) return { error: "예약 신청 설정을 먼저 완료해주세요." };
+  const runId = `manual-${randomBytes(17).toString("base64url").slice(0, 22)}`;
+  const updated = await prisma.reservationApplicationGroup.updateMany({
+    where: { id: group.id, syntheticRunId: null },
+    data: { syntheticRunId: runId, syntheticSettings: checked.data },
+  });
+  if (updated.count !== 1) return { error: "이미 테스트 세션으로 지정된 그룹입니다." };
+  return { runId };
+}
 
 /** Phase 20 group creation is ADMIN-only and uses the schedule's explicit applicationPrice. */
 export async function createApplicationGroup(formData: FormData): Promise<{ error?: string; groupId?: string }> {

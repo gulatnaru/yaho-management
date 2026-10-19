@@ -6,12 +6,13 @@ import { prisma } from "@/lib/db/prisma";
 import { hashApplicationCapabilityToken } from "@/lib/reservation-applications/token";
 import { issueCompanionInviteCore, revokeCompanionInviteCore } from "@/server/reservation-applications/groups";
 import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun, PHASE20_PREVIEW_HEADER } from "@/lib/e2e/phase20-lease";
+import { resolvePreviewApplyAccess } from "@/lib/e2e/preview-manual-session";
 
 /** This only records the first guardian notification timestamp; it never changes finance or reservations. */
 export async function notifyApplicationDeposit(): Promise<{ notified: boolean }> {
   const jar = await cookies();
   const submission = await currentCompletionSubmission(new Date());
-  if (!submission || !await completionPreviewAllowed(submission.group?.syntheticRunId ?? null)) return { notified: false };
+  if (!submission || !await completionPreviewAllowed(submission.group?.syntheticRunId ?? null, { allowOperatorSession: true })) return { notified: false };
   return { notified: await markApplicationDepositNotified(jar.get(COMPLETION_COOKIE_NAME)?.value) };
 }
 
@@ -25,10 +26,12 @@ async function currentCompletionSubmission(now: Date) {
   });
 }
 
-async function completionPreviewAllowed(syntheticRunId: string | null): Promise<boolean> {
+async function completionPreviewAllowed(syntheticRunId: string | null, options?: { allowOperatorSession?: boolean }): Promise<boolean> {
   if (process.env.VERCEL_ENV === "production" && syntheticRunId) return false;
   if (process.env.VERCEL_ENV !== "preview") return true;
-  return hasActivePhase20PreviewLease(prisma, { signed: parseAndVerifySignedPreviewRun((await headers()).get(PHASE20_PREVIEW_HEADER), process.env), syntheticRunId, now: new Date() });
+  const leaseAllowed = await hasActivePhase20PreviewLease(prisma, { signed: parseAndVerifySignedPreviewRun((await headers()).get(PHASE20_PREVIEW_HEADER), process.env), syntheticRunId, now: new Date() });
+  const access = await resolvePreviewApplyAccess(leaseAllowed, syntheticRunId);
+  return access.allowed && (access.operatorSession ? options?.allowOperatorSession === true : true);
 }
 
 /** Completion capability can issue an opaque companion URL, without exposing another family's data. */

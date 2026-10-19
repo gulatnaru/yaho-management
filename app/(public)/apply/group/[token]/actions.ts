@@ -11,6 +11,7 @@ import { groupSubmissionSchema, reservationApplicationSettingsSchema } from "@/l
 import { submitApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { getReservationApplicationSettings, isReservationApplicationSettingsReady } from "@/server/reservation-applications/settings";
 import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun, PHASE20_PREVIEW_HEADER } from "@/lib/e2e/phase20-lease";
+import { resolvePreviewApplyAccess } from "@/lib/e2e/preview-manual-session";
 
 export type GroupSubmissionState = { submitted?: boolean; error?: string };
 
@@ -31,7 +32,12 @@ export async function submitApplicationGroupWithCompanion(token: string | undefi
   if (process.env.VERCEL_ENV === "preview") {
     const requestHeaders = await headers();
     const signed = parseAndVerifySignedPreviewRun(requestHeaders.get(PHASE20_PREVIEW_HEADER), process.env);
-    if (!await hasActivePhase20PreviewLease(prisma, { signed, syntheticRunId: scoped?.group?.syntheticRunId ?? null, now: new Date() })) return { error: "현재 신청을 받을 수 없습니다." };
+    const leaseAllowed = await hasActivePhase20PreviewLease(prisma, { signed, syntheticRunId: scoped?.group?.syntheticRunId ?? null, now: new Date() });
+    const access = await resolvePreviewApplyAccess(leaseAllowed, scoped?.group?.syntheticRunId ?? null);
+    // Any falsy token selects the lease-only companion path: undefined from the companion
+    // page, or "" through a direct server-action call. Only a non-empty group-link token
+    // may use the operator-session allowance.
+    if (!access.allowed || (access.operatorSession && !token)) return { error: "현재 신청을 받을 수 없습니다." };
   }
   const settings = await getReservationApplicationSettings(prisma);
   const previewSettings = process.env.VERCEL_ENV === "preview"
