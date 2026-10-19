@@ -4,7 +4,8 @@ import { authenticateSkill, parseSkill } from "./transport";
 import { hashes, hmacPins, validateKeys, encrypt, type Keys } from "./crypto";
 import { claim, markDispatched, settle } from "./ledger";
 import { transaction, type Database } from "./repository";
-import { groundedReply, type Tools } from "./tools";
+import { type Tools } from "./tools";
+import { executeSelection, selectionCatalog } from "./selection-policy";
 import { type LlmProvider } from "./provider";
 export type Dependencies = {
     db: Database;
@@ -68,31 +69,22 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         // A bounded approved catalog lets the single model call refer to server-issued public handles.
         const programs = await stage(signal => deps.tools.execute({ name: "list_public_programs", args: {} }, signal), 200);
         const classes = await stage(signal => deps.tools.execute({ name: "list_public_classes", args: { programHandle: null } }, signal), 200);
+        const catalog = selectionCatalog([programs, classes]);
         await stage(() => markDispatched(deps.db, deps.environment, row.id, row.attempt, clock()), 200);
         dispatched = true;
-        const result = await stage(signal => provider.classify({ utterance, signal, catalog: [programs, classes] }), 1500);
+        const result = await stage(signal => provider.classify({ utterance, signal, catalog: structuredClone(catalog) }), 1500);
         knownUsage = result.usage;
-        let text = HANDOFF, category = "HUMAN_HANDOFF";
-        if (result.call && !controller.signal.aborted) {
-            try {
-                // Final facts/publication are freshly read after model completion; no cached private result.
-                const facts = await stage(signal => deps.tools.execute(result.call!, signal), 200);
-                text = groundedReply(facts);
-                category = text === HANDOFF ? "HUMAN_HANDOFF" : facts.kind;
-            }
-            catch {
-                text = HANDOFF;
-                category = "HUMAN_HANDOFF";
-            }
-        }
+        const selected = structuredClone(result.call);
+        const response = await stage(signal => executeSelection(utterance, selected, catalog, deps.tools, signal), 200);
+        const { text, category } = response;
         const encrypted = encrypt(deps.keys, binding, { utterance, reply: text });
         const recorded = await settle(deps.db, deps.environment, row.id, row.attempt, { kind: "KNOWN",
             inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, billingUsage: result.usage, category, ...encrypted }, clock());
         if (!recorded || controller.signal.aborted || Date.now() - started >= 3500)
             return skillReply();
-        if (result.call && text !== HANDOFF) {
-            const finalFacts = await stage(signal => deps.tools.execute(result.call!, signal), 200);
-            if (groundedReply(finalFacts) !== text)
+        if (selected && text !== HANDOFF) {
+            const final = await stage(signal => executeSelection(utterance, selected, catalog, deps.tools, signal), 200);
+            if (final.text !== text)
                 return skillReply();
         }
         return skillReply(text);

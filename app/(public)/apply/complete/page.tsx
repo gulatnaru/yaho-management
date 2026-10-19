@@ -65,7 +65,7 @@ export default async function ReservationApplicationCompletePage() {
       </Card>
 
       {showCompletionGuide && completion && config ? (
-        <CompletionGuide accountHolder={config.bankAccountHolder} accountNumber={config.bankAccountNumber} applications={completion.applications} bankName={config.bankName} payerName={completion.declaredPayerName} />
+        <CompletionGuide accountHolder={config.bankAccountHolder} accountNumber={config.bankAccountNumber} applications={completion.applications} bankName={config.bankName} initiallyNotified={!!completion.depositNotifiedAt} payerName={completion.declaredPayerName} />
       ) : config ? (
         <>
           <Card>

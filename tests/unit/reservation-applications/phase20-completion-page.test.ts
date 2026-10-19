@@ -55,6 +55,7 @@ function completion(overrides: Partial<ApplicationCompletionView> = {}): Applica
   return {
     submissionId: "submission-1",
     declaredPayerName: "입금자",
+    depositNotifiedAt: null,
     syntheticRunId: null,
     syntheticSettings: { ...dbSettings, bankName: "합성은행" },
     applications: [{ id: "application-1", childName: "아이", quotedAmount: 10_000 }],

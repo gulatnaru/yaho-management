@@ -19,6 +19,18 @@ export default async function AiServicePage() {
   <h1 className="text-2xl font-bold">AI 상담 실연동 관리</h1>
   <p>환경: {context.environment} · 월 청구 목표 10,000원 · 환경 호출 한도 {context.environment === "PREVIEW" ? "1,000" : "7,000"}원</p>
   <p>예상 청구액은 실제 청구와 다를 수 있습니다. 운영 활성화는 별도 승인 사항입니다.</p>
+  <section aria-labelledby="request-summary-heading" className="rounded border p-4">
+   <h2 id="request-summary-heading" className="font-bold">요청·호출 요약</h2>
+   <p>집계 기준 시각 (UTC): <time dateTime={state.summary.asOf.toISOString()}>{state.summary.asOf.toISOString()}</time></p>
+   <p>현재 환경의 보관기간(90일) 내 전체 요청 기준 · 만료·삭제된 요청 제외</p>
+   <p>호출 시도는 외부 호출 발송이 기록된 요청 수입니다.</p>
+   <dl className="mt-3 grid grid-cols-2 gap-4 md:grid-cols-4">
+    <div><dt>총 요청</dt><dd className="text-2xl font-bold">{state.summary.totalRequests}건</dd></div>
+    <div><dt>호출 시도</dt><dd className="text-2xl font-bold">{state.summary.dispatchAttempts}건</dd></div>
+    <div><dt>실패 (FAILED)</dt><dd className="text-2xl font-bold">{state.summary.failedRequests}건</dd></div>
+    <div><dt>미확정 (UNKNOWN)</dt><dd className="text-2xl font-bold">{state.summary.unknownRequests}건</dd></div>
+   </dl>
+  </section>
   <section className="rounded border p-4"><h2 className="font-bold">Provider·가격·환율</h2><p>모델·단가는 최초 평가 후보입니다. 실제 계정 가격·사용량 과금 계약 확인 전 운영 호출은 허용되지 않습니다.</p>
    <form action={saveConfigAction} className="mt-3 grid gap-3 md:grid-cols-2">
     <input type="hidden" name="expectedVersion" value={config?.version ?? 0}/>
@@ -71,6 +83,10 @@ export default async function AiServicePage() {
   </section>
   <section className="rounded border p-4"><h2 className="font-bold">90일 삭제 상태</h2>
    <p>하루 1회 실행 기본안 · 만료 원문 즉시 조회 차단 · 만료 backlog {state.expiredCount}건</p>
+   <p>스케줄러: 비활성 · 재시도 횟수 {state.monitoring.retentionAttempts}/3</p>
+   <p>최근 삭제 성공 (UTC): {state.monitoring.lastRetentionSuccessAt?.toISOString() ?? "미실행"}</p>
+   <p>다음 재시도 가능 시각 (UTC): {state.monitoring.nextRetentionRetryAt?.toISOString() ?? "없음"}</p>
+   <p>삭제 오류: {state.monitoring.retentionErrorCode ?? "없음"}</p>
    <p>작업: {state.retention?.status ?? "미실행"} · 누적 삭제 {state.retention?.deletedCount ?? 0}건</p>
    <form action={retryRetentionAction}><Button className={button}>삭제 작업 재시도</Button></form>
   </section>

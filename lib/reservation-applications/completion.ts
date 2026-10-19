@@ -7,6 +7,7 @@ export const COMPLETION_TTL_MS = 30 * 60 * 1000;
 export type ApplicationCompletionView = {
   submissionId: string;
   declaredPayerName: string | null;
+  depositNotifiedAt: Date | null;
   syntheticRunId: string | null;
   syntheticSettings: unknown;
   applications: Array<{ id: string; childName: string | null; quotedAmount: number }>;
@@ -17,12 +18,13 @@ export async function loadApplicationCompletionView(token: string | undefined, n
   if (!token) return null;
   const submission = await prisma.reservationApplicationSubmission.findFirst({
     where: { completionTokenHash: hashApplicationCapabilityToken(token), completionExpiresAt: { gt: now }, personalDataPurgedAt: null },
-    select: { id: true, declaredPayerName: true, group: { select: { syntheticRunId: true, syntheticSettings: true } }, applications: { select: { id: true, childName: true, quotedAmount: true, status: true } } },
+    select: { id: true, declaredPayerName: true, depositNotifiedAt: true, group: { select: { syntheticRunId: true, syntheticSettings: true } }, applications: { select: { id: true, childName: true, quotedAmount: true, status: true } } },
   });
   if (!submission) return null;
   return {
     submissionId: submission.id,
     declaredPayerName: submission.declaredPayerName,
+    depositNotifiedAt: submission.depositNotifiedAt,
     syntheticRunId: submission.group?.syntheticRunId ?? null,
     syntheticSettings: submission.group?.syntheticSettings ?? null,
     applications: submission.applications.filter((application) => application.status === "SUBMITTED" && application.quotedAmount !== null).map((application) => ({ id: application.id, childName: application.childName, quotedAmount: application.quotedAmount! })),
