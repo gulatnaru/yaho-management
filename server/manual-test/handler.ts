@@ -34,10 +34,18 @@ async function guarded(operation: () => Promise<unknown>, closing = false) {
     const manualTable = typeof error === "object" && error !== null
       ? (error as { manualTable?: unknown }).manualTable
       : undefined;
+    const manualCode = typeof error === "object" && error !== null
+      ? (error as { manualCode?: unknown }).manualCode
+      : undefined;
     if (status === 500 && typeof manualStage === "string" && /^[a-z_]+$/.test(manualStage)) {
       const body: Record<string, unknown> = { error: code, stage: manualStage };
       if (typeof manualTable === "string" && /^[A-Za-z0-9]+$/.test(manualTable)) {
         body.table = manualTable;
+      }
+      // Prisma error codes are validated fixed tokens (/^[A-Z0-9]{2,10}$/) —
+      // safe to expose for diagnosis; anything else keeps the opaque 500 body.
+      if (typeof manualCode === "string" && /^[A-Z0-9]{2,10}$/.test(manualCode)) {
+        body.code = manualCode;
       }
       return Response.json(body, { status, headers: responseHeaders });
     }

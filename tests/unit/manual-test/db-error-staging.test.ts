@@ -45,6 +45,7 @@ describe("logManualDbError", () => {
     expect(parsed).not.toHaveProperty("prismaCode");
     expect((caught as Error).message).toBe("MANUAL_DB_STAGE_TX_COMMIT");
     expect((caught as { manualStage?: ManualDbStage }).manualStage).toBe("tx_commit");
+    expect(caught as Error).not.toHaveProperty("manualCode");
   });
 
   it("wraps non-Error thrown values without logging them", () => {
@@ -71,6 +72,7 @@ describe("logManualDbError", () => {
     expect((caught as Error).message).toBe("MANUAL_DB_STAGE_PERSIST_RUN");
     expect((caught as { manualStage?: ManualDbStage }).manualStage).toBe("persist_run");
     expect((caught as { manualTable?: string }).manualTable).toBe("Payment");
+    expect((caught as { manualCode?: string }).manualCode).toBe("P2031");
     expect(raw).not.toContain("upsert failed");
   });
 
@@ -235,6 +237,7 @@ describe("DatabaseManualTestPrisma stage tagging", () => {
     expect((caught as Error).message).toBe("MANUAL_DB_STAGE_PERSIST_RUN");
     expect((caught as { manualStage?: ManualDbStage }).manualStage).toBe("persist_run");
     expect((caught as { manualTable?: string }).manualTable).toBe("User");
+    expect((caught as { manualCode?: string }).manualCode).toBe("P2031");
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const { raw, parsed } = lastLogged(errorSpy);
     expect(parsed).toEqual({

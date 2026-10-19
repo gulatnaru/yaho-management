@@ -215,4 +215,31 @@ describe("actual manual-test Route Handlers (DB-free)", () => {
     const untypedBody = await call(csrfGET, "csrf");
     expect(await untypedBody.json()).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run" });
   });
+
+  it("includes a validated Prisma code in 500 responses when staged, omits invalid codes", async () => {
+    const staged = new Error("must-never-appear-secret") as Error & { manualStage?: string; manualCode?: string };
+    staged.manualStage = "persist_run";
+    staged.manualCode = "P2031";
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw staged; });
+    const withCode = await call(csrfGET, "csrf");
+    expect(withCode.status).toBe(500);
+    const withCodeBody = await withCode.json();
+    expect(withCodeBody).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run", code: "P2031" });
+    expect(JSON.stringify(withCodeBody)).not.toContain("must-never-appear-secret");
+
+    const evil = new Error("must-never-appear-secret") as Error & { manualStage?: string; manualCode?: string };
+    evil.manualStage = "persist_run";
+    evil.manualCode = "P2031; DROP TABLE";
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw evil; });
+    const withoutCode = await call(csrfGET, "csrf");
+    expect(withoutCode.status).toBe(500);
+    expect(await withoutCode.json()).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run" });
+
+    const untyped = new Error("boom") as Error & { manualStage?: string; manualCode?: unknown };
+    untyped.manualStage = "persist_run";
+    untyped.manualCode = 2031;
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw untyped; });
+    const untypedBody = await call(csrfGET, "csrf");
+    expect(await untypedBody.json()).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run" });
+  });
 });

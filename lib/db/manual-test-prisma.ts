@@ -151,6 +151,9 @@ export function logManualDbError(stage: ManualDbStage, error: unknown, opts?: { 
   const staged = new Error(`MANUAL_DB_STAGE_${stage.toUpperCase()}`);
   (staged as { manualStage?: ManualDbStage }).manualStage = stage;
   if (table) (staged as { manualTable?: ManualTestTable }).manualTable = table;
+  // Prisma error codes are validated uppercase-alphanumeric tokens — safe to
+  // tag onto the staged error for 500-response diagnosis.
+  if (prismaCode) (staged as { manualCode?: string }).manualCode = prismaCode;
   throw staged;
 }
 
