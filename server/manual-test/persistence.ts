@@ -92,7 +92,25 @@ export async function hydrateManualRun(client: ManualSqlClient, root: Row): Prom
     const status = z.enum(["SUBMITTED", "CONFIRMED", "CANCELLED"]).parse(row.status);
     run.data.applications[id] = { id, classId: text(row, "classScheduleId"), childId: fixtureName(runId, row.requestedChildId), quotedAmount: number(row, "quotedAmount"), status: status === "SUBMITTED" ? "PENDING" : status, ...(row.reservationId ? { reservationId: text(row, "reservationId") } : {}), ...(status === "CANCELLED" ? { cancelledAt: time(row.resolvedAt), cancellationReason: "SYNTHETIC_OPERATOR_CANCELLATION" as const } : {}) };
   }
-  for (const row of rows.ApplicationDeposit) run.data.deposits.push({ id: text(row, "id"), applicationId: text(row, "submissionId"), amount: number(row, "amount") });
+  // ApplicationDeposit is per-submission in the real schema, while the mock
+  // attributes each deposit to a single application. Recover the application
+  // through the submission's applications (mirrors the session hydration
+  // below). This is exact when the submission carries one application; a
+  // multi-application submission cannot be attributed, so the deposit keeps
+  // the submission id and fails closed in deposited() instead of crediting
+  // the wrong application.
+  const depositApplications = new Map<string, string[]>();
+  for (const row of rows.ReservationApplication) {
+    if (typeof row.submissionId !== "string") continue;
+    const list = depositApplications.get(row.submissionId);
+    if (list) list.push(text(row, "id"));
+    else depositApplications.set(row.submissionId, [text(row, "id")]);
+  }
+  for (const row of rows.ApplicationDeposit) {
+    const submissionId = text(row, "submissionId");
+    const applicationIds = depositApplications.get(submissionId);
+    run.data.deposits.push({ id: text(row, "id"), applicationId: applicationIds?.length === 1 ? applicationIds[0] : submissionId, amount: number(row, "amount") });
+  }
   for (const row of rows.Reservation) {
     const id = text(row, "id");
     const application = rows.ReservationApplication.find((r) => r.reservationId === id);
