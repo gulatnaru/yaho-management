@@ -109,23 +109,84 @@ export class MockManualTestPrisma implements ManualTestDatabase {
   }
 }
 
+/** Failure stages of the DATABASE bootstrap path; surfaced in logs and 500 responses for diagnosis. */
+export type ManualDbStage = "prisma_init" | "tx_start" | "search_path" | "insert_run" | "persist_run" | "tx_commit";
+
+/**
+ * Logs structured diagnostic with SAFE fields only, then throws a stage-tagged error.
+ * SAFE: stage, error.name, Prisma error code (alphanumeric only).
+ * NEVER LOG: error.message (may contain SQL/values), error.meta (params), URLs, passwords, tokens, session data.
+ */
+export function logManualDbError(stage: ManualDbStage, error: unknown): never {
+  const err = error instanceof Error ? error : new Error(String(error));
+  const rawCode = (err as { code?: unknown }).code;
+  const prismaCode = typeof rawCode === "string" && /^[A-Z0-9]{2,10}$/.test(rawCode) ? rawCode : undefined;
+  console.error(JSON.stringify({
+    scope: "manual-test-db",
+    stage,
+    errorName: err.name,
+    ...(prismaCode ? { prismaCode } : {}),
+  }));
+  const staged = new Error(`MANUAL_DB_STAGE_${stage.toUpperCase()}`);
+  (staged as { manualStage?: ManualDbStage }).manualStage = stage;
+  throw staged;
+}
+
+/** True when the error was already staged (and logged) by logManualDbError. */
+function hasManualStage(error: unknown): error is Error & { manualStage: ManualDbStage } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { manualStage?: unknown }).manualStage === "string"
+  );
+}
+
 /** Independently configured client; never imports lib/db/prisma or its public datasource. */
 export class DatabaseManualTestPrisma implements ManualTestDatabase {
   readonly mode = "DATABASE" as const;
   private readonly client: ManualPrismaClient;
   constructor(url: string, factory: (url: string) => ManualPrismaClient = createManualPrismaClient) {
-    assertManualDatabaseUrl(url);
+    try {
+      assertManualDatabaseUrl(url);
+    } catch (error) {
+      logManualDbError("prisma_init", error);
+    }
     this.client = factory(url);
   }
   $disconnect() { return this.client.$disconnect(); }
   async createRun(run: MockRun) {
     if (run.mode !== "DATABASE") throw new Error("MANUAL_DATABASE_BINDING");
-    await this.client.$transaction(async (tx) => {
-      await setManualSearchPath(tx);
-      const createdAt = new Date(run.expiresAt - 60 * 60_000);
-      await tx.$executeRaw(Prisma.sql`INSERT INTO "manual_test"."ManualTestRun" ("id", "startRequestKey", "deploymentSha", "schemaVersion", "createdAt", "expiresAt") VALUES (${run.id}, ${run.id}, 'manual-test-runtime', 'relational-v1', ${createdAt}, ${new Date(run.expiresAt)})`);
-      await persistManualRun(tx, structuredClone(run));
-    });
+    let entered = false;
+    let completed = false;
+    try {
+      await this.client.$transaction(async (tx) => {
+        entered = true;
+        try {
+          await setManualSearchPath(tx);
+        } catch (error) {
+          logManualDbError("search_path", error);
+        }
+        const createdAt = new Date(run.expiresAt - 60 * 60_000);
+        try {
+          await tx.$executeRaw(Prisma.sql`INSERT INTO "manual_test"."ManualTestRun" ("id", "startRequestKey", "deploymentSha", "schemaVersion", "createdAt", "expiresAt") VALUES (${run.id}, ${run.id}, 'manual-test-runtime', 'relational-v1', ${createdAt}, ${new Date(run.expiresAt)})`);
+        } catch (error) {
+          logManualDbError("insert_run", error);
+        }
+        try {
+          await persistManualRun(tx, structuredClone(run));
+        } catch (error) {
+          logManualDbError("persist_run", error);
+        }
+        completed = true;
+      });
+    } catch (error) {
+      // A staged error is rethrown untouched (already logged exactly once).
+      // Otherwise the failure hit transaction startup (entered=false), aborted
+      // the callback outside the instrumented steps, or surfaced after the
+      // callback finished (commit) — only the last case is tx_commit.
+      if (hasManualStage(error)) throw error;
+      logManualDbError(!entered || !completed ? "tx_start" : "tx_commit", error);
+    }
   }
   async $transaction<T>(runId: string, operation: (tx: MockManualTestTransaction) => Promise<T> | T): Promise<T> {
     return this.client.$transaction(async (client) => {

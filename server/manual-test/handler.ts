@@ -24,6 +24,14 @@ async function guarded(operation: () => Promise<unknown>, closing = false) {
   } catch (error) {
     const status = error instanceof ManualTestError ? error.status : error instanceof ZodError ? 400 : 500;
     const code = error instanceof ManualTestError ? error.code : status === 400 ? "INVALID_INPUT" : "MOCK_REQUEST_FAILED";
+    // Stage names are fixed lowercase/underscore tokens from the DB bootstrap
+    // path — safe to surface; anything else keeps the opaque 500 body.
+    const manualStage = typeof error === "object" && error !== null
+      ? (error as { manualStage?: unknown }).manualStage
+      : undefined;
+    if (status === 500 && typeof manualStage === "string" && /^[a-z_]+$/.test(manualStage)) {
+      return Response.json({ error: code, stage: manualStage }, { status, headers: responseHeaders });
+    }
     return Response.json({ error: code }, { status, headers: responseHeaders });
   }
 }

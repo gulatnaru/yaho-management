@@ -170,4 +170,22 @@ describe("actual manual-test Route Handlers (DB-free)", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "MOCK_REQUEST_FAILED" });
   });
+
+  it("includes the DB stage in 500 responses when staged, omits invalid stages", async () => {
+    const staged = new Error("must-never-appear-secret") as Error & { manualStage?: string };
+    staged.manualStage = "tx_commit";
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw staged; });
+    const withStage = await call(csrfGET, "csrf");
+    expect(withStage.status).toBe(500);
+    const withStageBody = await withStage.json();
+    expect(withStageBody).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "tx_commit" });
+    expect(JSON.stringify(withStageBody)).not.toContain("must-never-appear-secret");
+
+    const invalid = new Error("must-never-appear-secret") as Error & { manualStage?: string };
+    invalid.manualStage = "TX_COMMIT; DROP TABLE";
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw invalid; });
+    const withoutStage = await call(csrfGET, "csrf");
+    expect(withoutStage.status).toBe(500);
+    expect(await withoutStage.json()).toEqual({ error: "MOCK_REQUEST_FAILED" });
+  });
 });
