@@ -41,11 +41,21 @@ function sqlValue(table: string, column: string, value: unknown) {
 }
 
 async function upsert(client: ManualSqlClient, table: Table, runId: string, row: Row) {
-  const data = { ...row, runId };
-  const columns = Object.keys(data);
-  // Conflict scope includes runId: a caller can never update another run's row.
-  const updates = columns.filter((key) => !["id", "runId", "createdAt", "submittedAt", "issuedAt", "reservedAt", "paidAt", "confirmedAt", "depositedAt", "refundedAt"].includes(key));
-  await client.$executeRaw(Prisma.sql`INSERT INTO ${tableSql(table)} (${Prisma.join(columns.map(identifier))}) VALUES (${Prisma.join(columns.map((column) => sqlValue(table, column, data[column as keyof typeof data])))}) ON CONFLICT ("runId", "id") DO UPDATE SET ${Prisma.join(updates.map((key) => key === "resolvedAt" ? Prisma.sql`"resolvedAt" = COALESCE(${tableSql(table)}."resolvedAt", EXCLUDED."resolvedAt")` : Prisma.sql`${identifier(key)} = EXCLUDED.${identifier(key)}`))}`);
+  // Table tagging only — never log here. The caller (lib/db) whitelists and
+  // logs the table as a fixed token; persistence.ts must not import logManualDbError
+  // so the lib/db → server/manual-test dependency direction is preserved.
+  try {
+    const data = { ...row, runId };
+    const columns = Object.keys(data);
+    // Conflict scope includes runId: a caller can never update another run's row.
+    const updates = columns.filter((key) => !["id", "runId", "createdAt", "submittedAt", "issuedAt", "reservedAt", "paidAt", "confirmedAt", "depositedAt", "refundedAt"].includes(key));
+    await client.$executeRaw(Prisma.sql`INSERT INTO ${tableSql(table)} (${Prisma.join(columns.map(identifier))}) VALUES (${Prisma.join(columns.map((column) => sqlValue(table, column, data[column as keyof typeof data])))}) ON CONFLICT ("runId", "id") DO UPDATE SET ${Prisma.join(updates.map((key) => key === "resolvedAt" ? Prisma.sql`"resolvedAt" = COALESCE(${tableSql(table)}."resolvedAt", EXCLUDED."resolvedAt")` : Prisma.sql`${identifier(key)} = EXCLUDED.${identifier(key)}`))}`);
+  } catch (error) {
+    if (typeof error === "object" && error !== null) {
+      (error as { manualTable?: Table }).manualTable = table;
+    }
+    throw error;
+  }
 }
 
 export async function setManualSearchPath(client: ManualSqlClient) {

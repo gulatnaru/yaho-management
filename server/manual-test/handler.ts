@@ -26,11 +26,20 @@ async function guarded(operation: () => Promise<unknown>, closing = false) {
     const code = error instanceof ManualTestError ? error.code : status === 400 ? "INVALID_INPUT" : "MOCK_REQUEST_FAILED";
     // Stage names are fixed lowercase/underscore tokens from the DB bootstrap
     // path — safe to surface; anything else keeps the opaque 500 body.
+    // Table names are fixed PascalCase tokens tagged during persist_run —
+    // alphanumeric only, so they carry no injection or PII surface.
     const manualStage = typeof error === "object" && error !== null
       ? (error as { manualStage?: unknown }).manualStage
       : undefined;
+    const manualTable = typeof error === "object" && error !== null
+      ? (error as { manualTable?: unknown }).manualTable
+      : undefined;
     if (status === 500 && typeof manualStage === "string" && /^[a-z_]+$/.test(manualStage)) {
-      return Response.json({ error: code, stage: manualStage }, { status, headers: responseHeaders });
+      const body: Record<string, unknown> = { error: code, stage: manualStage };
+      if (typeof manualTable === "string" && /^[A-Za-z0-9]+$/.test(manualTable)) {
+        body.table = manualTable;
+      }
+      return Response.json(body, { status, headers: responseHeaders });
     }
     return Response.json({ error: code }, { status, headers: responseHeaders });
   }

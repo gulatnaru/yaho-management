@@ -54,6 +54,40 @@ describe("logManualDbError", () => {
     expect(parsed).toEqual({ scope: "manual-test-db", stage: "tx_start", errorName: "Error" });
     expect(raw).not.toContain("secret-999");
   });
+
+  it("logs a whitelisted table and tags the staged error with manualTable", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = Object.assign(new Error("upsert failed"), { code: "P2031" });
+    const caught = (() => {
+      try { logManualDbError("persist_run", boom, { table: "Payment" }); } catch (error) { return error; }
+      throw new Error("logManualDbError must throw");
+    })();
+    const { raw, parsed } = lastLogged(errorSpy);
+    expect(parsed).toEqual({
+      scope: "manual-test-db", stage: "persist_run", table: "Payment",
+      errorName: "Error", prismaCode: "P2031",
+    });
+    expect(Object.keys(parsed).sort()).toEqual(["errorName", "prismaCode", "scope", "stage", "table"]);
+    expect((caught as Error).message).toBe("MANUAL_DB_STAGE_PERSIST_RUN");
+    expect((caught as { manualStage?: ManualDbStage }).manualStage).toBe("persist_run");
+    expect((caught as { manualTable?: string }).manualTable).toBe("Payment");
+    expect(raw).not.toContain("upsert failed");
+  });
+
+  it("ignores non-whitelisted table values instead of logging them", () => {
+    for (const badTable of ["payment", "Payment; DROP", "User\nEvil", "", "ManualTestRun"]) {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const caught = (() => {
+        try { logManualDbError("persist_run", new Error("boom"), { table: badTable }); } catch (error) { return error; }
+        throw new Error("logManualDbError must throw");
+      })();
+      const { parsed } = lastLogged(errorSpy);
+      expect(parsed).not.toHaveProperty("table");
+      expect(parsed).not.toHaveProperty("manualTable");
+      expect(caught as Error).not.toHaveProperty("manualTable");
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("DatabaseManualTestPrisma stage tagging", () => {
@@ -169,6 +203,45 @@ describe("DatabaseManualTestPrisma stage tagging", () => {
     );
     expect((commitCaught as { manualStage?: ManualDbStage }).manualStage).toBe("tx_commit");
     expect(errorSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("tags persist_run failures with the failing table from the real upsert path", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Call order in createRun: 1 = SET LOCAL search_path, 2 = INSERT ManualTestRun,
+    // 3 = first persistManualRun upsert (the User fixture row). The real upsert
+    // tags the error with manualTable before createRun whitelists and logs it.
+    let executeRawCalls = 0;
+    const tx = {
+      $executeRaw: async (): Promise<number> => {
+        executeRawCalls += 1;
+        if (executeRawCalls === 3) {
+          throw Object.assign(new Error("upsert leaked secret-token-persist"), { code: "P2031" });
+        }
+        return 1;
+      },
+      $queryRaw: async (): Promise<{ schema: string; path: string }[]> => [
+        { schema: "manual_test", path: '"manual_test"' },
+      ],
+    } as unknown as ManualSqlClient;
+    const client: ManualPrismaClient = {
+      $transaction: async <T>(operation: (txArg: ManualSqlClient) => Promise<T>): Promise<T> => operation(tx),
+      $disconnect: async () => {},
+    };
+    const db = new DatabaseManualTestPrisma(DATABASE_URL, () => client);
+    const caught = await db.createRun(databaseRun()).then(
+      () => { throw new Error("createRun was expected to throw"); },
+      (error: unknown) => error,
+    );
+    expect((caught as Error).message).toBe("MANUAL_DB_STAGE_PERSIST_RUN");
+    expect((caught as { manualStage?: ManualDbStage }).manualStage).toBe("persist_run");
+    expect((caught as { manualTable?: string }).manualTable).toBe("User");
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const { raw, parsed } = lastLogged(errorSpy);
+    expect(parsed).toEqual({
+      scope: "manual-test-db", stage: "persist_run", table: "User",
+      errorName: "Error", prismaCode: "P2031",
+    });
+    expect(raw).not.toContain("secret-token-persist");
   });
 
   it("tags invalid database URLs with prisma_init before any client is built", () => {

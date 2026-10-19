@@ -113,22 +113,44 @@ export class MockManualTestPrisma implements ManualTestDatabase {
 export type ManualDbStage = "prisma_init" | "tx_start" | "search_path" | "insert_run" | "persist_run" | "tx_commit";
 
 /**
- * Logs structured diagnostic with SAFE fields only, then throws a stage-tagged error.
- * SAFE: stage, error.name, Prisma error code (alphanumeric only).
- * NEVER LOG: error.message (may contain SQL/values), error.meta (params), URLs, passwords, tokens, session data.
+ * Fixed table tokens touched by the manual-test bootstrap; safe to surface in
+ * logs and 500 responses. Mirrors the `tables` const in
+ * server/manual-test/persistence.ts — kept as a separate whitelist here so
+ * lib/db never depends on server/manual-test for validation.
  */
-export function logManualDbError(stage: ManualDbStage, error: unknown): never {
+const manualTestTables = [
+  "User", "Teacher", "Program", "ClassSchedule", "ClassTeacher", "Child",
+  "ReservationApplicationGroup", "ReservationApplicationGroupClass", "ReservationApplicationLink",
+  "ReservationApplicationSubmission", "ReservationApplication", "ApplicationDeposit", "Reservation",
+  "Payment", "PaymentItem", "Refund", "ManualTestSession", "ManualTestAccessGrant",
+  "ManualTestOperationReceipt",
+] as const;
+export type ManualTestTable = (typeof manualTestTables)[number];
+function isManualTestTable(value: unknown): value is ManualTestTable {
+  return typeof value === "string" && (manualTestTables as readonly string[]).includes(value);
+}
+
+/**
+ * Logs structured diagnostic with SAFE fields only, then throws a stage-tagged error.
+ * SAFE: stage, table (fixed PascalCase token whitelist), error.name, Prisma error code (alphanumeric only).
+ * NEVER LOG: error.message (may contain SQL/values), error.meta (params), URLs, passwords, tokens, session data.
+ * Non-whitelisted table values are ignored (treated as undefined).
+ */
+export function logManualDbError(stage: ManualDbStage, error: unknown, opts?: { table?: string }): never {
   const err = error instanceof Error ? error : new Error(String(error));
   const rawCode = (err as { code?: unknown }).code;
   const prismaCode = typeof rawCode === "string" && /^[A-Z0-9]{2,10}$/.test(rawCode) ? rawCode : undefined;
+  const table = isManualTestTable(opts?.table) ? opts?.table : undefined;
   console.error(JSON.stringify({
     scope: "manual-test-db",
     stage,
+    table,
     errorName: err.name,
     ...(prismaCode ? { prismaCode } : {}),
   }));
   const staged = new Error(`MANUAL_DB_STAGE_${stage.toUpperCase()}`);
   (staged as { manualStage?: ManualDbStage }).manualStage = stage;
+  if (table) (staged as { manualTable?: ManualTestTable }).manualTable = table;
   throw staged;
 }
 
@@ -175,7 +197,10 @@ export class DatabaseManualTestPrisma implements ManualTestDatabase {
         try {
           await persistManualRun(tx, structuredClone(run));
         } catch (error) {
-          logManualDbError("persist_run", error);
+          const table = typeof error === "object" && error !== null
+            ? (error as { manualTable?: unknown }).manualTable
+            : undefined;
+          logManualDbError("persist_run", error, typeof table === "string" ? { table } : undefined);
         }
         completed = true;
       });

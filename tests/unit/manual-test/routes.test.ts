@@ -188,4 +188,31 @@ describe("actual manual-test Route Handlers (DB-free)", () => {
     expect(withoutStage.status).toBe(500);
     expect(await withoutStage.json()).toEqual({ error: "MOCK_REQUEST_FAILED" });
   });
+
+  it("includes the whitelisted table in 500 responses when staged, omits invalid tables", async () => {
+    const staged = new Error("must-never-appear-secret") as Error & { manualStage?: string; manualTable?: string };
+    staged.manualStage = "persist_run";
+    staged.manualTable = "Payment";
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw staged; });
+    const withTable = await call(csrfGET, "csrf");
+    expect(withTable.status).toBe(500);
+    const withTableBody = await withTable.json();
+    expect(withTableBody).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run", table: "Payment" });
+    expect(JSON.stringify(withTableBody)).not.toContain("must-never-appear-secret");
+
+    const evil = new Error("must-never-appear-secret") as Error & { manualStage?: string; manualTable?: string };
+    evil.manualStage = "persist_run";
+    evil.manualTable = "Payment; DROP TABLE";
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw evil; });
+    const withoutTable = await call(csrfGET, "csrf");
+    expect(withoutTable.status).toBe(500);
+    expect(await withoutTable.json()).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run" });
+
+    const untyped = new Error("boom") as Error & { manualStage?: string; manualTable?: unknown };
+    untyped.manualStage = "persist_run";
+    untyped.manualTable = 42;
+    vi.mocked(runtimeModule.getManualTestRuntime).mockImplementation(() => { throw untyped; });
+    const untypedBody = await call(csrfGET, "csrf");
+    expect(await untypedBody.json()).toEqual({ error: "MOCK_REQUEST_FAILED", stage: "persist_run" });
+  });
 });
