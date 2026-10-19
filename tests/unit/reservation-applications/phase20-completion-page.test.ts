@@ -25,6 +25,9 @@ vi.mock("@/lib/e2e/phase20-lease", () => ({
   hasActivePhase20PreviewLease: mocked.previewLease,
   parseAndVerifySignedPreviewRun: vi.fn(),
 }));
+vi.mock("@/lib/e2e/preview-manual-session", () => ({
+  resolvePreviewApplyAccess: (hasLease: boolean) => Promise.resolve({ allowed: hasLease, operatorSession: false }),
+}));
 vi.mock("@/lib/reservation-applications/config", () => ({ readPublicApplicationConfig: mocked.readLegacyConfig }));
 vi.mock("@/components/ui/button", () => ({ buttonVariants: () => "" }));
 vi.mock("@/components/ui/card", () => {
