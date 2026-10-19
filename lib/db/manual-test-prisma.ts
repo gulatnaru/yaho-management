@@ -166,6 +166,17 @@ function hasManualStage(error: unknown): error is Error & { manualStage: ManualD
   );
 }
 
+/**
+ * Interactive transaction timeout for the manual-test DATABASE bootstrap path.
+ * Prisma defaults interactive transactions to 5s (`timeout ?= 5000`), which is
+ * too tight for 7+ sequential round-trips over Supabase + PgBouncer from
+ * Vercel serverless — the 5s clock expired mid-callback with P2028
+ * (Transaction API error, staged at persist_run). Bootstrap runs are
+ * low-frequency and operator-triggered, so holding one pooled connection for
+ * up to 30s is acceptable.
+ */
+const MANUAL_TEST_TX_TIMEOUT_MS = 30_000;
+
 /** Independently configured client; never imports lib/db/prisma or its public datasource. */
 export class DatabaseManualTestPrisma implements ManualTestDatabase {
   readonly mode = "DATABASE" as const;
@@ -206,7 +217,7 @@ export class DatabaseManualTestPrisma implements ManualTestDatabase {
           logManualDbError("persist_run", error, typeof table === "string" ? { table } : undefined);
         }
         completed = true;
-      });
+      }, { timeout: MANUAL_TEST_TX_TIMEOUT_MS });
     } catch (error) {
       // A staged error is rethrown untouched (already logged exactly once).
       // Otherwise the failure hit transaction startup (entered=false), aborted
@@ -231,14 +242,16 @@ export class DatabaseManualTestPrisma implements ManualTestDatabase {
         await persistManualRun(client, draft, previous);
         return detached;
       } finally { tx.finish(); }
-    });
+    }, { timeout: MANUAL_TEST_TX_TIMEOUT_MS });
   }
 }
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { hydrateManualRun, lockManualRun, persistManualRun, setManualSearchPath, type ManualSqlClient } from "@/server/manual-test/persistence";
+/** Subset of Prisma interactive-transaction options exposed through the manual-test adapter. */
+export type ManualTransactionOptions = { timeout?: number; maxWait?: number };
 export interface ManualPrismaClient {
-  $transaction<T>(operation: (tx: ManualSqlClient) => Promise<T>): Promise<T>;
+  $transaction<T>(operation: (tx: ManualSqlClient) => Promise<T>, options?: ManualTransactionOptions): Promise<T>;
   $disconnect(): Promise<void>;
 }
 export function assertManualDatabaseUrl(value: string) {
