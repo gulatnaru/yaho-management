@@ -1,6 +1,7 @@
 "use server";
 
 import { randomBytes } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -329,6 +330,25 @@ function describeConfirmFailure(error: unknown): string | null {
   return null;
 }
 
+function classifyInfrastructureError(error: unknown): string | null {
+  const code = error instanceof Prisma.PrismaClientKnownRequestError
+    ? error.code
+    : error instanceof Prisma.PrismaClientInitializationError
+      ? error.errorCode
+      : undefined;
+
+  switch (code) {
+    case "P2028":
+      return "예약 확정 처리 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.";
+    case "P2024":
+      return "데이터베이스 연결 대기 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.";
+    case "P1001":
+      return "데이터베이스 연결에 실패했습니다. 잠시 후 다시 시도해주세요.";
+    default:
+      return null;
+  }
+}
+
 /**
  * 입금 확인된 신청을 기존 예약 규칙으로 확정한다(ADR-053). 정원 이상이면 기존 예약 화면과 같은
  * 2단계 확인을 거치며, 확인값은 (신청 id, 아이 선택)에 묶는다. 성공하면 예약 상세로 이동한다.
@@ -385,7 +405,10 @@ export async function confirmReservationApplication(
     const message = describeConfirmFailure(error);
     if (message) return { formError: message, values };
     console.error("[reservation-applications] failed to confirm application:", describeErrorForLog(error));
-    return { formError: "예약 확정에 실패했습니다. 다시 시도해주세요.", values };
+    return {
+      formError: classifyInfrastructureError(error) ?? "예약 확정에 실패했습니다. 다시 시도해주세요.",
+      values,
+    };
   }
 
   revalidateApplication(applicationId);
