@@ -4,6 +4,7 @@ import {
   ApplicationLinkNotFoundError,
   ApplicationNotPendingError,
 } from "@/lib/reservation-applications/errors";
+import { linkRevision } from "@/server/reservation-applications/groups";
 import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
 import {
   closeReservationApplicationCore,
@@ -16,13 +17,15 @@ const FUTURE = new Date("2026-10-02T01:00:00.000Z");
 function linkClient(classSchedule: unknown) {
   const findUnique = vi.fn(async () => classSchedule);
   const upsert = vi.fn(async () => ({}));
-  const linkFindUnique = vi.fn(async () => null);
+  const update = vi.fn(async () => ({}));
+  const linkFindUnique = vi.fn(async () => ({ id: "link-1", token: "old", groupId: null, updatedAt: NOW }));
   const groupFindFirst = vi.fn<() => Promise<{ id: string } | null>>(async () => null);
   const updateMany = vi.fn(async () => ({ count: 1 }));
-  const tx = { $queryRaw: vi.fn(async () => [{ id: "class-1" }]), classSchedule: { findUnique }, reservationApplicationGroup: { findFirst: groupFindFirst }, reservationApplicationLink: { findUnique: linkFindUnique, upsert, updateMany } };
+  const tx = { $queryRaw: vi.fn(async () => [{ id: "class-1" }]), classSchedule: { findUnique }, reservationApplicationGroup: { findFirst: groupFindFirst, findMany: vi.fn(async () => []) }, reservationApplicationLink: { findUnique: linkFindUnique, findMany: vi.fn(async () => []), update, upsert, updateMany } };
   return {
     client: { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx), reservationApplicationLink: { updateMany } } as never,
-    upsert,
+    upsert: update,
+    revision: linkRevision({ schedule: classSchedule, links: [], groups: [] }),
     linkFindUnique,
     groupFindFirst,
     updateMany,
@@ -30,37 +33,37 @@ function linkClient(classSchedule: unknown) {
 }
 
 describe("application link core", () => {
-  it("creates or reissues one link per class with a fresh token", async () => {
-    const { client, upsert } = linkClient({ status: "SCHEDULED", startsAt: FUTURE });
+  it("reissues an existing legacy row with a fresh token", async () => {
+    const { client, upsert, revision } = linkClient({ status: "SCHEDULED", startsAt: FUTURE });
 
     const result = await issueApplicationLinkCore(client, {
       classScheduleId: "class-1",
       actorUserId: "admin-1",
       now: NOW,
+      revision,
       generateToken: () => "n".repeat(32),
     });
 
     expect(result).toEqual({ token: "n".repeat(32) });
     const linkData = { token: "n".repeat(32), isActive: true, issuedAt: NOW, issuedById: "admin-1" };
     expect(upsert).toHaveBeenCalledWith({
-      where: { classScheduleId: "class-1" },
-      create: { classScheduleId: "class-1", ...linkData },
-      update: linkData,
+      where: { id: "link-1" },
+      data: { ...linkData, updatedAt: new Date(NOW.getTime() + 1) },
     });
   });
 
   it("refuses to issue links for missing, cancelled or started classes", async () => {
     await expect(
-      issueApplicationLinkCore(linkClient(null).client, { classScheduleId: "x", actorUserId: "admin-1", now: NOW }),
+      issueApplicationLinkCore(linkClient(null).client, { classScheduleId: "x", actorUserId: "admin-1", now: NOW, revision: linkRevision({ schedule: null, links: [], groups: [] }) }),
     ).rejects.toBeInstanceOf(ApplicationLinkNotFoundError);
 
     for (const classSchedule of [
       { status: "CANCELLED", startsAt: FUTURE },
       { status: "SCHEDULED", startsAt: NOW },
     ]) {
-      const { client, upsert } = linkClient(classSchedule);
+      const { client, upsert, revision } = linkClient(classSchedule);
       await expect(
-        issueApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin-1", now: NOW }),
+        issueApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin-1", now: NOW, revision }),
       ).rejects.toBeInstanceOf(ApplicationLinkClassClosedError);
       expect(upsert).not.toHaveBeenCalled();
     }
@@ -81,9 +84,9 @@ describe("application link core", () => {
   });
 
   it("does not recreate a raw legacy link after the class was upgraded to a group", async () => {
-    const { client, upsert, groupFindFirst } = linkClient({ status: "SCHEDULED", startsAt: FUTURE });
+    const { client, upsert, groupFindFirst, revision } = linkClient({ status: "SCHEDULED", startsAt: FUTURE });
     groupFindFirst.mockResolvedValue({ id: "group-link-1" });
-    await expect(issueApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin-1", now: NOW })).rejects.toBeInstanceOf(ApplicationLinkNotFoundError);
+    await expect(issueApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin-1", now: NOW, revision })).rejects.toBeInstanceOf(ApplicationLinkNotFoundError);
     expect(upsert).not.toHaveBeenCalled();
   });
 

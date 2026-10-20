@@ -16,24 +16,28 @@ type UpgradeClient = Pick<PrismaClient, "$transaction">;
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
 /**
- * 클래스 신청 링크를 만들거나 재발급한다(ADR-052). 클래스당 1개이며,
- * 재발급하면 토큰이 바뀌어 이전 링크는 즉시 무효가 되고 다시 접수 중이 된다.
+ * Explicit existing Phase 18 reissue only (ADR-052); upgrade is a separate operation.
+ * Freeze the request revision across response-loss retries: success changes the revision,
+ * so a retry conflicts rather than rotating again. Reconcile current metadata before a fresh intent.
+ * No new plaintext row is created, and existing applications are never updated.
  */
 export async function issueApplicationLinkCore(
   client: IssueClient,
-  input: { classScheduleId: string; actorUserId: string; now: Date; generateToken?: () => string },
+  input: { classScheduleId: string; actorUserId: string; now: Date; revision: string; generateToken?: () => string },
 ): Promise<{ token: string }> {
   const token = (input.generateToken ?? generateApplicationLinkToken)();
   await client.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ClassSchedule" WHERE "id" = ${input.classScheduleId} FOR UPDATE`;
     if (!rows[0]) throw new ApplicationLinkNotFoundError();
+    if (await readClassLinkRevision(tx, input.classScheduleId) !== input.revision) throw new LinkRevisionConflictError();
     const classSchedule = await tx.classSchedule.findUnique({ where: { id: input.classScheduleId }, select: { status: true, startsAt: true } });
     if (!classSchedule) throw new ApplicationLinkNotFoundError();
     if (!canIssueApplicationLink(classSchedule, input.now)) throw new ApplicationLinkClassClosedError();
     const upgraded = await tx.reservationApplicationGroup.findFirst({ where: { upgradedLegacyClassScheduleId: input.classScheduleId }, select: { id: true } });
     if (upgraded) throw new ApplicationLinkNotFoundError();
-    const linkData = { token, isActive: true, issuedAt: input.now, issuedById: input.actorUserId };
-    await tx.reservationApplicationLink.upsert({ where: { classScheduleId: input.classScheduleId }, create: { classScheduleId: input.classScheduleId, ...linkData }, update: linkData });
+    const legacy = await tx.reservationApplicationLink.findUnique({ where: { classScheduleId: input.classScheduleId }, select: { id: true, token: true, groupId: true, updatedAt: true } });
+    if (!legacy?.token || legacy.groupId) throw new ApplicationLinkNotFoundError();
+    await tx.reservationApplicationLink.update({ where: { id: legacy.id }, data: { token, isActive: true, issuedAt: input.now, issuedById: input.actorUserId, updatedAt: new Date(Math.max(input.now.getTime(), legacy.updatedAt.getTime() + 1)) } });
   }, TX_OPTIONS);
   return { token };
 }
@@ -70,8 +74,8 @@ export async function stopApplicationLinkCore(
   client: StopClient,
   input: { classScheduleId: string; revision?: string },
 ): Promise<void> {
-  const stop = async (tx: Pick<PrismaClient, "reservationApplicationLink">) => {
-    const result = await tx.reservationApplicationLink.updateMany({ where: { classScheduleId: input.classScheduleId, isActive: true }, data: { isActive: false } });
+  const stop = async (tx: Pick<PrismaClient, "reservationApplicationLink">, updatedAt?: Date) => {
+    const result = await tx.reservationApplicationLink.updateMany({ where: { classScheduleId: input.classScheduleId, isActive: true }, data: { isActive: false, ...(updatedAt ? { updatedAt } : {}) } });
     if (result.count === 0) throw new ApplicationLinkNotFoundError();
   };
   // Preserve the old internal adapter for callers without a transaction; revised UI always uses the locked path.
@@ -79,6 +83,8 @@ export async function stopApplicationLinkCore(
   await client.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "ClassSchedule" WHERE "id" = ${input.classScheduleId} FOR UPDATE`;
     if (await readClassLinkRevision(tx, input.classScheduleId) !== input.revision) throw new LinkRevisionConflictError();
-    await stop(tx);
+    const link = await tx.reservationApplicationLink.findUnique({ where: { classScheduleId: input.classScheduleId }, select: { updatedAt: true } });
+    if (!link) throw new ApplicationLinkNotFoundError();
+    await stop(tx, new Date(Math.max(Date.now(), link.updatedAt.getTime() + 1)));
   }, TX_OPTIONS);
 }

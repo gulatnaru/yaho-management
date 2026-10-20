@@ -609,3 +609,13 @@
 - Relationship to ADR-052/060: 이 ADR은 유효 링크를 통한 보호자 신청 흐름의 가격 비공개 조항만 대체(supersede)한다. 그 외 링크·권한·개인정보·동의·보관·파기·Preview 제한과 기존 결제·입금·반환·환불·할인·예약 확정 정책은 유지한다. ADR-052/060을 포함한 과거 ADR 기록은 삭제하거나 다시 쓰지 않는다.
 - Reason: 보호자가 제출 전에 실제 클래스별 참가비와 본인 자녀의 예상 총액을 확인하게 하면서, 공개 범위를 유효 링크 안으로 제한한다. 제출 시 가격 재확인과 서버 스냅샷을 구분하면 신청 중 가격 변경과 과거 신청 금액의 불일치를 막을 수 있다.
 - Consequences: Phase 20 요구사항의 가격 표시 범위와 단계별 안내를 이 결정에 맞춘다. 이번 작업은 공식 문서 변경이며 UI·API·테스트·DB 코드는 변경하지 않는다.
+
+## ADR-064: Phase 2 신청 가격 수정 경로와 기존 링크 재발급 호환
+
+- Status: Accepted
+- Date: 2026-10-20
+- Source: 사용자 요청 “Phase 2 review fix — commit 3138d8c follow-up”, 기존 편집 동작 보존을 위한 (a)/(b) 선택 및 구현 승인.
+- Decision: (b)를 적용한다. ADMIN 전체 편집 폼은 최초 신청금액 baseline과 `updatedAt` revision을 유지한다. 입력 금액이 baseline과 같으면 가격 쓰기를 생략해 다른 관리자의 최신 inline 가격을 보존하고 장소 등 운영정보 수정은 ADR-020 정책대로 저장한다. 의도적인 금액 변경만 inline과 동일한 `saveApplicationPriceCore`에서 revision·접수 가능 상태를 검증하며 클래스/선생님 수정과 같은 트랜잭션에 포함한다. 오래된 의도적 가격 변경은 전체 수정이 롤백된다. revision 없는 가격 변경은 금지하고, 기존 전체 폼의 명시적 NULL 해제는 유지한다. 클래스 잠금과 단조 증가 revision으로 같은 시각의 revision 재사용도 막는다.
+- Compatibility: ADR-052의 기존 Phase 18 주소 재발급과 ADR-060/063의 명시적 새 방식 전환을 구분한다. 재발급은 이전 주소 무효화 경고 후 ADMIN이 기존 raw-token 행만 revision 검증하여 교체하며 금액/새 방식 설정을 강제하지 않는다. 업그레이드 후 raw-token 행을 새로 만들지 않는다. 기존 신청·예약·금액 스냅샷, 토큰 정책과 저장 범위를 유지한다.
+- Reason: 가격 경로를 제거하는 (a)보다 기존 ADMIN 전체 폼의 가격 설정/해제를 보존하면서 stale 가격 덮어쓰기를 차단한다. 가격을 변경하지 않은 운영정보 편집까지 가격 충돌로 막을 필요는 없다.
+- Scope: 금액·환불·개인정보 수집 정책 변경은 없다. ADR-020/052/060/063의 나머지 정책, Phase 2 범위, schema/migration 불변과 Preview/Production 접근 금지를 유지한다. 재시도/검증 상태는 `docs/UX-REDESIGN-INTEGRATED-PLAN.md`의 Phase 2 후속 절과 `docs/PHASE2-INTEGRATION-STATUS.md`에 기록한다.

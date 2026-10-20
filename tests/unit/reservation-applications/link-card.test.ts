@@ -61,3 +61,10 @@ describe("truthful ADMIN link card", () => {
     expect(html).toContain("클래스 상태로 신규 접수 불가"); expect(html).toContain("신청 목록 보기 · 전체 클래스"); expect(html).toContain('href="/reservation-applications"'); expect(html).not.toContain("reservation-applications?classScheduleId="); expect(html).not.toContain(">링크 발급<");
   });
 });
+
+it("offers legacy reissue separately from upgrade with no modern price/settings gate", () => {
+  const html = render({ ...view, revision: "a".repeat(64), applicationPrice: null, scopes: [{ ...view.scopes[0]!, id: "class:class-1", groupId: null, links: [{ ...view.scopes[0]!.links[0]!, rawPath: "/apply/old" }], readiness: { ...readiness, guideReady: false, consentReady: false } }] });
+  expect(html).toContain("기존 주소 무효화 후 재발급"); expect(html).toContain("기존 주소를 유지하고 새 방식으로 전환");
+  const reissue = html.match(/<button[^>]*>기존 주소 무효화 후 재발급<\/button>/)?.[0];
+  expect(reissue).toBeDefined(); expect(reissue).not.toContain(' disabled=""');
+});

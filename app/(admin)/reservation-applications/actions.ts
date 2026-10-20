@@ -32,7 +32,7 @@ import {
   applicationResolutionSchema,
 } from "@/lib/validation/reservation-application";
 import { confirmReservationApplicationCore } from "@/server/reservation-applications/confirm";
-import { stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
+import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
 import { classLinkOperationSchema, issueClassLinkOperationCore, LinkOperationConflictError, LinkRevisionConflictError, LinkSettingsNotReadyError, type ClassLinkReceipt, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { reservationApplicationSettingsSchema, groupCreateSchema, submissionConfirmationSchema } from "@/lib/reservation-applications/phase20-validation";
 import { getReservationApplicationSettings, importLegacyReservationApplicationSettingsCore, isReservationApplicationSettingsReady, saveReservationApplicationSettingsCore } from "@/server/reservation-applications/settings";
@@ -218,10 +218,17 @@ function revalidateApplication(applicationId: string) {
 }
 
 /** 클래스 신청 링크 만들기·재발급(ADR-052). 재발급하면 이전 링크는 즉시 무효가 된다. */
-export async function issueApplicationLink(_classScheduleId: string): Promise<ApplicationActionResult> {
-  await requireAdminPrincipal();
-  void _classScheduleId;
-  return { error: "새 방식 신청 링크를 안전하게 발급하도록 클래스 화면을 다시 불러와 주세요." };
+export async function issueApplicationLink(classScheduleId: string, revision?: string): Promise<ApplicationActionResult> {
+  const principal = await requireAdminPrincipal();
+  if (!z.string().min(1).max(200).safeParse(classScheduleId).success || !z.string().regex(/^[a-f0-9]{64}$/).safeParse(revision).success) return { error: "잘못된 요청입니다." };
+  try {
+    await issueApplicationLinkCore(prisma, { classScheduleId, revision: revision!, actorUserId: principal.userId, now: new Date() });
+    revalidatePath(`/classes/${classScheduleId}`);
+    return {};
+  } catch (error) {
+    if (error instanceof LinkRevisionConflictError) return { error: "링크 상태가 변경되었습니다. 다시 불러와 현재 주소를 확인해 주세요." };
+    return { error: "기존 링크와 클래스 상태를 확인한 뒤 다시 불러와 주세요." };
+  }
 }
 
 export async function stopApplicationLink(classScheduleId: string, revision?: string): Promise<ApplicationActionResult> {

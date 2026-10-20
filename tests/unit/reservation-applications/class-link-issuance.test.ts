@@ -13,6 +13,7 @@ function fixture() {
   const links: Link[] = [];
   const project = (group: Group) => ({ ...group, links: links.filter((row) => row.groupId === group.id).map(({ id, isActive, updatedAt }) => ({ id, isActive, updatedAt })).sort((a,b) => a.id.localeCompare(b.id)) });
   const tx = {
+    $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(async (query: TemplateStringsArray) => query.join("").includes('"ClassSchedule"') ? schedules.map(({ id }) => ({ id })) : [{ id: "group" }]),
     classSchedule: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => schedules.find((row) => row.id === where.id)), findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => schedules.filter((row) => where.id.in.includes(row.id))) },
     reservationApplicationGroup: {
@@ -62,8 +63,8 @@ describe("safe class issuance", () => {
     expect(f.links).toHaveLength(1); expect(f.links[0]?.tokenHash).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(f.links)).not.toContain("raw-secret");
     const locks = f.tx.$queryRaw.mock.calls.map(([query]) => query.join(""));
-    expect(locks[0]).toContain("pg_advisory_xact_lock"); expect(locks[1]).toContain("ClassSchedule");
-    expect(f.tx.reservationApplicationGroup.create.mock.invocationCallOrder[0]).toBeLessThan(f.tx.$queryRaw.mock.invocationCallOrder[1]!);
+    expect(f.tx.$executeRaw.mock.calls).toHaveLength(1); expect(locks[0]).toContain("ClassSchedule");
+    expect(f.tx.reservationApplicationGroup.create.mock.invocationCallOrder[0]).toBeLessThan(f.tx.$queryRaw.mock.invocationCallOrder[0]!);
     const replay = await f.issue(request); expect(replay).toMatchObject({ replayed: true, linkId: result.linkId }); expect(replay.token).toBeUndefined();
     expect(f.groups).toHaveLength(1); expect(f.links).toHaveLength(1);
   });

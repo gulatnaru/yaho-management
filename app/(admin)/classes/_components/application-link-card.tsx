@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { issueClassApplicationLink, stopApplicationLink, upgradeLegacyApplicationLink } from "@/app/(admin)/reservation-applications/actions";
+import { issueApplicationLink, issueClassApplicationLink, stopApplicationLink, upgradeLegacyApplicationLink } from "@/app/(admin)/reservation-applications/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CopyControl } from "@/components/application-ux/copy-control";
@@ -25,7 +25,9 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
   const [origin, setOrigin] = useState("");
   const router = useRouter();
   const [receipt, setReceipt] = useState<ClassLinkReceipt>();
-  const [legacyIntent, setLegacyIntent] = useState<LinkIntent>();
+  const [legacyIntent, setLegacyIntent] = useState<{ kind: LinkIntent; revision: string }>();
+  const [legacyUnresolved, setLegacyUnresolved] = useState(false);
+  const legacyAttempt = useRef<{ kind: LinkIntent; revision: string } | undefined>(undefined);
   const attempt = useRef<ClassLinkOperation | undefined>(undefined);
   const [unresolved, setUnresolved] = useState(false);
   useEffect(() => {
@@ -61,12 +63,18 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
       } catch { setError("결과를 확인하지 못했습니다. 같은 작업으로 다시 시도해 주세요. 기존 유효 링크는 유지됩니다."); }
     });
   }
-  function run(action: () => Promise<{ error?: string }>, confirmation?: string) {
-    if (confirmation && !window.confirm(confirmation)) return;
+  function runLegacy(confirmed: { kind: LinkIntent; revision: string }) {
+    legacyAttempt.current ??= confirmed;
+    setLegacyUnresolved(true);
+    const request = legacyAttempt.current;
     setError(undefined); setNotice(undefined);
     startTransition(async () => {
-      try { const result = await action(); if (result.error) setError(result.error); else { setNotice("처리했습니다."); router.refresh(); } }
-      catch { setError("처리 결과를 확인하지 못했습니다. 다시 불러와 현재 링크 상태를 확인해 주세요."); }
+      try {
+        const result = await (request.kind === "stop" ? stopApplicationLink(classScheduleId, request.revision) : request.kind === "replace" ? issueApplicationLink(classScheduleId, request.revision) : upgradeLegacyApplicationLink(classScheduleId, request.revision));
+        legacyAttempt.current = undefined; setLegacyUnresolved(false);
+        if (result.error) setError(result.error); else setNotice("처리했습니다.");
+        router.refresh();
+      } catch { setError("처리 결과를 확인하지 못했습니다. 다시 불러와 현재 링크 상태를 확인해 주세요. 같은 작업 재시도는 최초 상태로만 확인합니다."); router.refresh(); }
     });
   }
   return <Card data-testid="application-link-card">
@@ -97,6 +105,7 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
           {url ? <a className="inline-flex min-h-11 items-center justify-center rounded border px-4 text-sm" href={url} rel="noopener noreferrer" target="_blank">신청 화면 확인</a> : null}
         </div>
       </div>; })}
+      {legacyUnresolved ? <Button disabled={pending} onClick={() => { if (legacyAttempt.current) runLegacy(legacyAttempt.current); }} type="button">같은 기존 링크 작업 결과 확인</Button> : null}
       <FormFeedback error={error} notice={notice} />
       <Link className="inline-block min-h-11 py-2 text-sm underline" href="/reservation-applications">신청 목록 보기 · 전체 클래스</Link>
       <details><summary className="min-h-11 cursor-pointer py-2 font-medium">고급 설정 펼치기</summary>
@@ -104,8 +113,9 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
           <LinkScopeList scopes={view.scopes} />
           {view.scopes.length === 0 ? <LinkReadiness readiness={view.unissuedReadiness} /> : null}
           {direct && canIssueLegacy ? <div className="space-y-2">
-            {direct.readiness.issuance === "ACTIVE" ? <Button disabled={pending} onClick={() => setLegacyIntent("stop")} type="button">신청 접수 중지</Button> : null}
-            <Button disabled={pending || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={() => setLegacyIntent("upgrade")} type="button">기존 주소를 유지하고 새 방식으로 전환</Button>
+            {direct.readiness.issuance === "ACTIVE" ? <Button disabled={pending || legacyUnresolved || !view.revision} onClick={() => setLegacyIntent({ kind: "stop", revision: view.revision! })} type="button">신청 접수 중지</Button> : null}
+            <Button disabled={pending || legacyUnresolved || !view.revision} onClick={() => setLegacyIntent({ kind: "replace", revision: view.revision! })} type="button">기존 주소 무효화 후 재발급</Button>
+            <Button disabled={pending || legacyUnresolved || !view.revision || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={() => setLegacyIntent({ kind: "upgrade", revision: view.revision! })} type="button">기존 주소를 유지하고 새 방식으로 전환</Button>
             <p className="text-sm">기존 금액 없는 주소는 명시 전환 전까지 유지됩니다. 가격을 저장해도 기존 신청의 금액은 바뀌지 않습니다.</p>
           </div> : null}
           {currentScopes.filter((scope) => scope.groupId).map((scope) => <div className="space-y-2 rounded border p-3" key={scope.id}><p>{scope.label}</p><GroupLinkButton activeLinkIds={scope.links.filter((link) => link.isActive).map((link) => link.id)} groupId={scope.groupId!} hasLinks={scope.links.length > 0} isActive={scope.scopeActive && scope.links.some((link) => link.isActive)} members={scope.members} onIssued={setReceipt} revision={scope.revision} revisions={Object.fromEntries(scope.members.map((member) => [member.id, member.revision ?? (member.id === classScheduleId ? view.revision ?? "" : options?.find((row) => row.id === member.id)?.revision ?? "")]))} /></div>)}
@@ -114,7 +124,7 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
           <p className="text-sm text-slate-600">새 방식 주소는 해시만 저장하므로 원문을 복원할 수 없습니다. 기존 방식 주소는 호환 범위에서 표시합니다. 링크 열어보기는 현재 환경의 일반 공개 화면을 새 탭에서 확인하며 신청을 제출하지 않습니다.</p>
         </div>
       </details>
-      {legacyIntent && direct ? <LinkImpactConfirmation intent={legacyIntent} members={direct.members} onCancel={() => setLegacyIntent(undefined)} onConfirm={() => { const kind = legacyIntent; setLegacyIntent(undefined); run(() => kind === "stop" ? stopApplicationLink(classScheduleId, view.revision) : upgradeLegacyApplicationLink(classScheduleId, view.revision)); }} pending={pending} /> : null}
+      {legacyIntent && direct ? <LinkImpactConfirmation intent={legacyIntent.kind} members={direct.members} onCancel={() => setLegacyIntent(undefined)} onConfirm={() => { const request = legacyIntent; setLegacyIntent(undefined); runLegacy(request); }} pending={pending} /> : null}
     </CardContent>
   </Card>;
 }

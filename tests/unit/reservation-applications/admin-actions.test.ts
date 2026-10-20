@@ -119,7 +119,7 @@ describe("reservation application admin actions", () => {
 
     const calls = [
       () => actions.issueClassApplicationLink({}),
-      () => actions.issueApplicationLink("class-1"),
+      () => actions.issueApplicationLink("class-1", "a".repeat(64)),
       () => actions.stopApplicationLink("class-1"),
       () => actions.confirmApplicationDeposit("application-1"),
       () => actions.confirmReservationApplication("application-1", {}, formData({ childChoice: "NEW" })),
@@ -513,6 +513,8 @@ describe("reservation application admin actions", () => {
       expect((await actions.stopApplicationLink("class-1")).error).toBeTruthy();
       expect(issueCoreMock).not.toHaveBeenCalled(); expect(createGroupCoreMock).not.toHaveBeenCalled(); expect(issueGroupCoreMock).not.toHaveBeenCalled();
       const revision = "a".repeat(64);
+      await expect(actions.issueApplicationLink("class-1", revision)).resolves.toEqual({});
+      expect(issueCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ classScheduleId: "class-1", revision, actorUserId: adminPrincipal.userId }));
       await expect(actions.stopApplicationLink("class-1", revision)).resolves.toEqual({});
       expect(stopCoreMock).toHaveBeenCalledWith(expect.anything(), { classScheduleId: "class-1", revision });
     });

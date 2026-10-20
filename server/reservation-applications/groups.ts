@@ -405,13 +405,18 @@ export function classLinkOperationIdentity(actorUserId: string, input: ClassLink
   return { prefix, id: `${prefix}${digest}` };
 }
 
-/** One transaction for group, membership and first hash. A replay never returns/reconstructs a token. */
+/** One transaction for group, membership and first hash. Issuance replays return metadata only.
+ * STOP has no durable operation receipt: even the same Operation-ID/revision retry can conflict.
+ * This is CAS safety, not same-request/same-result idempotence. Never refresh a retry's revision;
+ * reconcile metadata after response loss and require a fresh explicit intent for another change.
+ * A frozen stop cannot stop a newer resumed/replaced link or reactivate any old link.
+ */
 export async function issueClassLinkOperationCore(client: Pick<PrismaClient, "$transaction">, input: ClassLinkOperation & { actorUserId: string; now: Date; generateToken?: () => string }): Promise<ClassLinkReceipt> {
   const intent = classLinkOperationSchema.parse({ operationId: input.operationId, kind: input.kind, groupId: input.groupId, classScheduleIds: input.classScheduleIds, revisions: input.revisions, groupRevision: input.groupRevision });
   const identity = classLinkOperationIdentity(input.actorUserId, intent);
   const ids = [...intent.classScheduleIds].sort();
   return client.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity.prefix}, 0))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity.prefix}, 0))`;
     const priorGroup = await tx.reservationApplicationGroup.findFirst({ where: { id: { startsWith: identity.prefix } }, select: { id: true } });
     const priorLink = await tx.reservationApplicationLink.findFirst({ where: { id: { startsWith: identity.prefix } }, select: { id: true, groupId: true, isActive: true } });
     if (priorGroup && priorGroup.id !== identity.id || priorLink && priorLink.id !== identity.id) throw new LinkOperationConflictError();
