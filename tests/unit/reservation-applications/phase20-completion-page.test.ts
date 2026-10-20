@@ -88,6 +88,35 @@ describe("Phase 20 completion page capability boundary", () => {
     expect(html).toContain("completion-guide:");
     expect(html).toContain("DB은행|111-222|10000");
     expect(html).not.toContain("합성은행");
+    expect(html).toContain("신청이 접수되었습니다");
+    expect(html).toContain("아직 예약이 확정된 것은 아닙니다. 입금과 운영자 확인 후 예약이 확정됩니다.");
+    expect(mocked.noStore).toHaveBeenCalledTimes(1);
+    expect(mocked.loadCompletion).toHaveBeenCalledWith("completion-capability");
+  });
+
+  it.each(["missing", "invalid", "expired"])("preserves generic bank/channel navigation without own data for a %s capability", async (kind) => {
+    mocked.cookies.mockResolvedValue({ get: () => kind === "missing" ? undefined : { value: kind } });
+    mocked.loadCompletion.mockResolvedValue(null);
+    const html = await renderPage();
+    expect(mocked.loadCompletion).toHaveBeenCalledWith(kind === "missing" ? undefined : kind);
+    for (const value of ["DB은행", "111-222", "DB예금주", "YAHO 블로그", "YAHO Instagram", "YAHO 카카오톡 채널"]) expect(html).toContain(value);
+    for (const url of [dbSettings.blogUrl, dbSettings.instagramUrl, dbSettings.kakaoChannelUrl]) expect(html).toContain(`href="${url}"`);
+    expect(html.match(/target="_blank"/g)).toHaveLength(3);
+    expect(html.match(/rel="noopener noreferrer"/g)).toHaveLength(3);
+    for (const value of ["completion-guide:", "10000", "입금자명", "입금했어요", "친구 보호자 초대"]) expect(html).not.toContain(value);
+  });
+
+  it("preserves legacy env guidance only when the DB singleton is absent", async () => {
+    mocked.loadCompletion.mockResolvedValue(null); mocked.settings.mockResolvedValue(null);
+    const html = await renderPage();
+    expect(html).toContain("레거시은행"); expect(html).toContain("333-444"); expect(html).toContain("레거시예금주");
+    expect(mocked.readLegacyConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("never substitutes another completion or generic screen when the capability read fails", async () => {
+    mocked.loadCompletion.mockRejectedValue(new Error("synthetic read failure"));
+    await expect(ReservationApplicationCompletePage()).rejects.toThrow("synthetic read failure");
+    expect(mocked.loadCompletion).toHaveBeenCalledTimes(1); expect(mocked.readLegacyConfig).not.toHaveBeenCalled();
   });
 
   it("fails closed when a valid Phase 20 completion has no DB settings", async () => {

@@ -53,7 +53,7 @@ export default async function ReservationApplicationCompletePage() {
     : completionDbConfig ?? genericDbConfig ?? legacyConfig;
 
   return (
-    <section className="space-y-6">
+    <section className="min-w-0 space-y-6">
       {access.operatorSession ? <TestSessionBanner /> : null}
       <Card>
         <CardContent className="space-y-2 p-6">

@@ -20,6 +20,7 @@ export async function installClipboardVerification(page: Page): Promise<void> {
     type Attempt = { ordinal: number; readyStateAtClick: DocumentReadyState; focusAtClick: boolean; clickSeen: boolean; called: number; resolved: number; rejected: number; callMs: number | null; settleMs: number | null; focusAtCall: boolean; focusAtSettle: boolean; statusBefore: boolean; successSeen: boolean; errorSeen: boolean; statusMs: number | null; started: number };
     const attempts: Attempt[] = [];
     let current: Attempt | undefined;
+    let currentControl: HTMLElement | null = null;
     const elapsed = (item: Attempt) => Math.min(15_000, Math.round(performance.now() - item.started));
     const clipboard = navigator.clipboard;
     const descriptor = Object.getOwnPropertyDescriptor(clipboard, "writeText");
@@ -33,17 +34,19 @@ export async function installClipboardVerification(page: Page): Promise<void> {
       return promise;
     };
     const click = (event: Event) => {
-      const text = (event.target as Element | null)?.closest("button")?.textContent?.trim();
-      const ordinal = ["계좌번호 복사", "금액 복사", "입금자명 복사"].indexOf(text ?? "") + 1;
+      const button = (event.target as Element | null)?.closest("button");
+      const text = button?.textContent?.trim();
+      const ordinal = ["계좌번호 복사", "입금액 복사", "입금자명 복사"].indexOf(text ?? "") + 1;
       if (!ordinal || attempts.length >= 4) return;
-      current = { ordinal, readyStateAtClick: document.readyState, focusAtClick: document.hasFocus(), clickSeen: true, called: 0, resolved: 0, rejected: 0, callMs: null, settleMs: null, focusAtCall: false, focusAtSettle: false, statusBefore: document.querySelector('[role="status"]') !== null, successSeen: false, errorSeen: false, statusMs: null, started: performance.now() };
+      currentControl = button?.parentElement ?? null;
+      current = { ordinal, readyStateAtClick: document.readyState, focusAtClick: document.hasFocus(), clickSeen: true, called: 0, resolved: 0, rejected: 0, callMs: null, settleMs: null, focusAtCall: false, focusAtSettle: false, statusBefore: currentControl?.querySelector('[role="status"]') != null, successSeen: false, errorSeen: false, statusMs: null, started: performance.now() };
       attempts.push(current);
     };
     const observer = new MutationObserver(() => {
       if (!current) return;
-      const text = document.querySelector('[role="status"]')?.textContent?.trim();
-      if (text === "복사했습니다.") { current.successSeen = true; current.statusMs = elapsed(current); }
-      if (text === "복사하지 못했습니다. 길게 눌러 복사해주세요.") { current.errorSeen = true; current.statusMs = elapsed(current); }
+      const text = currentControl?.querySelector('[role="status"]')?.textContent?.trim();
+      if (text === ["계좌번호를 복사했습니다.", "입금액을 복사했습니다.", "입금자명을 복사했습니다."][current.ordinal - 1]) { current.successSeen = true; current.statusMs = elapsed(current); }
+      if (currentControl?.querySelector('[role="alert"]')?.textContent?.trim() === "복사하지 못했습니다. 직접 선택해서 복사해 주세요.") { current.errorSeen = true; current.statusMs = elapsed(current); }
     });
     observer.observe(document, { childList: true, subtree: true, characterData: true });
     document.addEventListener("click", click, true);

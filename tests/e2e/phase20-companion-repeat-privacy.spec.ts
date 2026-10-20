@@ -66,9 +66,13 @@ async function submitNewGuardian(page: Page, input: { path: string; guardian: st
 
 async function issueCompanionUrl(page: Page) {
   const previous = await page.evaluate(() => navigator.clipboard.readText());
-  await clickAndExpectPhase20Action(page, page.getByRole("button", { name: "동행 초대 링크 만들기", exact: true }), page.getByRole("status").filter({ hasText: /^동행 초대 링크를 만들었습니다\.$/ }), Date.now, "INVITE_ISSUE");
+  // Each boundary scenario intentionally requests a different invitation: explicitly
+  // cancel the held link before creating the next instead of silently reissuing it.
+  const cancel = page.getByRole("button", { name: "초대 취소", exact: true });
+  if (await cancel.isVisible()) await clickAndExpectPhase20Action(page, cancel, page.getByRole("status").filter({ hasText: /^친구 보호자 초대 링크를 취소했습니다\.$/ }), Date.now, "INVITE_REVOKE");
+  await clickAndExpectPhase20Action(page, page.getByRole("button", { name: "초대 링크 만들기", exact: true }), page.getByRole("status").filter({ hasText: /^친구 보호자 초대 링크를 만들었습니다\.$/ }), Date.now, "INVITE_ISSUE");
   await page.getByRole("button", { name: "초대 링크 복사" }).click();
-  await expect(page.getByRole("status")).toHaveText("복사했습니다.");
+  await expect(page.getByRole("status").filter({ hasText: /^초대 링크를 복사했습니다\.$/ })).toHaveText("초대 링크를 복사했습니다.");
   const current = await page.evaluate(() => navigator.clipboard.readText());
   expect(current !== previous).toBe(true);
   return current;
@@ -150,7 +154,7 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
     const expiredContext = await isolatedPublicContext(browser); contexts.push(expiredContext); const expiredPage = await expiredContext.newPage(); await expiredPage.goto(expiredInviteUrl);
     await expectClosedApplicationNotice(expiredPage);
     const revokedInviteUrl = await issueCompanionUrl(page);
-    await clickAndExpectPhase20Action(page, page.getByRole("button", { name: "초대 취소", exact: true }), page.getByRole("status").filter({ hasText: /^동행 초대 링크를 취소했습니다\.$/ }), Date.now, "INVITE_REVOKE");
+    await clickAndExpectPhase20Action(page, page.getByRole("button", { name: "초대 취소", exact: true }), page.getByRole("status").filter({ hasText: /^친구 보호자 초대 링크를 취소했습니다\.$/ }), Date.now, "INVITE_REVOKE");
     const revokedContext = await isolatedPublicContext(browser); contexts.push(revokedContext); const revokedPage = await revokedContext.newPage(); await revokedPage.goto(revokedInviteUrl);
     await expectClosedApplicationNotice(revokedPage);
     recordPhase20Stage("INVITE_BOUNDARIES", testStartedAt);

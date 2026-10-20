@@ -105,19 +105,24 @@ test.describe("Phase 20 finance and return browser flow", () => {
       await installClipboardVerification(page);
       await submitPublicFlow(page, fixture);
       recordPhase20Stage("INITIAL_COMPLETION", testStartedAt);
-      for (const value of [fixture.prices[0].toLocaleString("ko-KR") + "원", fixture.prices[1].toLocaleString("ko-KR") + "원", "22,000원", "테스트은행", "000000", fixture.marker]) await expect(page.getByText(value, { exact: true })).toBeVisible();
+      const quotedAmounts = page.getByRole("region", { name: "신청 금액", exact: true });
+      for (const value of [fixture.prices[0].toLocaleString("ko-KR") + "원", fixture.prices[1].toLocaleString("ko-KR") + "원", "22,000원"]) await expect(quotedAmounts.getByText(value, { exact: true })).toBeVisible();
+      await expect(page.getByText("테스트은행", { exact: true })).toBeVisible();
+      await expect(page.getByRole("textbox", { name: "계좌번호 복사 값", exact: true })).toHaveValue("000000");
+      await expect(page.getByRole("textbox", { name: "입금자명 복사 값", exact: true })).toHaveValue(fixture.marker);
       try {
-        for (const [name, expectedClipboard] of [["계좌번호 복사", "000000"], ["금액 복사", "22000"], ["입금자명 복사", fixture.marker]] as const) {
+        for (const [name, expectedClipboard, message] of [["계좌번호 복사", "000000", "계좌번호를 복사했습니다."], ["입금액 복사", "22000", "입금액을 복사했습니다."], ["입금자명 복사", fixture.marker, "입금자명을 복사했습니다."]] as const) {
           await page.getByRole("button", { name }).click();
-          await expect(page.getByRole("status")).toHaveText("복사했습니다.");
+          await expect(page.getByRole("status").filter({ hasText: message })).toHaveText(message);
           expect(await page.evaluate(() => navigator.clipboard.readText()) === expectedClipboard).toBe(true);
         }
       } finally { await finishClipboardVerification(page); }
-      await page.getByRole("button", { name: "입금했어요" }).click();
-      await expect(page.getByRole("status")).toContainText("입금 알림을 기록했습니다");
+      await page.getByRole("button", { name: "입금했어요" }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+      await expect(page.getByRole("status").filter({ hasText: "입금 알림을 보냈습니다." })).toHaveText("입금 알림을 보냈습니다. 운영자 확인을 기다려주세요.");
       const notifiedOnce = await prisma.reservationApplicationSubmission.findFirstOrThrow({ where: { groupId: fixture.groupId }, select: { depositNotifiedAt: true } });
-      await page.getByRole("button", { name: "입금했어요" }).click();
-      await expect(page.getByRole("status")).toContainText("입금 알림을 기록했습니다");
+      await page.reload();
+      await expect(page.getByRole("button", { name: "입금했어요", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("status")).toHaveText("입금 알림을 보냈습니다. 운영자 확인을 기다려주세요.");
 
       const submission = await prisma.reservationApplicationSubmission.findFirstOrThrow({
         where: { groupId: fixture.groupId },

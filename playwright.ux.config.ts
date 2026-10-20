@@ -17,6 +17,7 @@ export default defineConfig({
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
     { name: "mobile-webkit-360", use: { ...devices["iPhone 13"], viewport: { width: 360, height: 780 } } },
     { name: "mobile-webkit-390", use: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 } } },
+    { name: "tablet-webkit-768", use: { ...devices["iPad Mini"], viewport: { width: 768, height: 1024 } } },
   ],
   webServer: { command: "npm run dev", url: baseURL, reuseExistingServer: false },
 });
