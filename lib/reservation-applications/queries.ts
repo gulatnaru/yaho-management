@@ -1,4 +1,6 @@
 import { Prisma } from "@prisma/client";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { countPendingApplicationFamilies, findPossibleDuplicateApplicationIds } from "./family-queries";
 import { prisma } from "@/lib/db/prisma";
 import { rankChildCandidates, type ApplicationChildCandidate, type ChildCandidateRow } from "./candidates";
 import { findDuplicateApplicationIds } from "./duplicates";
@@ -76,6 +78,7 @@ export async function listReservationApplications({
   status: ApplicationListStatus;
   page: number;
 }) {
+  await requireAdminPrincipal();
   const where = buildApplicationListWhere(status);
   const [records, total] = await Promise.all([
     prisma.reservationApplication.findMany({
@@ -87,8 +90,8 @@ export async function listReservationApplications({
     }),
     prisma.reservationApplication.count({ where }),
   ]);
-  const duplicateIds = await findDuplicateIdsForClasses(records.map((record) => record.classScheduleId));
 
+  const duplicateIds = await findPossibleDuplicateApplicationIds(records.map((record) => record.id));
   const applications: ApplicationListRow[] = records.map((record) => ({
     ...record,
     isPossibleDuplicate: duplicateIds.has(record.id),
@@ -103,7 +106,7 @@ export async function listReservationApplications({
 }
 
 export async function countPendingReservationApplications(): Promise<number> {
-  return prisma.reservationApplication.count({ where: { status: "SUBMITTED" } });
+  return (await countPendingApplicationFamilies()).families;
 }
 
 const APPLICATION_DETAIL_SELECT = {

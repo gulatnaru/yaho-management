@@ -38,7 +38,7 @@ describe("ClassDetailPage inventory boundary", () => {
     expect(html.indexOf("기본 정보")).toBeLessThan(html.indexOf("application-link-card"));
     expect(html.indexOf("application-link-card")).toBeLessThan(html.indexOf("보험 및 안전 정보"));
     expect(html).toContain("입금 안내 설정 필요"); expect(html).toContain("동의 문구 준비 필요"); expect(html).toContain("현재 환경 일반 공개 접근");
-    expect(html).toContain("신청 목록 보기 · 전체 클래스"); expect(html).toContain('href="/reservation-applications"'); expect(html).not.toContain("reservation-applications?classScheduleId=");
+    expect(html).toContain("신청 목록 보기 · 전체 클래스"); expect(html).toContain('href="/reservation-applications"'); expect(html).toContain("reservation-applications?classScheduleId=class-1");
   });
   it("retains basic class info and explicit retry on inventory failure without a false no-link or issue action", async () => {
     mocks.inventory.mockRejectedValueOnce(new Error("private DB failure"));

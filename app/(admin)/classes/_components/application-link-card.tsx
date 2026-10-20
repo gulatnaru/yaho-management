@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CopyControl } from "@/components/application-ux/copy-control";
 import { FormFeedback } from "@/components/application-ux/form-feedback";
 import type { ClassLinkOperation, ClassLinkReceipt } from "@/server/reservation-applications/groups";
+import { familyListHref } from "@/lib/reservation-applications/navigation";
 import { ApplicationPriceForm } from "./application-price-form";
 import { IssuedLinkControls, MultiClassLinkComposer } from "./multi-class-link-composer";
 import { LinkImpactConfirmation, type LinkIntent } from "./link-impact-confirmation";
@@ -121,6 +122,7 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
       </div>; })}
       {legacyUnresolved ? <Button disabled={pending} onClick={() => { if (legacyAttempt.current) runLegacy(legacyAttempt.current); }} type="button">같은 기존 링크 작업 결과 확인</Button> : null}
       <FormFeedback error={error} notice={notice} />
+      <Link className="inline-block min-h-11 py-2 text-sm underline" href={familyListHref({ classScheduleId })}>이 클래스 신청 보기</Link>
       <Link className="inline-block min-h-11 py-2 text-sm underline" href="/reservation-applications">신청 목록 보기 · 전체 클래스</Link>
       <details><summary className="min-h-11 cursor-pointer py-2 font-medium">고급 설정 펼치기</summary>
         <div className="space-y-4 pt-2">

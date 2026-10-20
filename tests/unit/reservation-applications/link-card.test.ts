@@ -58,7 +58,7 @@ describe("truthful ADMIN link card", () => {
   });
   it("keeps existing application navigation for cancelled classes", () => {
     const html = render({ ...view, canIssue: false, scopes: [{ ...view.scopes[0]!, readiness: { ...readiness, classIntake: "CANCELLED" } }] });
-    expect(html).toContain("클래스 상태로 신규 접수 불가"); expect(html).toContain("신청 목록 보기 · 전체 클래스"); expect(html).toContain('href="/reservation-applications"'); expect(html).not.toContain("reservation-applications?classScheduleId="); expect(html).not.toContain(">링크 발급<");
+    expect(html).toContain("클래스 상태로 신규 접수 불가"); expect(html).toContain("신청 목록 보기 · 전체 클래스"); expect(html).toContain('href="/reservation-applications"'); expect(html).toContain("reservation-applications?classScheduleId=class-1"); expect(html).not.toContain(">링크 발급<");
   });
 });
 

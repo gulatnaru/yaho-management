@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/auth/authorization", () => ({ requireAdminPrincipal: vi.fn().mockResolvedValue({ role: "ADMIN" }) }));
 vi.mock("@/lib/reservation-applications/link-queries", () => ({ getClassApplicationLinks: vi.fn() }));
 
 const applicationFindMany = vi.fn();
 const applicationFindUnique = vi.fn();
 const applicationCount = vi.fn();
+const applicationDuplicateQuery = vi.fn();
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
+    $queryRaw: (...args: unknown[]) => applicationDuplicateQuery(...args),
     reservationApplication: {
       findMany: (...args: unknown[]) => applicationFindMany(...args),
       findUnique: (...args: unknown[]) => applicationFindUnique(...args),
@@ -34,9 +37,11 @@ describe("reservation application duplicate queries", () => {
     applicationFindMany.mockReset();
     applicationFindUnique.mockReset();
     applicationCount.mockReset();
+    applicationDuplicateQuery.mockReset();
+    applicationDuplicateQuery.mockResolvedValue([{ id: "new-a" }, { id: "new-b" }, { id: "legacy" }]);
   });
 
-  it("matches Phase 20 parent guardian phones while retaining legacy phones and excluding different or purged facts", async () => {
+  it("keeps the compatibility child projection minimal without duplicate-comparison PII", async () => {
     applicationFindMany
       .mockResolvedValueOnce([listRecord("new-a"), listRecord("new-b"), listRecord("legacy")])
       .mockResolvedValueOnce([
@@ -55,12 +60,10 @@ describe("reservation application duplicate queries", () => {
       ["new-b", true],
       ["legacy", true],
     ]);
-    const duplicateQuery = applicationFindMany.mock.calls[1]![0];
-    expect(duplicateQuery.where).toMatchObject({
-      personalDataPurgedAt: null,
-      OR: [{ submissionId: null }, { submission: { is: { personalDataPurgedAt: null } } }],
-    });
-    expect(duplicateQuery.select.submission).toEqual({ select: { guardianPhone: true } });
+    expect(applicationFindMany).toHaveBeenCalledTimes(1);
+    expect(applicationDuplicateQuery).toHaveBeenCalledTimes(1);
+    expect(applicationDuplicateQuery.mock.calls[0]![0].text).toContain("SELECT a.id");
+    expect(applicationFindMany.mock.calls[0]![0].select).not.toHaveProperty("guardianPhone");
   });
 
   it("marks the detail duplicate from its parent guardian phone without exposing that parent fact in the list DTO", async () => {

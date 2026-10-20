@@ -17,6 +17,7 @@ import {
   getReservationApplicationDetail,
   listChildCandidatesForApplication,
 } from "@/lib/reservation-applications/queries";
+import { familyReturnHref, familyDetailHref, type ApplicationSearchParams } from "@/lib/reservation-applications/navigation";
 import { toTelHref } from "@/lib/shared/contact";
 import { ApplicationConfirmForm, type ApplicationChildOption } from "../_components/application-confirm-form";
 import { ApplicationResolveForm } from "../_components/application-resolve-form";
@@ -45,9 +46,10 @@ function AgreementBadge({ agreed, agreedLabel = "동의", declinedLabel = "미�
   return <Badge variant={agreed ? "success" : "secondary"}>{agreed ? agreedLabel : declinedLabel}</Badge>;
 }
 
-export default async function ReservationApplicationDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ReservationApplicationDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<ApplicationSearchParams> }) {
   await requireAdminPrincipal();
   const { id } = await params;
+  const context = await searchParams ?? {};
   const application = await getReservationApplicationDetail(id);
   if (!application) notFound();
 
@@ -83,7 +85,7 @@ export default async function ReservationApplicationDetailPage({ params }: { par
 
   return (
     <section className="space-y-6">
-      <Link className="text-sm text-slate-500 hover:underline" href="/reservation-applications">
+      <Link className="text-sm text-slate-500 hover:underline" href={familyReturnHref(application.submissionId ? "submission" : "legacy", application.submissionId ?? application.id, context)}>
         신청 목록으로
       </Link>
 
@@ -261,7 +263,7 @@ export default async function ReservationApplicationDetailPage({ params }: { par
             {isSubmissionApplication && application.submission ? (
               <div className="space-y-2" data-testid="submission-application-finance-link">
                 <p className="text-sm text-slate-600">보호자 {application.submission.guardianName ?? "파기됨"} · 신고 입금자 {application.submission.declaredPayerName ?? "파기됨"}의 입금과 선택 확정은 가족 신청 단위에서 처리합니다.</p>
-                <Link className="text-sm underline" href={`/reservation-applications/submissions/${application.submission.id}`}>가족 신청의 입금·확정 내역 보기</Link>
+                <Link className="text-sm underline" href={familyDetailHref("submission", application.submission.id, context)}>가족 신청의 입금·확정 내역 보기</Link>
               </div>
             ) : canConfirm ? (
               <ApplicationConfirmForm

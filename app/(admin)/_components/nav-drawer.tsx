@@ -73,7 +73,7 @@ export function NavDrawer({ items, userLabel, children }: NavDrawerProps) {
       {children}
 
       {/* 데스크톱(md 이상): 상단 가로 네비게이션 */}
-      <nav className="hidden items-center gap-4 text-sm md:flex">
+      <nav className="hidden min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-sm md:flex">
         {items.map((item) => (
           <Link className="text-slate-600 hover:underline" href={item.href} key={item.href}>
             {item.label}
