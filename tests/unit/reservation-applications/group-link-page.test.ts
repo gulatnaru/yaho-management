@@ -1,4 +1,5 @@
 import * as React from "react";
+vi.mock("@/server/reservation-applications/groups", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/server/reservation-applications/groups")>()), readClassLinkRevision: vi.fn(async () => "a".repeat(64)) }));
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

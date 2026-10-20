@@ -1,10 +1,11 @@
 "use server";
 
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { requireAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { readFormString } from "@/lib/forms/form-data";
 import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
@@ -569,4 +570,20 @@ export async function cancelClass(
   revalidatePath("/classes");
   revalidatePath(`/classes/${id}`);
   redirect(`/classes/${id}`);
+}
+
+
+/** ADMIN price CAS: this write deliberately cannot carry any other class fields. */
+export async function saveApplicationPrice(input: unknown): Promise<{ error?: string; revision?: string }> {
+  await requireAdminPrincipal();
+  const parsed = z.object({ classScheduleId: z.string().min(1).max(200), revision: z.string().datetime(), applicationPrice: z.number().int().positive().max(2147483647) }).strict().safeParse(input);
+  if (!parsed.success) return { error: "신청금액은 1원 이상의 정수로 입력해 주세요." };
+  try {
+    const nextRevision = new Date(Math.max(Date.now(), Date.parse(parsed.data.revision) + 1));
+    const result = await prisma.classSchedule.updateMany({ where: { id: parsed.data.classScheduleId, updatedAt: new Date(parsed.data.revision), status: "SCHEDULED", startsAt: { gt: new Date() } }, data: { applicationPrice: parsed.data.applicationPrice, updatedAt: nextRevision } });
+    if (result.count !== 1) return { error: "다른 관리자가 변경했거나 접수가 종료되었습니다. 다시 불러와 현재 가격을 확인해 주세요." };
+    revalidatePath(`/classes/${parsed.data.classScheduleId}`);
+    revalidatePath("/reservation-applications/groups", "layout");
+    return { revision: nextRevision.toISOString() };
+  } catch { return { error: "신청금액을 저장하지 못했습니다. 입력을 유지한 채 다시 시도해 주세요." }; }
 }

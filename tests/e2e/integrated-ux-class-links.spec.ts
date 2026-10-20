@@ -4,8 +4,8 @@ import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 
-// Read-only admission: operators supply existing synthetic fixtures and authenticated
-// storage states. This Phase never creates fixtures, signs in, rotates tokens or cleans DB rows.
+// Local-only admission: operators supply synthetic fixtures and authenticated states.
+// Phase 1 remains read-only; Phase 2 mutations are restricted to explicitly supplied run-owned classes.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
 const fixtureSchema = z.object({
@@ -55,14 +55,14 @@ test.describe("Phase 1 existing synthetic class inventory (read only)", () => {
       await expect(card).toContainText("클래스 상태로 신규 접수 불가");
       await expect(card.getByRole("link", { name: "신청 목록 보기 · 전체 클래스" })).toBeVisible();
       await expect(card.getByRole("link", { name: "신청 목록 보기 · 전체 클래스" })).toHaveAttribute("href", "/reservation-applications");
-      await expect(card.getByRole("button", { name: "링크 발급", exact: true })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "신청 링크 발급", exact: true })).toHaveCount(0);
     }
     await page.goto(`/classes/${fixtures!.stopped}`);
     await expect(card).toContainText("접수 중지");
     await expect(card.getByRole("button", { name: "링크 복사", exact: true })).toHaveCount(0);
     await page.goto(`/classes/${fixtures!.noLink}`);
     await expect(card).toContainText("미발급");
-    await expect(card.getByRole("button", { name: "링크 발급", exact: true })).toBeVisible();
+    await expect(card.getByRole("button", { name: "신청 링크 발급", exact: true })).toBeVisible();
     await expect(card.getByRole("link", { name: "신청 화면 확인" })).toHaveCount(0);
     expect(await fingerprint()).toBe(before);
   });
@@ -128,3 +128,61 @@ for (const role of ["MANAGER", "TEACHER"] as const) {
     });
   });
 }
+
+
+const phase2Schema = z.object({ ownerPrefix: z.string().regex(/^ux2-[a-zA-Z0-9-]+$/), priceClass: z.string().min(1), additionalClass: z.string().min(1) });
+const phase2 = process.env.UX_PHASE2_CLASS_FIXTURES ? phase2Schema.parse(JSON.parse(process.env.UX_PHASE2_CLASS_FIXTURES)) : null;
+if (phase2 && [phase2.priceClass, phase2.additionalClass].some((id) => !id.startsWith(`${phase2.ownerPrefix}-`))) throw new Error("UX_PHASE2_RUN_OWNERSHIP_REQUIRED");
+
+test.describe.serial("Phase 2 dedicated local synthetic issuance", () => {
+  test.skip(!phase2 || !states.ADMIN, "BLOCKED: run-owned UX_PHASE2_CLASS_FIXTURES and local ADMIN state required; no Preview/Production substitute.");
+  test.use({ storageState: states.ADMIN });
+  test("inline price → atomic issue → safe copy/share/open → metadata-only revisit → scoped dialogs", async ({ page, context }) => {
+    const id = phase2!.priceClass;
+    // Fixtures must be dedicated to this browser project/run and start without links.
+    const existing = await db.reservationApplicationGroup.count({ where: { classes: { some: { classScheduleId: id } } } });
+    test.skip(existing > 0, "Provide fresh synthetic classes for each browser project; never rotate a fixture implicitly.");
+    await page.goto(`/classes/${id}`);
+    const card = page.getByTestId("application-link-card");
+    await card.getByRole("spinbutton", { name: "신청금액 설정 (원)" }).fill("25000");
+    await card.getByRole("button", { name: "신청금액 저장", exact: true }).click();
+    await expect(card).toContainText("25,000원");
+    await card.getByRole("button", { name: "신청 링크 발급", exact: true }).click();
+    const address = card.getByRole("textbox", { name: "신청 링크 주소" });
+    await expect(address).not.toHaveValue("");
+    const raw = await address.inputValue();
+    const group = await db.reservationApplicationGroup.findFirstOrThrow({ where: { classes: { some: { classScheduleId: id } } }, include: { links: true, classes: true } });
+    expect(group.classes.length).toBe(1); expect(group.links.length).toBe(1);
+    expect(group.links[0]?.token === null).toBe(true);
+    const before = await fingerprint();
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new DOMException("Denied", "NotAllowedError"); } } }));
+    await card.getByRole("button", { name: "링크 복사", exact: true }).click();
+    await expect(card.getByRole("alert")).toContainText("주소를 길게 눌러 복사");
+    await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: undefined }));
+    await card.getByRole("button", { name: "공유하기", exact: true }).click();
+    await expect(card).toContainText("공유 기능을 사용할 수 없습니다");
+    await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: async () => { throw new DOMException("Cancelled", "AbortError"); } }));
+    await card.getByRole("button", { name: "공유하기", exact: true }).click();
+    await expect(card).toContainText("공유를 취소했습니다");
+    expect(await page.evaluate((value) => [...Object.values(localStorage), ...Object.values(sessionStorage)].some((entry) => entry.includes(value)), raw)).toBe(false);
+    const popupPromise = page.waitForEvent("popup"); await card.getByRole("link", { name: "신청 화면 확인" }).click();
+    const popup = await popupPromise; await popup.waitForLoadState("domcontentloaded");
+    expect(new URL(popup.url()).origin === new URL(page.url()).origin).toBe(true); expect(new URL(popup.url()).search).toBe(""); await popup.close();
+    expect(await fingerprint()).toBe(before);
+    await page.reload(); await expect(card).toContainText("주소는 발급할 때만 확인할 수 있습니다"); await expect(address).toHaveCount(0);
+    await card.getByText("고급 설정 펼치기", { exact: true }).click();
+    await card.getByRole("button", { name: "링크 교체", exact: true }).click();
+    const dialog = page.getByRole("dialog"); await expect(dialog).toContainText("기존 링크가 무효화됩니다"); await expect(dialog).toContainText("새 주소 재공유 필요");
+    await dialog.getByRole("button", { name: "취소", exact: true }).click(); expect(await fingerprint()).toBe(before);
+    await card.getByRole("button", { name: "신청 접수 중지", exact: true }).click();
+    await expect(dialog).toContainText("신규 신청만 중지"); await dialog.getByRole("button", { name: "신청 접수 중지", exact: true }).click();
+    await expect(card).toContainText("링크 비활성 · 접수 중지");
+    await card.getByRole("button", { name: "접수 재개 및 새 링크 발급" }).click(); await expect(dialog).toContainText("이전 주소는 사용할 수 없습니다");
+    await dialog.getByRole("button", { name: "새 링크로 접수 재개" }).click(); await expect(address).not.toHaveValue("");
+    const current = await db.reservationApplicationLink.findUniqueOrThrow({ where: { id: group.links[0]!.id } }); expect(current.isActive).toBe(false);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // No guardian submission is generated by opening the form.
+    expect(await db.reservationApplicationSubmission.count({ where: { groupId: group.id } })).toBe(0);
+    expect(context.pages().length).toBeGreaterThanOrEqual(1);
+  });
+});

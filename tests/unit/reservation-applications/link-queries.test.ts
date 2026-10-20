@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ admin: vi.fn(), classRead: vi.fn(), links: vi.fn(), groups: vi.fn(), settings: vi.fn(), consent: vi.fn() }));
+const mocks = vi.hoisted(() => ({ admin: vi.fn(), classRead: vi.fn(), classes: vi.fn(), links: vi.fn(), groups: vi.fn(), settings: vi.fn(), consent: vi.fn() }));
 vi.mock("@/lib/reservation-applications/consent-content", () => ({ isConsentContentReady: mocks.consent }));
 vi.mock("@/lib/auth/authorization", () => ({ requireAdminPrincipal: mocks.admin }));
 vi.mock("@/lib/db/prisma", () => ({ prisma: {
-  classSchedule: { findUnique: mocks.classRead }, reservationApplicationLink: { findMany: mocks.links },
+  classSchedule: { findUnique: mocks.classRead, findMany: mocks.classes }, reservationApplicationLink: { findMany: mocks.links },
   reservationApplicationGroup: { findMany: mocks.groups }, reservationApplicationSettings: { findUnique: mocks.settings },
 } }));
-const { getClassApplicationLinks } = await import("@/lib/reservation-applications/link-queries");
+const { getClassApplicationLinks, getLinkCompositionOptions } = await import("@/lib/reservation-applications/link-queries");
 const NOW = new Date("2026-10-20T01:00:00Z");
 const future = new Date("2026-12-01T01:00:00Z");
 const settings = { bankName: "은행", accountNumber: "123", accountHolder: "예금주", blogUrl: "https://example.test/blog", instagramUrl: "https://example.test/photo", kakaoChannelUrl: "https://example.test/chat" };
@@ -21,6 +21,7 @@ beforeEach(() => {
   mocks.admin.mockResolvedValue({ role: "ADMIN" }); mocks.consent.mockReturnValue(true);
   mocks.classRead.mockResolvedValue({ id: "class-1", status: "SCHEDULED", startsAt: future, endsAt: new Date("2026-12-01T02:00:00Z"), applicationPrice: 10000, program: { name: "프로그램" } });
   mocks.links.mockResolvedValue([]); mocks.groups.mockResolvedValue([]); mocks.settings.mockResolvedValue(settings);
+  mocks.classes.mockResolvedValue([]);
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
@@ -116,4 +117,27 @@ it("retains no-link configuration/consent issues instead of hiding them behind e
   vi.stubEnv("VERCEL_ENV", "production");
   mocks.settings.mockResolvedValue(null); mocks.consent.mockReturnValue(false);
   expect(await getClassApplicationLinks("class-1")).toMatchObject({ scopes: [], unissuedReadiness: { issuance: "NONE", guideReady: false, consentReady: false } });
+});
+
+describe("class-context composition options", () => {
+  it("includes the current class when it lies beyond the future-class page", async () => {
+    const current = await mocks.classRead();
+    mocks.classes.mockResolvedValue(Array.from({ length: 100 }, (_, index) => ({ ...current, id: `earlier-${index}` })));
+    const options = await getLinkCompositionOptions("class-1");
+    expect(options).toHaveLength(101);
+    expect(options[0]).toMatchObject({ id: "class-1", eligible: true, applicationPrice: 10000 });
+  });
+  it("keeps a closed current class visible and ineligible instead of offering another class implicitly", async () => {
+    mocks.classRead.mockResolvedValue({ ...(await mocks.classRead()), status: "CANCELLED" });
+    expect(await getLinkCompositionOptions("class-1")).toMatchObject([{ id: "class-1", eligible: false }]);
+  });
+  it("avoids duplicating an already included current class", async () => {
+    mocks.classes.mockResolvedValue([await mocks.classRead()]);
+    expect(await getLinkCompositionOptions("class-1")).toHaveLength(1);
+  });
+  it("denies non-admin composition reads before loading classes", async () => {
+    mocks.admin.mockRejectedValue(new Error("DENIED"));
+    await expect(getLinkCompositionOptions("class-1")).rejects.toThrow("DENIED");
+    expect(mocks.classes).not.toHaveBeenCalled(); expect(mocks.classRead).not.toHaveBeenCalled();
+  });
 });

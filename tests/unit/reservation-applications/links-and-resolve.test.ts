@@ -155,3 +155,17 @@ describe("application resolution core", () => {
     ).rejects.toBeInstanceOf(ApplicationNotPendingError);
   });
 });
+
+
+it("never upgrades an amountless Phase 18 link from Program.defaultPrice or changes past applications", async () => {
+  const update = vi.fn(); const create = vi.fn();
+  const tx = {
+    $queryRaw: vi.fn().mockResolvedValue([{ id: "class-1" }]),
+    reservationApplicationSettings: { findUnique: vi.fn().mockResolvedValue({ bankName: "은행", accountNumber: "123", accountHolder: "예금주", blogUrl: "https://example.test/blog", instagramUrl: "https://example.test/photo", kakaoChannelUrl: "https://example.test/chat" }) },
+    classSchedule: { findUnique: vi.fn().mockResolvedValue({ status: "SCHEDULED", startsAt: FUTURE, applicationPrice: null, program: { defaultPrice: 99999 } }) },
+    reservationApplicationLink: { update }, reservationApplicationGroup: { create }, reservationApplication: { updateMany: update },
+  };
+  const client = { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx) } as never;
+  await expect(upgradeLegacyApplicationLinkCore(client, { classScheduleId: "class-1", actorUserId: "admin", now: NOW, configReady: true })).rejects.toBeInstanceOf(ApplicationLinkClassClosedError);
+  expect(update).not.toHaveBeenCalled(); expect(create).not.toHaveBeenCalled();
+});

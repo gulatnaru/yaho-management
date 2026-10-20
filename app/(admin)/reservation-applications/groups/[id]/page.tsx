@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { GROUP_REVISION_SELECT, linkRevision, readClassLinkRevision } from "@/server/reservation-applications/groups";
 import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { Button } from "@/components/ui/button";
@@ -18,8 +19,11 @@ export const dynamic = "force-dynamic";
 export default async function ReservationApplicationGroupPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ manualSessionError?: string }> }) {
   await requireAdminPrincipal();
   const { id } = await params;
-  const group = await prisma.reservationApplicationGroup.findUnique({ where: { id }, select: { id: true, isActive: true, syntheticRunId: true, syntheticSettings: true, classes: { select: { classSchedule: { select: { id: true, startsAt: true, status: true, applicationPrice: true, program: { select: { name: true } } } } }, orderBy: { classSchedule: { startsAt: "asc" } } }, links: { orderBy: { issuedAt: "desc" }, select: { isActive: true } } } });
+  const group = await prisma.reservationApplicationGroup.findUnique({ where: { id }, select: { id: true, isActive: true, syntheticRunId: true, syntheticSettings: true, classes: { select: { classSchedule: { select: { id: true, startsAt: true, status: true, applicationPrice: true, program: { select: { name: true } } } } }, orderBy: { classSchedule: { startsAt: "asc" } } }, links: { orderBy: { issuedAt: "desc" }, select: { id: true, isActive: true } } } });
   if (!group) notFound();
+  const canonical = await prisma.reservationApplicationGroup.findUnique({ where: { id }, select: GROUP_REVISION_SELECT });
+  const groupRevision = canonical ? linkRevision(canonical) : undefined;
+  const revisions = Object.fromEntries(await Promise.all(group.classes.map(async ({ classSchedule }) => [classSchedule.id, await readClassLinkRevision(prisma, classSchedule.id)])));
   const selected = new Set(group.classes.map((item) => item.classSchedule.id));
   const now = new Date();
   const settings = await prisma.reservationApplicationSettings.findUnique({ where: { id: 1 }, select: {
@@ -53,7 +57,7 @@ export default async function ReservationApplicationGroupPage({ params, searchPa
       </div>)}
       <Link className="inline-block min-h-11 py-2 text-sm underline" href="/reservation-applications">신청 목록 보기 · 전체 클래스</Link>
     </div>
-    <ul className="space-y-2">{group.classes.map((item) => <li className="rounded border p-3" key={item.classSchedule.id}>{item.classSchedule.program.name} · {formatKstDateTime(item.classSchedule.startsAt)} · {item.classSchedule.applicationPrice?.toLocaleString("ko-KR")}원</li>)}</ul><GroupEditForm classes={[...options.values()].sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime()).map((item) => ({ id: item.id, label: `${item.program.name} · ${formatKstDateTime(item.startsAt)}`, applicationPrice: item.applicationPrice, selected: selected.has(item.id), eligible: item.status === "SCHEDULED" && item.startsAt > now && Boolean(item.applicationPrice && item.applicationPrice > 0) }))} groupId={group.id} isActive={group.isActive} /><GroupLinkButton groupId={group.id} isActive={group.isActive} />{process.env.VERCEL_ENV === "preview" ? (
+    <ul className="space-y-2">{group.classes.map((item) => <li className="rounded border p-3" key={item.classSchedule.id}>{item.classSchedule.program.name} · {formatKstDateTime(item.classSchedule.startsAt)} · {item.classSchedule.applicationPrice?.toLocaleString("ko-KR")}원</li>)}</ul><GroupEditForm revision={groupRevision} classes={[...options.values()].sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime()).map((item) => ({ id: item.id, label: `${item.program.name} · ${formatKstDateTime(item.startsAt)}`, applicationPrice: item.applicationPrice, selected: selected.has(item.id), eligible: item.status === "SCHEDULED" && item.startsAt > now && Boolean(item.applicationPrice && item.applicationPrice > 0) }))} groupId={group.id} isActive={group.isActive} /><GroupLinkButton activeLinkIds={group.isActive ? group.links.filter((link) => link.isActive).map((link) => link.id) : []} groupId={group.id} hasLinks={group.links.length > 0} isActive={group.isActive && group.links.some((link) => link.isActive)} members={group.classes.map(({ classSchedule }) => ({ id: classSchedule.id, label: `${classSchedule.program.name} · ${formatKstDateTime(classSchedule.startsAt)}` }))} revision={groupRevision} revisions={revisions} />{process.env.VERCEL_ENV === "preview" ? (
     <Card>
       <CardHeader><CardTitle>모바일 테스트 세션</CardTitle></CardHeader>
       <CardContent className="space-y-3">

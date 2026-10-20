@@ -32,8 +32,8 @@ import {
   applicationResolutionSchema,
 } from "@/lib/validation/reservation-application";
 import { confirmReservationApplicationCore } from "@/server/reservation-applications/confirm";
-import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
-import { createApplicationGroupCore, issueApplicationGroupLinkCore, stopApplicationGroupCore, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
+import { stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
+import { classLinkOperationSchema, issueClassLinkOperationCore, LinkOperationConflictError, LinkRevisionConflictError, LinkSettingsNotReadyError, type ClassLinkReceipt, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { reservationApplicationSettingsSchema, groupCreateSchema, submissionConfirmationSchema } from "@/lib/reservation-applications/phase20-validation";
 import { getReservationApplicationSettings, importLegacyReservationApplicationSettingsCore, isReservationApplicationSettingsReady, saveReservationApplicationSettingsCore } from "@/server/reservation-applications/settings";
 import { ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
@@ -77,30 +77,16 @@ export async function markGroupManualTestSession(groupId: string): Promise<{ err
 }
 
 /** Phase 20 group creation is ADMIN-only and uses the schedule's explicit applicationPrice. */
-export async function createApplicationGroup(formData: FormData): Promise<{ error?: string; groupId?: string }> {
-  const principal = await requireAdminPrincipal();
-  const parsed = groupCreateSchema.safeParse({ classScheduleIds: formData.getAll("classScheduleId") });
-  if (!parsed.success) return { error: "하나 이상의 중복되지 않은 클래스를 선택해주세요." };
-  try {
-    const result = await createApplicationGroupCore(prisma, { classScheduleIds: parsed.data.classScheduleIds, actorUserId: principal.userId, now: new Date() });
-    revalidatePath("/reservation-applications/groups");
-    return result;
-  } catch (error) {
-    console.error("[reservation-applications] failed to create group:", describeErrorForLog(error));
-    return { error: "가격이 설정된 미래 예정 클래스만 그룹에 넣을 수 있습니다." };
-  }
+export async function createApplicationGroup(_formData: FormData): Promise<{ error?: string; groupId?: string }> {
+  await requireAdminPrincipal();
+  void _formData;
+  return { error: "그룹과 첫 링크를 함께 발급하도록 새 화면을 다시 불러와 주세요." };
 }
 
-export async function issueApplicationGroupLink(groupId: string): Promise<{ error?: string; token?: string }> {
-  const principal = await requireAdminPrincipal();
-  try {
-    const result = await issueApplicationGroupLinkCore(prisma, { groupId, actorUserId: principal.userId, now: new Date() });
-    revalidatePath(`/reservation-applications/groups/${groupId}`);
-    return result;
-  } catch (error) {
-    console.error("[reservation-applications] failed to issue group link:", describeErrorForLog(error));
-    return { error: "가격이 설정된 미래 예정 클래스 그룹만 접수 링크를 만들 수 있습니다." };
-  }
+export async function issueApplicationGroupLink(_groupId: string): Promise<{ error?: string; token?: string }> {
+  await requireAdminPrincipal();
+  void _groupId;
+  return { error: "링크 작업과 현재 범위를 확인하도록 화면을 다시 불러와 주세요." };
 }
 
 /** Membership edits affect only future submissions. Existing submitted quotes remain immutable. */
@@ -109,7 +95,10 @@ export async function updateApplicationGroup(groupId: string, formData: FormData
   const parsed = groupCreateSchema.safeParse({ classScheduleIds: formData.getAll("classScheduleId") });
   if (!parsed.success) return { error: "하나 이상의 중복되지 않은 클래스를 선택해주세요." };
   try {
-    await updateApplicationGroupCore(prisma, { groupId, classScheduleIds: parsed.data.classScheduleIds, now: new Date() });
+    const revision = z.string().regex(/^[a-f0-9]{64}$/).safeParse(formData.get("revision"));
+    if (!revision.success) return { error: "구성 정보를 다시 불러와 주세요." };
+    await updateApplicationGroupCore(prisma, { groupId, classScheduleIds: parsed.data.classScheduleIds, now: new Date(), revision: revision.data });
+    revalidatePath("/classes", "layout");
     revalidatePath(`/reservation-applications/groups/${groupId}`);
     revalidatePath("/reservation-applications/groups");
     return {};
@@ -120,17 +109,10 @@ export async function updateApplicationGroup(groupId: string, formData: FormData
 }
 
 /** Stopping a group invalidates every issued group capability. */
-export async function stopApplicationGroup(groupId: string): Promise<{ error?: string }> {
+export async function stopApplicationGroup(_groupId: string): Promise<{ error?: string }> {
   await requireAdminPrincipal();
-  try {
-    await stopApplicationGroupCore(prisma, { groupId });
-    revalidatePath(`/reservation-applications/groups/${groupId}`);
-    revalidatePath("/reservation-applications/groups");
-    return {};
-  } catch (error) {
-    console.error("[reservation-applications] failed to stop group:", describeErrorForLog(error));
-    return { error: "이미 중지되었거나 없는 그룹입니다." };
-  }
+  void _groupId;
+  return { error: "중지할 클래스 범위와 현재 상태를 확인하도록 화면을 다시 불러와 주세요." };
 }
 
 export async function saveReservationApplicationSettings(formData: FormData): Promise<ApplicationActionResult> {
@@ -236,26 +218,17 @@ function revalidateApplication(applicationId: string) {
 }
 
 /** 클래스 신청 링크 만들기·재발급(ADR-052). 재발급하면 이전 링크는 즉시 무효가 된다. */
-export async function issueApplicationLink(classScheduleId: string): Promise<ApplicationActionResult> {
-  const principal = await requireAdminPrincipal();
-  try {
-    await issueApplicationLinkCore(prisma, { classScheduleId, actorUserId: principal.userId, now: new Date() });
-  } catch (error) {
-    if (error instanceof ApplicationLinkNotFoundError) return { error: "클래스를 찾을 수 없습니다." };
-    if (error instanceof ApplicationLinkClassClosedError) {
-      return { error: "취소되었거나 이미 시작한 클래스는 신청 링크를 만들 수 없습니다." };
-    }
-    console.error("[reservation-applications] failed to issue link:", describeErrorForLog(error));
-    return { error: "신청 링크를 만들지 못했습니다. 다시 시도해주세요." };
-  }
-  revalidatePath(`/classes/${classScheduleId}`);
-  return {};
+export async function issueApplicationLink(_classScheduleId: string): Promise<ApplicationActionResult> {
+  await requireAdminPrincipal();
+  void _classScheduleId;
+  return { error: "새 방식 신청 링크를 안전하게 발급하도록 클래스 화면을 다시 불러와 주세요." };
 }
 
-export async function stopApplicationLink(classScheduleId: string): Promise<ApplicationActionResult> {
+export async function stopApplicationLink(classScheduleId: string, revision?: string): Promise<ApplicationActionResult> {
   await requireAdminPrincipal();
   try {
-    await stopApplicationLinkCore(prisma, { classScheduleId });
+    if (!z.string().min(1).max(200).safeParse(classScheduleId).success || !z.string().regex(/^[a-f0-9]{64}$/).safeParse(revision).success) return { error: "잘못된 요청입니다." };
+    await stopApplicationLinkCore(prisma, { classScheduleId, revision });
   } catch (error) {
     if (error instanceof ApplicationLinkNotFoundError) return { error: "이미 중지되었거나 없는 링크입니다." };
     console.error("[reservation-applications] failed to stop link:", describeErrorForLog(error));
@@ -266,11 +239,12 @@ export async function stopApplicationLink(classScheduleId: string): Promise<Appl
 }
 
 /** ADMIN explicitly upgrades a priced legacy class URL while preserving the same raw capability. */
-export async function upgradeLegacyApplicationLink(classScheduleId: string): Promise<{ error?: string; groupId?: string }> {
+export async function upgradeLegacyApplicationLink(classScheduleId: string, revision?: string): Promise<{ error?: string; groupId?: string }> {
   const principal = await requireAdminPrincipal();
   try {
     const settings = await getReservationApplicationSettings(prisma);
-    const result = await upgradeLegacyApplicationLinkCore(prisma, { classScheduleId, actorUserId: principal.userId, now: new Date(), configReady: Boolean(settings && isReservationApplicationSettingsReady(settings)) });
+    if (!z.string().min(1).max(200).safeParse(classScheduleId).success || !z.string().regex(/^[a-f0-9]{64}$/).safeParse(revision).success) return { error: "잘못된 요청입니다." };
+    const result = await upgradeLegacyApplicationLinkCore(prisma, { revision, classScheduleId, actorUserId: principal.userId, now: new Date(), configReady: Boolean(settings && isReservationApplicationSettingsReady(settings)) });
     revalidatePath(`/classes/${classScheduleId}`);
     return result;
   } catch (error) {
@@ -478,4 +452,24 @@ export async function purgeExpiredPersonalData(): Promise<PersonalDataPurgeActio
   revalidatePath("/reservation-applications/retention");
   revalidatePath("/children");
   return result;
+}
+
+
+/** Capability writes are separate from copying/sharing/opening an already-issued address. */
+export async function issueClassApplicationLink(input: unknown): Promise<Partial<ClassLinkReceipt> & { error?: string; conflict?: boolean }> {
+  const principal = await requireAdminPrincipal();
+  const parsed = classLinkOperationSchema.safeParse(input);
+  if (!parsed.success) return { error: "잘못된 링크 작업입니다. 화면을 다시 불러와 주세요." };
+  try {
+    const result = await issueClassLinkOperationCore(prisma, { ...parsed.data, actorUserId: principal.userId, now: new Date() });
+    revalidatePath("/classes", "layout");
+    revalidatePath("/reservation-applications/groups", "layout");
+    return result;
+  } catch (error) {
+    if (error instanceof LinkOperationConflictError) return { error: "같은 작업 번호에 다른 요청을 사용할 수 없습니다. 현재 상태를 확인해 주세요.", conflict: true };
+    if (error instanceof LinkRevisionConflictError) return { error: "다른 관리자가 가격·구성·링크를 변경했습니다. 다시 불러와 현재 상태를 확인해 주세요.", conflict: true };
+    if (error instanceof LinkSettingsNotReadyError) return { error: "입금 안내 설정과 동의 문구를 먼저 준비해 주세요." };
+    if (error instanceof ApplicationLinkClassClosedError) return { error: "신청금액이 지정된 미래 예정 클래스만 링크를 발급할 수 있습니다." };
+    return { error: "링크 작업 결과를 확인하지 못했습니다. 같은 작업으로 다시 시도하거나 현재 상태를 다시 불러와 주세요. 기존 유효 링크는 유지됩니다." };
+  }
 }

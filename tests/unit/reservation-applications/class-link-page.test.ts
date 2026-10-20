@@ -1,12 +1,13 @@
 import * as React from "react";
+vi.mock("@/app/(admin)/classes/actions", () => ({ saveApplicationPrice: vi.fn() }));
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ principal: vi.fn(), detail: vi.fn(), inventory: vi.fn(), adminReservations: vi.fn(), managerReservations: vi.fn(), teacherReservations: vi.fn() }));
+const mocks = vi.hoisted(() => ({ principal: vi.fn(), detail: vi.fn(), inventory: vi.fn(), options: vi.fn(), adminReservations: vi.fn(), managerReservations: vi.fn(), teacherReservations: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }), notFound: () => { throw new Error("NOT_FOUND"); } }));
 vi.mock("@/lib/auth/authorization", () => ({ requireCurrentPrincipal: mocks.principal }));
 vi.mock("@/lib/classes/queries", () => ({ getClassDetailForPrincipal: mocks.detail }));
-vi.mock("@/lib/reservation-applications/link-queries", () => ({ getClassApplicationLinks: mocks.inventory }));
+vi.mock("@/lib/reservation-applications/link-queries", () => ({ getClassApplicationLinks: mocks.inventory, getLinkCompositionOptions: mocks.options }));
 vi.mock("@/lib/reservations/queries", () => ({ listReservationsByClassSchedule: mocks.adminReservations, listOperationalReservationsByClassSchedule: mocks.managerReservations, listTeacherReservationsByClassSchedule: mocks.teacherReservations }));
 vi.mock("@/app/(admin)/reservation-applications/actions", () => ({ issueApplicationLink: vi.fn(), stopApplicationLink: vi.fn(), upgradeLegacyApplicationLink: vi.fn() }));
 vi.mock("@/app/(admin)/classes/_components/class-participant-list", () => ({ ClassParticipantList: () => null }));
@@ -19,7 +20,7 @@ const detail = { id: "class-1", program: { id: "program-1", name: "테스트 프
 const render = async () => renderToStaticMarkup(await ClassDetailPage({ params: Promise.resolve({ id: "class-1" }) }));
 
 beforeEach(() => {
-  vi.clearAllMocks(); mocks.principal.mockResolvedValue({ role: "ADMIN" }); mocks.detail.mockResolvedValue(detail); mocks.inventory.mockResolvedValue(view);
+  vi.clearAllMocks(); mocks.principal.mockResolvedValue({ role: "ADMIN" }); mocks.detail.mockResolvedValue(detail); mocks.inventory.mockResolvedValue(view); mocks.options.mockResolvedValue([]);
   mocks.adminReservations.mockResolvedValue([]); mocks.managerReservations.mockResolvedValue([]); mocks.teacherReservations.mockResolvedValue([]);
 });
 
@@ -27,7 +28,7 @@ describe("ClassDetailPage inventory boundary", () => {
   it.each(["MANAGER", "TEACHER"])("does not query or serialize application information for %s", async (role) => {
     mocks.principal.mockResolvedValue({ role, teacherId: "teacher-1" });
     const html = await render();
-    expect(mocks.inventory).not.toHaveBeenCalled(); expect(mocks.adminReservations).not.toHaveBeenCalled();
+    expect(mocks.inventory).not.toHaveBeenCalled(); expect(mocks.options).not.toHaveBeenCalled(); expect(mocks.adminReservations).not.toHaveBeenCalled();
     expect(html).not.toContain("987654"); expect(html).not.toContain("application-link-card"); expect(html).not.toContain("reservation-applications"); expect(html).not.toContain("신청");
     expect(role === "MANAGER" ? mocks.managerReservations : mocks.teacherReservations).toHaveBeenCalledTimes(1);
   });

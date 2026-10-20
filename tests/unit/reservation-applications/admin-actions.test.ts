@@ -26,6 +26,7 @@ const createGroupCoreMock = vi.fn();
 const updateGroupCoreMock = vi.fn();
 const stopGroupCoreMock = vi.fn();
 const issueGroupCoreMock = vi.fn();
+const atomicIssueMock = vi.fn();
 const upgradeLegacyCoreMock = vi.fn();
 const saveSettingsCoreMock = vi.fn();
 const importSettingsCoreMock = vi.fn();
@@ -58,7 +59,9 @@ vi.mock("@/server/reservation-applications/links", () => ({
   stopApplicationLinkCore: (...args: unknown[]) => stopCoreMock(...args),
   upgradeLegacyApplicationLinkCore: (...args: unknown[]) => upgradeLegacyCoreMock(...args),
 }));
-vi.mock("@/server/reservation-applications/groups", () => ({
+vi.mock("@/server/reservation-applications/groups", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/reservation-applications/groups")>()),
+  issueClassLinkOperationCore: (...args: unknown[]) => atomicIssueMock(...args),
   createApplicationGroupCore: (...args: unknown[]) => createGroupCoreMock(...args),
   updateApplicationGroupCore: (...args: unknown[]) => updateGroupCoreMock(...args),
   stopApplicationGroupCore: (...args: unknown[]) => stopGroupCoreMock(...args),
@@ -96,7 +99,7 @@ function formData(values: Record<string, string>) {
   return data;
 }
 
-const allCores = [confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock, createGroupCoreMock, updateGroupCoreMock, stopGroupCoreMock, issueGroupCoreMock, upgradeLegacyCoreMock, saveSettingsCoreMock, importSettingsCoreMock, recordDepositCoreMock, recordReturnCoreMock, confirmSubmissionCoreMock];
+const allCores = [atomicIssueMock, confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock, createGroupCoreMock, updateGroupCoreMock, stopGroupCoreMock, issueGroupCoreMock, upgradeLegacyCoreMock, saveSettingsCoreMock, importSettingsCoreMock, recordDepositCoreMock, recordReturnCoreMock, confirmSubmissionCoreMock];
 
 describe("reservation application admin actions", () => {
   beforeEach(() => {
@@ -115,6 +118,7 @@ describe("reservation application admin actions", () => {
     requireAdminMock.mockRejectedValue(new Error("NOT_FOUND"));
 
     const calls = [
+      () => actions.issueClassApplicationLink({}),
       () => actions.issueApplicationLink("class-1"),
       () => actions.stopApplicationLink("class-1"),
       () => actions.confirmApplicationDeposit("application-1"),
@@ -501,15 +505,28 @@ describe("reservation application admin actions", () => {
       expect(inactive.formError).toContain("다시 활성화");
     });
 
-    it("issues and stops class links as the current admin", async () => {
-      issueCoreMock.mockResolvedValueOnce({ token: "n".repeat(32) });
+    it("blocks retired unversioned issuance and locks a versioned legacy stop", async () => {
       stopCoreMock.mockResolvedValueOnce(undefined);
-
-      await expect(actions.issueApplicationLink("class-1")).resolves.toEqual({});
-      await expect(actions.stopApplicationLink("class-1")).resolves.toEqual({});
-
-      expect(issueCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ classScheduleId: "class-1", actorUserId: "admin-1" }));
-      expect(stopCoreMock).toHaveBeenCalledWith(expect.anything(), { classScheduleId: "class-1" });
+      expect((await actions.issueApplicationLink("class-1")).error).toBeTruthy();
+      expect((await actions.issueApplicationGroupLink("group-1")).error).toBeTruthy();
+      expect((await actions.createApplicationGroup(new FormData())).error).toBeTruthy();
+      expect((await actions.stopApplicationLink("class-1")).error).toBeTruthy();
+      expect(issueCoreMock).not.toHaveBeenCalled(); expect(createGroupCoreMock).not.toHaveBeenCalled(); expect(issueGroupCoreMock).not.toHaveBeenCalled();
+      const revision = "a".repeat(64);
+      await expect(actions.stopApplicationLink("class-1", revision)).resolves.toEqual({});
+      expect(stopCoreMock).toHaveBeenCalledWith(expect.anything(), { classScheduleId: "class-1", revision });
     });
   });
+});
+
+
+it("validates atomic issuance and returns only its one-time receipt; metadata replay does not manufacture a token", async () => {
+  requireAdminMock.mockResolvedValue(adminPrincipal);
+  const input = { operationId: crypto.randomUUID(), kind: "single", classScheduleIds: ["class-1"], revisions: { "class-1": "a".repeat(64) } };
+  atomicIssueMock.mockResolvedValueOnce({ groupId: "group", linkId: "link", token: "one-time", replayed: false, active: true });
+  expect(await actions.issueClassApplicationLink(input)).toMatchObject({ token: "one-time", replayed: false });
+  atomicIssueMock.mockResolvedValueOnce({ groupId: "group", linkId: "link", replayed: true, active: false });
+  const replay = await actions.issueClassApplicationLink(input); expect(replay.token).toBeUndefined(); expect(replay.active).toBe(false);
+  const count = atomicIssueMock.mock.calls.length;
+  expect((await actions.issueClassApplicationLink({ ...input, operationId: "invalid" })).error).toBeTruthy(); expect(atomicIssueMock.mock.calls).toHaveLength(count);
 });

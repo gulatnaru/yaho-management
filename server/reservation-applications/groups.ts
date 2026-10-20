@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { isConsentContentReady } from "@/lib/reservation-applications/consent-content";
+import { isReservationApplicationSettingsReady } from "./settings";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { canIssueApplicationLink } from "@/lib/reservation-applications/availability";
 import { ApplicationClosedError, ApplicationLinkClassClosedError, ApplicationLinkNotFoundError } from "@/lib/reservation-applications/errors";
 import { hashApplicationCapabilityToken, generateApplicationCapabilityToken } from "@/lib/reservation-applications/token";
-import type { z } from "zod";
 import { reservationApplicationSettingsSchema, type groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
 
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
@@ -79,7 +82,7 @@ export async function createApplicationGroupCore(
 /** Editing membership only affects future submissions; existing submitted quotes and classes remain immutable. */
 export async function updateApplicationGroupCore(
   client: GroupClient,
-  input: { groupId: string; classScheduleIds: string[]; now: Date },
+  input: { groupId: string; classScheduleIds: string[]; now: Date; revision?: string },
 ): Promise<void> {
   const ids = [...new Set(input.classScheduleIds)].sort();
   if (ids.length === 0 || ids.length !== input.classScheduleIds.length) throw new ApplicationLinkNotFoundError();
@@ -87,9 +90,13 @@ export async function updateApplicationGroupCore(
     await lockGroup(tx, input.groupId);
     const group = await tx.reservationApplicationGroup.findUnique({
       where: { id: input.groupId },
-      select: { classes: { select: { classScheduleId: true } } },
+      select: { updatedAt: true, classes: { select: { classScheduleId: true } } },
     });
     if (!group) throw new ApplicationLinkNotFoundError();
+    if (input.revision) {
+      const current = await tx.reservationApplicationGroup.findUnique({ where: { id: input.groupId }, select: GROUP_REVISION_SELECT });
+      if (!current || linkRevision(current) !== input.revision) throw new LinkRevisionConflictError();
+    }
     const existingIds = group.classes.map((item) => item.classScheduleId);
     const existingSet = new Set(existingIds);
     const lockedIds = [...new Set([...existingIds, ...ids])].sort();
@@ -103,6 +110,9 @@ export async function updateApplicationGroupCore(
     }
     await tx.reservationApplicationGroupClass.deleteMany({ where: { groupId: input.groupId } });
     await tx.reservationApplicationGroupClass.createMany({ data: ids.map((classScheduleId) => ({ groupId: input.groupId, classScheduleId })) });
+    // Membership rows can return to the same set. Advance the parent revision so
+    // an old confirmation cannot become valid again after remove/re-add (ABA).
+    await tx.reservationApplicationGroup.update({ where: { id: input.groupId }, data: { updatedAt: new Date(Math.max(input.now.getTime(), group.updatedAt.getTime() + 1)) } });
   }, TX_OPTIONS);
 }
 
@@ -350,4 +360,99 @@ export async function revokeCompanionInviteCore(
 
 export function isUniqueConstraint(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+
+export class LinkOperationConflictError extends Error {}
+export class LinkRevisionConflictError extends Error {}
+export class LinkSettingsNotReadyError extends Error {}
+
+export const classLinkOperationSchema = z.object({
+  operationId: z.string().uuid(),
+  kind: z.enum(["single", "compose", "issue", "replace", "resume", "stop"]),
+  groupId: z.string().min(1).max(200).optional(),
+  classScheduleIds: z.array(z.string().min(1).max(200)).min(1).max(100),
+  revisions: z.record(z.string().min(1).max(200), z.string().regex(/^[a-f0-9]{64}$/)),
+  groupRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().superRefine((value, ctx) => {
+  const ids = new Set(value.classScheduleIds);
+  if (ids.size !== value.classScheduleIds.length || Object.keys(value.revisions).length !== ids.size || [...ids].some((id) => !value.revisions[id])) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "scope" });
+  if ((value.kind === "single" || value.kind === "compose") ? Boolean(value.groupId) || (value.kind === "single" && ids.size !== 1) : !value.groupId || !value.groupRevision) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "intent" });
+});
+export type ClassLinkOperation = z.infer<typeof classLinkOperationSchema>;
+export type ClassLinkReceipt = { groupId: string; linkId?: string; token?: string; replayed: boolean; active: boolean };
+export function linkRevision(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+
+export const GROUP_REVISION_SELECT = {
+  id: true, isActive: true, updatedAt: true,
+  classes: { select: { classScheduleId: true }, orderBy: { classScheduleId: "asc" as const } },
+  links: { select: { id: true, isActive: true, updatedAt: true }, orderBy: { id: "asc" as const } },
+} as const;
+
+/** Includes class/price changes, direct links, membership and every related group URL. No capability is read. */
+export async function readClassLinkRevision(tx: Pick<Prisma.TransactionClient, "classSchedule" | "reservationApplicationLink" | "reservationApplicationGroup">, classScheduleId: string): Promise<string> {
+  const schedule = await tx.classSchedule.findUnique({ where: { id: classScheduleId }, select: { id: true, updatedAt: true, applicationPrice: true, status: true, startsAt: true } });
+  if (!schedule) throw new ApplicationLinkNotFoundError();
+  const links = await tx.reservationApplicationLink.findMany({ where: { classScheduleId }, select: { id: true, isActive: true, updatedAt: true }, orderBy: { id: "asc" } });
+  const groups = await tx.reservationApplicationGroup.findMany({ where: { OR: [{ classes: { some: { classScheduleId } } }, { upgradedLegacyClassScheduleId: classScheduleId }] }, select: GROUP_REVISION_SELECT, orderBy: { id: "asc" } });
+  return linkRevision({ schedule, links, groups });
+}
+
+/** Namespace encodes actor + operation; the suffix commits immutable intent even after membership edits. */
+export function classLinkOperationIdentity(actorUserId: string, input: ClassLinkOperation) {
+  const prefix = `ux2_${linkRevision([actorUserId, input.operationId])}_`;
+  const digest = linkRevision({ kind: input.kind, groupId: input.groupId ?? null, classScheduleIds: [...input.classScheduleIds].sort(), revisions: Object.entries(input.revisions).sort(([a], [b]) => a.localeCompare(b)), groupRevision: input.groupRevision ?? null });
+  return { prefix, id: `${prefix}${digest}` };
+}
+
+/** One transaction for group, membership and first hash. A replay never returns/reconstructs a token. */
+export async function issueClassLinkOperationCore(client: Pick<PrismaClient, "$transaction">, input: ClassLinkOperation & { actorUserId: string; now: Date; generateToken?: () => string }): Promise<ClassLinkReceipt> {
+  const intent = classLinkOperationSchema.parse({ operationId: input.operationId, kind: input.kind, groupId: input.groupId, classScheduleIds: input.classScheduleIds, revisions: input.revisions, groupRevision: input.groupRevision });
+  const identity = classLinkOperationIdentity(input.actorUserId, intent);
+  const ids = [...intent.classScheduleIds].sort();
+  return client.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity.prefix}, 0))`;
+    const priorGroup = await tx.reservationApplicationGroup.findFirst({ where: { id: { startsWith: identity.prefix } }, select: { id: true } });
+    const priorLink = await tx.reservationApplicationLink.findFirst({ where: { id: { startsWith: identity.prefix } }, select: { id: true, groupId: true, isActive: true } });
+    if (priorGroup && priorGroup.id !== identity.id || priorLink && priorLink.id !== identity.id) throw new LinkOperationConflictError();
+    const isNew = intent.kind === "single" || intent.kind === "compose";
+    const groupId = isNew ? identity.id : intent.groupId!;
+    if (isNew && priorGroup || !isNew && priorLink) {
+      await lockGroup(tx, groupId);
+      const current = await tx.reservationApplicationGroup.findUnique({ where: { id: groupId }, select: { isActive: true } });
+      // The initial lookup preceded the Group lock. Replacement/stop may have
+      // completed while this transaction waited, so reconcile from locked state.
+      const link = await tx.reservationApplicationLink.findUnique({ where: { id: identity.id }, select: { id: true, isActive: true } });
+      return { groupId, linkId: link?.id, replayed: true, active: Boolean(current?.isActive && link?.isActive) };
+    }
+    if (isNew) {
+      // A fresh unreferenced Group is created first; no existing Group is locked after classes.
+      await tx.reservationApplicationGroup.create({ data: { id: groupId, createdById: input.actorUserId }, select: { id: true } });
+    } else {
+      await lockGroup(tx, groupId);
+      const group = await tx.reservationApplicationGroup.findUnique({ where: { id: groupId }, select: GROUP_REVISION_SELECT });
+      if (!group || linkRevision(group) !== intent.groupRevision || JSON.stringify(group.classes.map((row) => row.classScheduleId).sort()) !== JSON.stringify(ids)) throw new LinkRevisionConflictError();
+      const hasActive = group.isActive && group.links.some((row) => row.isActive);
+      if (intent.kind === "replace" && !hasActive || intent.kind === "issue" && group.links.length > 0 || intent.kind === "resume" && hasActive) throw new LinkRevisionConflictError();
+    }
+    await lockClassSchedules(tx, ids);
+    for (const id of ids) if (await readClassLinkRevision(tx, id) !== intent.revisions[id]) throw new LinkRevisionConflictError();
+    if (intent.kind === "stop") {
+      await tx.reservationApplicationGroup.update({ where: { id: groupId }, data: { isActive: false } });
+      await tx.reservationApplicationLink.updateMany({ where: { groupId, isActive: true }, data: { isActive: false } });
+      return { groupId, replayed: false, active: false };
+    }
+    const schedules = await tx.classSchedule.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, startsAt: true, applicationPrice: true } });
+    if (schedules.length !== ids.length || schedules.some((row) => !canIssueApplicationLink(row, input.now) || !row.applicationPrice || row.applicationPrice <= 0)) throw new ApplicationLinkClassClosedError();
+    const settings = await tx.reservationApplicationSettings.findUnique({ where: { id: 1 } });
+    if (!settings || !isReservationApplicationSettingsReady(settings) || !isConsentContentReady(process.env.VERCEL_ENV)) throw new LinkSettingsNotReadyError();
+    if (isNew) await tx.reservationApplicationGroupClass.createMany({ data: ids.map((classScheduleId) => ({ groupId, classScheduleId })) });
+    else {
+      await tx.reservationApplicationGroup.update({ where: { id: groupId }, data: { isActive: true } });
+      await tx.reservationApplicationLink.updateMany({ where: { groupId, isActive: true }, data: { isActive: false } });
+    }
+    const token = (input.generateToken ?? generateApplicationCapabilityToken)();
+    await tx.reservationApplicationLink.create({ data: { id: identity.id, groupId, tokenHash: hashApplicationCapabilityToken(token), isActive: true, issuedAt: input.now, issuedById: input.actorUserId } });
+    return { groupId, linkId: identity.id, token, replayed: false, active: true };
+  }, TX_OPTIONS);
 }

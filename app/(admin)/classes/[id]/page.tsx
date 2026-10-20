@@ -11,7 +11,7 @@ import {
   formatKstTime,
 } from "@/lib/classes/datetime";
 import { getClassDetailForPrincipal } from "@/lib/classes/queries";
-import { getClassApplicationLinks } from "@/lib/reservation-applications/link-queries";
+import { getLinkCompositionOptions, getClassApplicationLinks } from "@/lib/reservation-applications/link-queries";
 import { getClassDisplayStatus, type ClassDisplayStatus } from "@/lib/classes/status";
 import { isUnderStaffed } from "@/lib/classes/teacher-warning";
 import {
@@ -49,7 +49,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
   const principal = await requireCurrentPrincipal();
   const isAdmin = principal.role === "ADMIN";
   const canManage = principal.role !== "TEACHER";
-  const [classDetail, reservations, applicationLink] = await Promise.all([
+  const [classDetail, reservations, applicationLink, compositionOptions] = await Promise.all([
     getClassDetailForPrincipal(id, principal),
     isAdmin
       ? listReservationsByClassSchedule(id)
@@ -58,6 +58,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
         : listTeacherReservationsByClassSchedule(id, principal),
     // 예약 신청 링크는 ADMIN 전용이다(ADR-053). 다른 역할은 조회하지도 않는다.
     isAdmin ? getClassApplicationLinks(id).catch(() => null) : Promise.resolve(null),
+    isAdmin ? getLinkCompositionOptions(id).catch(() => null) : Promise.resolve(null),
   ]);
   if (!classDetail) notFound();
 
@@ -138,7 +139,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
       </Card>
 
       {isAdmin ? (
-        <ApplicationLinkCard classScheduleId={id} view={applicationLink} />
+        <ApplicationLinkCard classScheduleId={id} options={compositionOptions} view={applicationLink} />
       ) : null}
 
       <Card>
