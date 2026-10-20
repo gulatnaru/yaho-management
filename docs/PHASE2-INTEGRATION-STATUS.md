@@ -2,11 +2,13 @@
 
 Final verification follow-up to `e61aa87`; local audit on 2026-10-20. **The PostgreSQL/browser release gate remains BLOCKED.** No Preview, Production, or Supabase database was accessed. No database was created, connected to, seeded, or migrated during this audit. No schema/migration file was changed.
 
+The current PostgreSQL execution plan is the [GitHub Actions service-container workflow](../.github/workflows/phase2-integration.yml), replacing the local/Windows provisioning plan. It has not yet run: all 12 PostgreSQL cases remain **UNEXECUTED / BLOCKED** pending actual CI evidence. Historical local audit results and provisioning failures below explain the switch; they are not CI results.
+
 | Verification | Execution status | Evidence / limitation |
 |---|---|---|
 | Legacy reissue code + unit flow | **PASS — code/unit only** | Six new unit cases cover success, recovered copy/share handlers, old-token refusal, lost response/read failure, possible committed error, no-commit reload, and upgrade guidance. DB/browser behavior remains unverified. |
 | Advisory lock on actual PostgreSQL 16 | **UNEXECUTED / BLOCKED** | Installed Prisma client is **6.19.3**. `issueClassLinkOperationCore()` still uses transactional `$executeRaw` with `SELECT pg_advisory_xact_lock(...)`. No actual PostgreSQL call succeeded or failed; no speculative SQL change or lock-order change was made. |
-| Original dedicated PostgreSQL suite | **UNEXECUTED / BLOCKED**, all **8** original `it()` cases | PostgreSQL 16 installation and local IPv4 socket creation are blocked by the execution environment; unit mocks cannot prove transactions or locks. |
+| Original dedicated PostgreSQL suite | **UNEXECUTED / BLOCKED**, all **8** original `it()` cases | Awaiting the first GitHub Actions PostgreSQL 16 service-container run; prior local provisioning was blocked. Unit mocks cannot prove transactions or locks. |
 | Follow-up PostgreSQL cases | **UNEXECUTED / BLOCKED**, 4 additional cases (12 total) | Full-edit/inline price race and stale intentional rollback; two-client price CAS; concurrent legacy reissue/lost response; frozen stop retry after resume. |
 | Browser E2E (Playwright) | **NOT EXECUTED / BLOCKED** | No dedicated local test DB/application fixture runtime; IPv4/IPv6 sockets are denied and configured Chromium/WebKit executables are absent. Component interaction units are not browser E2E. |
 | Real Safari | **NOT EXECUTED** | No real Safari/macOS runner available. Playwright WebKit, even if run, would be reported separately from actual Safari. |
@@ -46,9 +48,9 @@ All package/cache paths for these attempts were under `/tmp`; the project depend
 
 Therefore no local PG16 server could be provisioned or started, no `prisma migrate deploy`/`db push` was run, and **zero of the 12 PostgreSQL cases executed**. The advisory-lock call is **unverified**, not an observed SQL failure. The integration runner was not started against an absent or substitute database.
 
-Required environment conditions: PG16 binaries must be pre-provisioned or package downloads permitted; a local user must be able to initialize/start an isolated data directory; IPv4 loopback TCP server/client sockets must be allowed; and port `55432` must be free. Only then create the brand-new role/database and apply the existing migrations as shown below. Browser verification additionally needs the configured browser binaries plus local app and synthetic authenticated fixtures. Real Safari requires a macOS/Safari runner.
+The local provisioning plan is superseded by the GitHub-hosted Ubuntu service-container approach below. Browser verification remains separate and additionally needs the configured browser binaries plus an app and synthetic authenticated fixtures. Real Safari requires a macOS/Safari runner.
 
-| Local PostgreSQL case | Final execution status |
+| PostgreSQL integration case | Final execution status |
 |---|---|
 | 1. Atomic group/membership/hash issuance and metadata-only retry | **UNEXECUTED / BLOCKED** |
 | 2. Mid-transaction insertion failure rolls back all issuance writes | **UNEXECUTED / BLOCKED** |
@@ -63,25 +65,22 @@ Required environment conditions: PG16 binaries must be pre-provisioned or packag
 | 11. Concurrent legacy reissue/lost response never rotates twice | **UNEXECUTED / BLOCKED** |
 | 12. Frozen stop retry after resume cannot stop the new link | **UNEXECUTED / BLOCKED** |
 
-## Required dedicated local setup
+## GitHub Actions service-container execution
 
-Provision an **empty disposable local-only** PostgreSQL database. The safety guard requires host `127.0.0.1` or `localhost`, port `55432`, database `yaho_e2e`, and user `yaho_e2e` for **both** URLs. Remote hosts, Preview/Production, and alternative DB names/users are rejected. Do not use existing Preview/Production credentials or data.
+The workflow [Phase 2 PostgreSQL Integration](../.github/workflows/phase2-integration.yml) runs on `pull_request` and `workflow_dispatch` only, on `ubuntu-latest`, with `contents: read` permissions. Open/update a PR to trigger the first run. Once the workflow is registered on the default branch, select it in GitHub Actions and choose **Run workflow** for a branch containing the workflow to run it manually. It uses no repository secrets.
 
-With Docker installed, an example local-only setup (synthetic disposable password only):
+Each job provisions a new disposable `postgres:16` service with database/user `yaho_e2e`, synthetic CI-only password `ci-synthetic-e2e`, and port mapping `55432:5432`. GitHub waits for `pg_isready -U yaho_e2e -d yaho_e2e` with interval 10 seconds, timeout 5 seconds, and 5 retries. Both `DATABASE_URL` and `DIRECT_URL` point to `postgresql://yaho_e2e:ci-synthetic-e2e@127.0.0.1:55432/yaho_e2e`. The existing local-only safety checks remain unchanged.
 
-```sh
-docker run --name yaho-phase2-pg -d -p 127.0.0.1:55432:5432 \
-  -e POSTGRES_USER=yaho_e2e -e POSTGRES_PASSWORD=local_test_only \
-  -e POSTGRES_DB=yaho_e2e postgres:16
-docker exec yaho-phase2-pg pg_isready -U yaho_e2e -d yaho_e2e
-export DATABASE_URL='postgresql://yaho_e2e:local_test_only@127.0.0.1:55432/yaho_e2e?schema=public'
-export DIRECT_URL="$DATABASE_URL"
-unset VERCEL_ENV PLAYWRIGHT_PREVIEW_E2E
-npx prisma migrate deploy
-npx prisma generate
-npx vitest run --config vitest.integration.config.ts
-```
+The job executes these steps in order:
 
-Wait until `pg_isready` succeeds before deploying the repository's **existing** migrations to that empty dedicated local DB. This is test-environment preparation, not a source schema change. Never run `db push`, `migrate reset`, or any migration against Preview/Production for this task. A native alternative is to install PostgreSQL 16, initialize a private data directory, start it on `127.0.0.1:55432`, create role/database `yaho_e2e`, then use the same URLs and commands above. Do not seed real personal data.
+1. Checkout with `actions/checkout@v4`.
+2. Set up Node 20 and npm caching with `actions/setup-node@v4`.
+3. Install the locked dependencies with `npm ci`.
+4. Generate the Prisma client with `npm run prisma:generate`.
+5. Run `npx tsx scripts/ci/verify-e2e-db.ts`. Before connecting, the script validates both URLs with the existing safety guard. The generated Prisma client queries `version()`, `current_database()`, and `current_user`, and fails unless they identify PostgreSQL major version 16 and database/user `yaho_e2e`.
+6. Apply the repository's existing migrations with `npx prisma migrate deploy` to the ephemeral service database only.
+7. Run `npx vitest run --config vitest.integration.config.ts`, including `tests/integration/reservation-applications/class-link-issuance.test.ts` and its 12 cases.
 
-Capture the runner's full case counts, transaction/race results and date here after actual execution. The integration config and test file independently enforce local DB safety. Fixtures create synthetic run-scoped rows; cleanup deletes only that run's rows and owned settings. Browser E2E additionally needs a local app server and explicit synthetic admin/session fixtures; report it independently. Actual Safari additionally needs a macOS Safari runner and the same local test flow; do not label SSR or WebKit results “Safari PASS”.
+The service and its data are discarded with the job. Fixtures use synthetic run-scoped rows; cleanup deletes only that run's rows and owned settings. No Preview, Production, or Supabase connection is used, and no source schema/migration change is required. The existing quality workflow in `ci.yml` is unchanged.
+
+After the workflow actually runs, capture the run URL, date/commit, PostgreSQL verification, migration result, full case counts, and transaction/race results here. Workflow creation or YAML validation does not change the 12 **UNEXECUTED / BLOCKED** statuses above. Browser E2E, Playwright WebKit, and actual Safari remain separate verification gates; this workflow does not execute them.

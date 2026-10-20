@@ -1,0 +1,53 @@
+name: Phase 2 PostgreSQL Integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: yaho_e2e
+          POSTGRES_USER: yaho_e2e
+          POSTGRES_PASSWORD: ci-synthetic-e2e
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U yaho_e2e -d yaho_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://yaho_e2e:ci-synthetic-e2e@127.0.0.1:55432/yaho_e2e
+      DIRECT_URL: postgresql://yaho_e2e:ci-synthetic-e2e@127.0.0.1:55432/yaho_e2e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma generate
+        run: npm run prisma:generate
+
+      - name: Verify PostgreSQL
+        run: npx tsx scripts/ci/verify-e2e-db.ts
+
+      - name: Apply migrations to ephemeral database
+        run: npx prisma migrate deploy
+
+      - name: Integration tests
+        run: npx vitest run --config vitest.integration.config.ts

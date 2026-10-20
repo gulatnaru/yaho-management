@@ -1,5 +1,7 @@
 # Phase 2 전용 PostgreSQL 테스트 환경 — Windows 실행 절차
 
+> **Superseded:** Phase 2 Integration의 기본 실행 경로는 [GitHub Actions 서비스 컨테이너 방식](PHASE2-INTEGRATION-STATUS.md#github-actions-service-container-execution)입니다. PR 또는 수동 실행으로 전용 PostgreSQL 16을 준비하고 검증·마이그레이션·12건 테스트를 수행합니다. 아래 Windows 절차는 과거 참고용으로 보존하며, 실제 CI 실행 전까지 테스트 상태는 UNEXECUTED / BLOCKED입니다.
+
 - 목적: Phase 2 Integration 12건과 Advisory Lock을 실제 PostgreSQL 16에서 검증
 - 기준 커밋: `7087eb0`
 - 실행 위치: YAHO 개발용 Windows PC (Muse VM에서는 PG 설치·소켓이 차단되어 실행 불가)
