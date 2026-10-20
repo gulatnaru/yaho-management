@@ -2,13 +2,13 @@
 
 Final verification follow-up to `e61aa87`; local audit on 2026-10-20. **The PostgreSQL/browser release gate remains BLOCKED.** No Preview, Production, or Supabase database was accessed. No database was created, connected to, seeded, or migrated during this audit. No schema/migration file was changed.
 
-The current PostgreSQL execution plan is the [GitHub Actions service-container workflow](../.github/workflows/phase2-integration.yml), replacing the local/Windows provisioning plan. It has not yet run: all 12 PostgreSQL cases remain **UNEXECUTED / BLOCKED** pending actual CI evidence. Historical local audit results and provisioning failures below explain the switch; they are not CI results.
+The current PostgreSQL execution plan is the [GitHub Actions service-container workflow](../.github/workflows/phase2-integration.yml), replacing the local/Windows provisioning plan. Its initial CI run failed during migration bootstrap, before integration tests ran: all 12 PostgreSQL cases remain **UNEXECUTED / BLOCKED** pending a successful CI run. Historical local audit results and provisioning failures below explain the switch; they are not CI results.
 
 | Verification | Execution status | Evidence / limitation |
 |---|---|---|
 | Legacy reissue code + unit flow | **PASS — code/unit only** | Six new unit cases cover success, recovered copy/share handlers, old-token refusal, lost response/read failure, possible committed error, no-commit reload, and upgrade guidance. DB/browser behavior remains unverified. |
 | Advisory lock on actual PostgreSQL 16 | **UNEXECUTED / BLOCKED** | Installed Prisma client is **6.19.3**. `issueClassLinkOperationCore()` still uses transactional `$executeRaw` with `SELECT pg_advisory_xact_lock(...)`. No actual PostgreSQL call succeeded or failed; no speculative SQL change or lock-order change was made. |
-| Original dedicated PostgreSQL suite | **UNEXECUTED / BLOCKED**, all **8** original `it()` cases | Awaiting the first GitHub Actions PostgreSQL 16 service-container run; prior local provisioning was blocked. Unit mocks cannot prove transactions or locks. |
+| Original dedicated PostgreSQL suite | **UNEXECUTED / BLOCKED**, all **8** original `it()` cases | CI migration bootstrap failed before tests ran; awaiting a successful PostgreSQL 16 service-container run after the role shim. Prior local provisioning was blocked. Unit mocks cannot prove transactions or locks. |
 | Follow-up PostgreSQL cases | **UNEXECUTED / BLOCKED**, 4 additional cases (12 total) | Full-edit/inline price race and stale intentional rollback; two-client price CAS; concurrent legacy reissue/lost response; frozen stop retry after resume. |
 | Browser E2E (Playwright) | **NOT EXECUTED / BLOCKED** | No dedicated local test DB/application fixture runtime; IPv4/IPv6 sockets are denied and configured Chromium/WebKit executables are absent. Component interaction units are not browser E2E. |
 | Real Safari | **NOT EXECUTED** | No real Safari/macOS runner available. Playwright WebKit, even if run, would be reported separately from actual Safari. |
@@ -67,7 +67,11 @@ The local provisioning plan is superseded by the GitHub-hosted Ubuntu service-co
 
 ## GitHub Actions service-container execution
 
-The workflow [Phase 2 PostgreSQL Integration](../.github/workflows/phase2-integration.yml) runs on `pull_request` and `workflow_dispatch` only, on `ubuntu-latest`, with `contents: read` permissions. Open/update a PR to trigger the first run. Once the workflow is registered on the default branch, select it in GitHub Actions and choose **Run workflow** for a branch containing the workflow to run it manually. It uses no repository secrets.
+The workflow [Phase 2 PostgreSQL Integration](../.github/workflows/phase2-integration.yml) runs on `pull_request` and `workflow_dispatch` only, on `ubuntu-latest`, with `contents: read` permissions. Open/update a PR to trigger a run. Once the workflow is registered on the default branch, select it in GitHub Actions and choose **Run workflow** for a branch containing the workflow to run it manually. It uses no repository secrets.
+
+The confirmed CI bootstrap failure comes from `prisma/migrations/20261015090000_ai_service_followup/migration.sql`: its `REVOKE ALL ON TABLE ... FROM anon, authenticated` references roles supplied by Supabase but absent from vanilla `postgres:16`. PostgreSQL reports that the role does not exist, aborts the migration transaction, and `prisma migrate deploy` fails before the integration suite starts.
+
+The fix is a CI test-environment shim in `scripts/ci/prepare-e2e-db.ts`. After PostgreSQL verification and before migrations, the generated Prisma client idempotently creates missing `anon` and `authenticated` roles as `NOLOGIN`, reporting created/already-existing status. It validates both database URLs with `assertSafeE2eDatabaseUrls` before constructing the client, restricting execution to the dedicated local host/port/database/user. These roles only emulate the Supabase role environment inside the disposable CI service. Existing migrations, schema, and application code are unchanged. This shim has not yet passed CI; all PostgreSQL test statuses remain **UNEXECUTED / BLOCKED**.
 
 Each job provisions a new disposable `postgres:16` service with database/user `yaho_e2e`, synthetic CI-only password `ci-synthetic-e2e`, and port mapping `55432:5432`. GitHub waits for `pg_isready -U yaho_e2e -d yaho_e2e` with interval 10 seconds, timeout 5 seconds, and 5 retries. Both `DATABASE_URL` and `DIRECT_URL` point to `postgresql://yaho_e2e:ci-synthetic-e2e@127.0.0.1:55432/yaho_e2e`. The existing local-only safety checks remain unchanged.
 
@@ -78,9 +82,10 @@ The job executes these steps in order:
 3. Install the locked dependencies with `npm ci`.
 4. Generate the Prisma client with `npm run prisma:generate`.
 5. Run `npx tsx scripts/ci/verify-e2e-db.ts`. Before connecting, the script validates both URLs with the existing safety guard. The generated Prisma client queries `version()`, `current_database()`, and `current_user`, and fails unless they identify PostgreSQL major version 16 and database/user `yaho_e2e`.
-6. Apply the repository's existing migrations with `npx prisma migrate deploy` to the ephemeral service database only.
-7. Run `npx vitest run --config vitest.integration.config.ts`, including `tests/integration/reservation-applications/class-link-issuance.test.ts` and its 12 cases.
+6. Run `npx tsx scripts/ci/prepare-e2e-db.ts` to prepare the Supabase roles in the safe ephemeral service database.
+7. Apply the repository's existing migrations with `npx prisma migrate deploy` to the ephemeral service database only.
+8. Run `npx vitest run --config vitest.integration.config.ts`, including `tests/integration/reservation-applications/class-link-issuance.test.ts` and its 12 cases.
 
 The service and its data are discarded with the job. Fixtures use synthetic run-scoped rows; cleanup deletes only that run's rows and owned settings. No Preview, Production, or Supabase connection is used, and no source schema/migration change is required. The existing quality workflow in `ci.yml` is unchanged.
 
-After the workflow actually runs, capture the run URL, date/commit, PostgreSQL verification, migration result, full case counts, and transaction/race results here. Workflow creation or YAML validation does not change the 12 **UNEXECUTED / BLOCKED** statuses above. Browser E2E, Playwright WebKit, and actual Safari remain separate verification gates; this workflow does not execute them.
+After the corrected workflow runs, capture the run URL, date/commit, PostgreSQL verification, role preparation, migration result, full case counts, and transaction/race results here. Workflow changes or YAML validation do not change the 12 **UNEXECUTED / BLOCKED** statuses above. Browser E2E, Playwright WebKit, and actual Safari remain separate verification gates; this workflow does not execute them.

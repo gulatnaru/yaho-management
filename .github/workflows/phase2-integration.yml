@@ -46,6 +46,9 @@ jobs:
       - name: Verify PostgreSQL
         run: npx tsx scripts/ci/verify-e2e-db.ts
 
+      - name: Prepare ephemeral database roles
+        run: npx tsx scripts/ci/prepare-e2e-db.ts
+
       - name: Apply migrations to ephemeral database
         run: npx prisma migrate deploy
 
