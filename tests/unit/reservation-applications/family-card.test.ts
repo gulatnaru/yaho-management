@@ -12,7 +12,19 @@ const family: FamilyApplication = { kind: "submission", id: "s1", guardianName: 
 describe("minimal responsive family card", () => {
   it("does not turn guardian notification into a deposit or whole-family confirmation", () => {
     const state = applicationStateSummary(family); expect(state.processing).toContain("일부 확정 1/2명"); expect(state.deposit).toBe("알림 받음 · 은행 확인 기록 없음");
-    expect(state.action).toContain("실제 은행 입금");
+    expect(state.action).toBe("신청 내용과 실제 은행 입금을 확인해 주세요.");
+  });
+  it("keeps positive cumulative deposits factual while pending siblings need neutral review", () => {
+    const state = applicationStateSummary({ ...family, deposit: { state: "available", depositedAmount: 30000, hasOutstandingReturn: false } });
+    expect(state.processing).toContain("일부 확정 1/2명");
+    expect(state.deposit).toBe("은행 확인 입금 누계 30,000원");
+    expect(state.action).toBe("신청 내용과 실제 은행 입금을 확인해 주세요.");
+  });
+  it("preserves unavailable, outstanding return, legacy pending and completed guidance", () => {
+    expect(applicationStateSummary({ ...family, deposit: { state: "unavailable" } }).action).toBe("입금 상태를 상세에서 다시 확인해 주세요.");
+    expect(applicationStateSummary({ ...family, deposit: { state: "available", depositedAmount: 30000, hasOutstandingReturn: true } }).action).toBe("반환이 필요한 내역을 확인해 주세요.");
+    expect(applicationStateSummary({ ...family, kind: "legacy", deposit: { state: "amount-unrecorded" } }).action).toBe("기존 신청 내용을 확인하고 처리해 주세요.");
+    expect(applicationStateSummary({ ...family, children: [{ ...child, status: "CONFIRMED" }], deposit: { state: "available", depositedAmount: 30000, hasOutstandingReturn: false } }).action).toBe("아이별 처리 결과를 확인할 수 있습니다.");
   });
   it("renders one card tree with separate detail/expand controls and no financial controls or hidden PII", () => {
     const html = renderToStaticMarkup(createElement(FamilyApplicationCard, { family, filters: parseFamilyFilters({ classScheduleId: "c1", page: "2" }) }));
