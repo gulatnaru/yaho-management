@@ -89,3 +89,13 @@ The job executes these steps in order:
 The service and its data are discarded with the job. Fixtures use synthetic run-scoped rows; cleanup deletes only that run's rows and owned settings. No Preview, Production, or Supabase connection is used, and no source schema/migration change is required. The existing quality workflow in `ci.yml` is unchanged.
 
 After the corrected workflow runs, capture the run URL, date/commit, PostgreSQL verification, role preparation, migration result, full case counts, and transaction/race results here. Workflow changes or YAML validation do not change the 12 **UNEXECUTED / BLOCKED** statuses above. Browser E2E, Playwright WebKit, and actual Safari remain separate verification gates; this workflow does not execute them.
+
+## Final Result — GitHub Actions Execution (2026-10-20)
+
+- Run: https://github.com/gulatnaru/yaho-management/actions/runs/39400929023
+- Workflow: Phase 2 PostgreSQL Integration (postgres:16 service container, ephemeral)
+- Verify step: "Verified PostgreSQL 16, database yaho_e2e, user yaho_e2e."
+- Migrations: all 15 applied after CI role shim (anon/authenticated)
+- **Integration tests: 12 passed (12)** — including concurrency, rollback, idempotency, CAS race, legacy reissue race cases
+- **Advisory lock: VERIFIED** — the concurrent issuance/replace/stop cases execute `tx.$executeRaw + SELECT pg_advisory_xact_lock(...)` on real PostgreSQL 16 with Prisma 6.19.3 and pass; no SQL error, serialization works
+- Browser E2E / real Safari: NOT EXECUTED (separate remaining item)
