@@ -16,6 +16,9 @@ export type ClassLinkScope = {
   label: "이 클래스 전용" | "기존 주소를 전환한 링크" | "여러 클래스 통합";
   groupId: string | null;
   scopeActive: boolean;
+  currentClassMember: boolean;
+  /** Record/scope activity and membership only; intake and environment stay independent. */
+  activeForCurrentClass: boolean;
   upgraded: boolean;
   members: { id: string; label: string }[];
   links: { id: string; isActive: boolean; issuedAtLabel: string; issuedByName: string; rawPath: string | null }[];
@@ -56,8 +59,8 @@ export async function getClassApplicationLinks(classScheduleId: string): Promise
   ]);
   if (!classSchedule) return null;
   const upgraded = groups.find((group) => group.upgradedLegacyClassScheduleId === id);
-  const readiness = (modern: boolean, scopeActive: boolean, member: boolean, links: { isActive: boolean }[], syntheticSettings?: unknown, syntheticRunId?: string | null) => getLinkReadiness({
-    links, scopeActive, classSchedule, modern, member,
+  const readiness = (modern: boolean, scopeActive: boolean, links: { isActive: boolean }[], syntheticSettings?: unknown, syntheticRunId?: string | null) => getLinkReadiness({
+    links, scopeActive, classSchedule, modern,
     context: buildModeApplicationAvailabilityContext(modern ? "modern" : "legacy", settings, now, process.env, syntheticSettings),
     vercelEnv: process.env.VERCEL_ENV, syntheticRunId,
   });
@@ -71,21 +74,24 @@ export async function getClassApplicationLinks(classScheduleId: string): Promise
     const member = !upgraded || upgraded.classes.some((item) => item.classSchedule.id === id);
     const scopeActive = upgraded?.isActive ?? true;
     scopes.push({ id: `class:${id}`, label: upgraded ? "기존 주소를 전환한 링크" : "이 클래스 전용", groupId: upgraded?.id ?? null,
-      upgraded: Boolean(upgraded), scopeActive,
+      upgraded: Boolean(upgraded), scopeActive, currentClassMember: member,
+      activeForCurrentClass: member && scopeActive && directLinks.some((link) => link.isActive),
       members: upgraded ? upgraded.classes.map(({ classSchedule: item }) => ({ id: item.id, label: `${item.program.name} · ${formatKstDateTime(item.startsAt)}` })) : [{ id, label: classSchedule.program.name }],
       links: projectLinks(directLinks, scopeActive && member),
-      readiness: readiness(Boolean(upgraded), scopeActive, member, directLinks, upgraded?.syntheticSettings, upgraded?.syntheticRunId),
+      readiness: readiness(Boolean(upgraded), scopeActive, directLinks, upgraded?.syntheticSettings, upgraded?.syntheticRunId),
     });
   }
   for (const group of groups) {
+    const member = group.classes.some((item) => item.classSchedule.id === id);
     scopes.push({ id: `group:${group.id}`, label: group.upgradedLegacyClassScheduleId !== null ? "기존 주소를 전환한 링크" : group.classes.length > 1 ? "여러 클래스 통합" : "이 클래스 전용",
       groupId: group.id, upgraded: group.upgradedLegacyClassScheduleId !== null, scopeActive: group.isActive,
+      currentClassMember: member, activeForCurrentClass: member && group.isActive && group.links.some((link) => link.isActive),
       members: group.classes.map(({ classSchedule: item }) => ({ id: item.id, label: `${item.program.name} · ${formatKstDateTime(item.startsAt)}` })),
       links: projectLinks(group.links, false),
-      readiness: readiness(true, group.isActive, group.classes.some((item) => item.classSchedule.id === id), group.links, group.syntheticSettings, group.syntheticRunId),
+      readiness: readiness(true, group.isActive, group.links, group.syntheticSettings, group.syntheticRunId),
     });
   }
-  const empty = readiness(false, true, true, []);
+  const empty = readiness(false, true, []);
   return { classScheduleId: id, className: classSchedule.program.name, timeLabel: formatKstDateTimeRange(classSchedule.startsAt, classSchedule.endsAt), applicationPrice: classSchedule.applicationPrice,
     canIssue: empty.classIntake === "READY", environment: empty.environment, publicAccessAllowed: empty.publicAccessAllowed, unissuedReadiness: empty, scopes };
 }

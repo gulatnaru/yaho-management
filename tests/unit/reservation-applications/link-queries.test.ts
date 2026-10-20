@@ -50,10 +50,36 @@ describe("complete ADMIN class link inventory", () => {
     mocks.groups.mockResolvedValue([group("upgrade", { upgradedLegacyClassScheduleId: "class-1", classes: [member("class-2")] }), group("other-upgrade", { upgradedLegacyClassScheduleId: "class-3" })]);
     const result = (await getClassApplicationLinks("class-1"))!;
     expect(result.scopes.map((scope) => scope.label)).toEqual(Array(3).fill("기존 주소를 전환한 링크"));
-    expect(result.scopes[0]).toMatchObject({ links: [{ rawPath: null }], readiness: { classIntake: "OUTSIDE_SCOPE" } });
+    expect(result.scopes[0]).toMatchObject({ currentClassMember: false, activeForCurrentClass: false, links: [{ rawPath: null }], readiness: { classIntake: "READY" } });
     expect(result.scopes[0]?.members.map((item) => item.id)).toEqual(["class-2"]);
-    expect(result.scopes[1]?.readiness.classIntake).toBe("OUTSIDE_SCOPE");
+    expect(result.scopes[1]?.currentClassMember).toBe(false);
     expect(result.scopes[2]?.upgraded).toBe(true);
+  });
+  it("does not count an active group link as active for an excluded original class", async () => {
+    mocks.groups.mockResolvedValue([group("upgrade", { upgradedLegacyClassScheduleId: "class-1", classes: [member("class-2")] })]);
+    const result = (await getClassApplicationLinks("class-1"))!;
+    expect(result.scopes[0]).toMatchObject({ scopeActive: true, currentClassMember: false, activeForCurrentClass: false, links: [{ isActive: true }], readiness: { issuance: "ACTIVE", classIntake: "READY" } });
+    expect(result.scopes.some((scope) => scope.activeForCurrentClass)).toBe(false);
+  });
+  it("counts an active group link as active when the current class is included", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    mocks.groups.mockResolvedValue([group("included")]);
+    expect((await getClassApplicationLinks("class-1"))?.scopes[0]).toMatchObject({ scopeActive: true, currentClassMember: true, activeForCurrentClass: true, readiness: { publicAccessAllowed: false } });
+  });
+  it("retains excluded group links and upgraded legacy records in the history inventory", async () => {
+    mocks.links.mockResolvedValue([link("legacy-active", true, "old-address"), link("legacy-old", false)]);
+    mocks.groups.mockResolvedValue([group("upgrade", { upgradedLegacyClassScheduleId: "class-1", classes: [member("class-2")], links: [link("group-active"), link("group-old", false)] })]);
+    const result = (await getClassApplicationLinks("class-1"))!;
+    expect(result.scopes).toHaveLength(2);
+    expect(result.scopes.map((scope) => scope.links.map((item) => item.id))).toEqual([["legacy-active", "legacy-old"], ["group-active", "group-old"]]);
+    expect(result.scopes.every((scope) => !scope.currentClassMember && !scope.activeForCurrentClass)).toBe(true);
+    expect(result.scopes.flatMap((scope) => scope.links).every((item) => item.rawPath === null)).toBe(true);
+  });
+  it.each(["CANCELLED", "STARTED", "PRICE_MISSING"])("preserves %s intake independently of excluded membership", async (state) => {
+    const schedule = await mocks.classRead();
+    mocks.classRead.mockResolvedValue({ ...schedule, ...(state === "CANCELLED" ? { status: "CANCELLED" } : state === "STARTED" ? { startsAt: NOW } : { applicationPrice: null }) });
+    mocks.groups.mockResolvedValue([group("excluded", { upgradedLegacyClassScheduleId: "class-1", classes: [] })]);
+    expect((await getClassApplicationLinks("class-1"))?.scopes[0]).toMatchObject({ scopeActive: true, currentClassMember: false, activeForCurrentClass: false, readiness: { issuance: "ACTIVE", classIntake: state } });
   });
   it("separates stopped scope from Preview restriction, with scoped settings diagnostics", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");

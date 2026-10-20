@@ -24,11 +24,13 @@ export function ApplicationLinkCard({ view, classScheduleId }: { view: ClassAppl
     <p role="alert">링크 정보를 불러오지 못했습니다.</p><Button onClick={() => router.refresh()} type="button">다시 불러오기</Button>
   </CardContent></Card>;
 
-  const direct = view.scopes.find((scope) => scope.id === `class:${classScheduleId}`);
-  const active = view.scopes.some((scope) => scope.readiness.issuance === "ACTIVE");
-  const issued = view.scopes.some((scope) => scope.links.length > 0);
-  const rawLinks = view.scopes.flatMap((scope) => scope.links.filter((link) => link.rawPath).map((link) => ({ ...link, scopeLabel: scope.label })));
-  const canIssueLegacy = view.canIssue && !direct?.upgraded;
+  const currentScopes = view.scopes.filter((scope) => scope.currentClassMember);
+  const directHistory = view.scopes.find((scope) => scope.id === `class:${classScheduleId}`);
+  const direct = currentScopes.find((scope) => scope.id === `class:${classScheduleId}`);
+  const active = currentScopes.some((scope) => scope.activeForCurrentClass);
+  const issued = currentScopes.some((scope) => scope.links.length > 0);
+  const rawLinks = currentScopes.filter((scope) => scope.activeForCurrentClass).flatMap((scope) => scope.links.filter((link) => link.rawPath).map((link) => ({ ...link, scopeLabel: scope.label })));
+  const canIssueLegacy = view.canIssue && !directHistory?.upgraded;
   function run(action: () => Promise<{ error?: string }>, confirmation?: string) {
     if (confirmation && !window.confirm(confirmation)) return;
     setError(undefined); setNotice(undefined);
@@ -42,11 +44,11 @@ export function ApplicationLinkCard({ view, classScheduleId }: { view: ClassAppl
     <CardContent className="min-w-0 space-y-3">
       <p className="break-words font-medium">{view.className} · {view.timeLabel}</p>
       <p>참가비: {view.applicationPrice === null ? "미설정" : `${view.applicationPrice.toLocaleString("ko-KR")}원`}</p>
-      <p>링크 상태: {active ? "링크 활성" : issued ? "링크 비활성 · 접수 중지" : "미발급"} <span className="rounded bg-slate-100 px-2 py-1 text-xs">{view.environment}</span></p>
+      <p>링크 상태: {active ? "링크 활성" : issued ? "링크 비활성 · 접수 중지" : view.scopes.length > 0 ? "이 클래스에 해당하는 링크 없음" : "미발급"} <span className="rounded bg-slate-100 px-2 py-1 text-xs">{view.environment}</span></p>
       {!view.publicAccessAllowed ? <p className="text-sm">{view.environment === "Preview" ? "변경한 화면을 미리 확인하는 테스트 환경입니다. 여기서는 일반 보호자 신청을 받지 않습니다. 실제 보호자에게 보낼 링크는 운영 환경에서 확인해 주세요." : "현재 환경에서는 일반 보호자 신청을 받지 않습니다."} 링크 중지와는 별개이며 운영 환경의 접수 상태는 여기서 확인할 수 없습니다.</p> : null}
       {!view.canIssue ? <p className="text-sm">클래스 상태로 신규 접수 불가 · 기존 신청과 예약은 유지됩니다.</p> : null}
-      {view.scopes.length === 0 ? <LinkReadinessIssues classScheduleId={classScheduleId} readiness={view.unissuedReadiness} /> : null}
-      {view.scopes.filter((scope) => scope.readiness.issuance === "STOPPED" || scope.readiness.classIntake !== "READY" || !scope.readiness.guideReady || !scope.readiness.consentReady || scope.readiness.accessRestriction === "SYNTHETIC").map((scope) => <div className="rounded border p-2" key={scope.id}><p className="break-words text-sm font-medium">{scope.label} · {scope.members.map((member) => member.label).join(" / ")}</p><LinkReadinessIssues classScheduleId={classScheduleId} readiness={scope.readiness} /></div>)}
+      {currentScopes.length === 0 ? <LinkReadinessIssues classScheduleId={classScheduleId} readiness={view.unissuedReadiness} /> : null}
+      {currentScopes.filter((scope) => scope.readiness.issuance === "STOPPED" || scope.readiness.classIntake !== "READY" || !scope.readiness.guideReady || !scope.readiness.consentReady || scope.readiness.accessRestriction === "SYNTHETIC").map((scope) => <div className="rounded border p-2" key={scope.id}><p className="break-words text-sm font-medium">{scope.label} · {scope.members.map((member) => member.label).join(" / ")}</p><LinkReadinessIssues classScheduleId={classScheduleId} readiness={scope.readiness} /></div>)}
       {active && rawLinks.length === 0 ? <p className="text-sm">활성 상태로 발급된 링크가 있습니다. 주소는 발급할 때만 확인할 수 있습니다. 새 주소가 필요하면 고급 설정에서 해당 범위의 링크 교체를 확인해 주세요.</p> : null}
       {!issued && view.scopes.length === 0 && canIssueLegacy ? <Button className="min-h-11 w-full md:w-auto" disabled={pending} onClick={() => run(() => issueApplicationLink(classScheduleId))} type="button">{pending ? "처리 중..." : "링크 발급"}</Button> : null}
       {rawLinks.map((link) => { const url = origin ? `${origin}${link.rawPath}` : ""; return <div className="min-w-0 space-y-2" key={link.id}>

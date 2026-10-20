@@ -58,7 +58,7 @@ export type ApplicationLinkAdminState =
 
 export type LinkReadiness = {
   issuance: "NONE" | "ACTIVE" | "STOPPED";
-  classIntake: "READY" | "CANCELLED" | "STARTED" | "PRICE_MISSING" | "OUTSIDE_SCOPE";
+  classIntake: "READY" | "CANCELLED" | "STARTED" | "PRICE_MISSING";
   guideReady: boolean;
   consentReady: boolean;
   environment: "Production" | "Preview" | "로컬" | "기타";
@@ -72,15 +72,14 @@ export function getLinkReadiness(input: {
   scopeActive: boolean;
   classSchedule: { status: ClassStatus; startsAt: Date; applicationPrice: number | null };
   modern: boolean;
-  member: boolean;
   context: ApplicationAvailabilityContext;
   vercelEnv?: string;
   syntheticRunId?: string | null;
 }): LinkReadiness {
-  const { links, scopeActive, classSchedule, modern, member, context, vercelEnv } = input;
+  const { links, scopeActive, classSchedule, modern, context, vercelEnv } = input;
   return {
     issuance: links.length === 0 ? "NONE" : scopeActive && links.some((link) => link.isActive) ? "ACTIVE" : "STOPPED",
-    classIntake: !member ? "OUTSIDE_SCOPE" : classSchedule.status === "CANCELLED" ? "CANCELLED"
+    classIntake: classSchedule.status === "CANCELLED" ? "CANCELLED"
       : !canIssueApplicationLink(classSchedule, context.now) ? "STARTED"
         : modern && !(classSchedule.applicationPrice !== null && classSchedule.applicationPrice > 0) ? "PRICE_MISSING" : "READY",
     guideReady: context.configReady,

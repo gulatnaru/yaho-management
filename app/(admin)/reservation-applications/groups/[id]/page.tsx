@@ -28,7 +28,7 @@ export default async function ReservationApplicationGroupPage({ params, searchPa
   const context = buildModeApplicationAvailabilityContext("modern", settings, now, process.env, group.syntheticSettings);
   const readiness = group.classes.map(({ classSchedule }) => ({
     classSchedule,
-    value: getLinkReadiness({ links: group.links, scopeActive: group.isActive, classSchedule, modern: true, member: true, context, vercelEnv: process.env.VERCEL_ENV, syntheticRunId: group.syntheticRunId }),
+    value: getLinkReadiness({ links: group.links, scopeActive: group.isActive, classSchedule, modern: true, context, vercelEnv: process.env.VERCEL_ENV, syntheticRunId: group.syntheticRunId }),
   }));
   const classes = await prisma.classSchedule.findMany({ where: { status: "SCHEDULED", startsAt: { gt: now } }, select: { id: true, startsAt: true, status: true, applicationPrice: true, program: { select: { name: true } } }, orderBy: { startsAt: "asc" }, take: 100 });
   const options = new Map(classes.map((item) => [item.id, item]));

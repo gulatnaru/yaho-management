@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { LinkReadiness as Readiness } from "@/lib/reservation-applications/availability";
 
 export const LINK_ISSUANCE_LABEL = { NONE: "미발급", ACTIVE: "링크 활성", STOPPED: "링크 비활성 · 접수 중지" } as const;
-const INTAKE_LABEL = { READY: "클래스 접수 조건 충족", CANCELLED: "취소된 클래스 · 신규 접수 불가", STARTED: "시작 시각 경과 · 신규 접수 불가", PRICE_MISSING: "신청금액 미설정", OUTSIDE_SCOPE: "현재 링크 대상에서 제외된 클래스" } as const;
+const INTAKE_LABEL = { READY: "클래스 접수 조건 충족", CANCELLED: "취소된 클래스 · 신규 접수 불가", STARTED: "시작 시각 경과 · 신규 접수 불가", PRICE_MISSING: "신청금액 미설정" } as const;
 
 /** Five separate diagnostics; none implies another environment's availability. */
 export function LinkReadiness({ readiness }: { readiness: Readiness }) {

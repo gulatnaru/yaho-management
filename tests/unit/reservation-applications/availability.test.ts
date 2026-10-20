@@ -115,7 +115,7 @@ describe("buildApplicationAvailabilityContext", () => {
 import { getLinkReadiness } from "@/lib/reservation-applications/availability";
 
 describe("independent link readiness", () => {
-  const input = { links: [{ isActive: true }], scopeActive: true, classSchedule: { ...futureClass, applicationPrice: 10000 }, modern: true, member: true, context };
+  const input = { links: [{ isActive: true }], scopeActive: true, classSchedule: { ...futureClass, applicationPrice: 10000 }, modern: true, context };
   it("preserves ADMIN stop and missing configuration alongside Preview restriction", () => {
     expect(getLinkReadiness({ ...input, scopeActive: false, vercelEnv: "preview", context: { ...context, environmentAllowed: false, configReady: false, consentReady: false } })).toEqual({
       issuance: "STOPPED", classIntake: "READY", guideReady: false, consentReady: false, environment: "Preview", publicAccessAllowed: false, accessRestriction: "PREVIEW",
