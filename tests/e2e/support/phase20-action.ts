@@ -103,11 +103,20 @@ export async function clickAndExpectPhase20Action(page: Page, button: Locator, r
   }
 }
 
-export async function confirmSelectedApplications(page: Page, input: { prisma: PrismaClient; submissionId: string; applicationIds: string[]; childNames: string[]; ownedCounts?: () => Promise<{ reservations: number; mappings: number }> }): Promise<void> {
-  const childPattern = new RegExp(input.childNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"));
-  const rows = page.getByRole("heading", { name: "아이별 신청", exact: true }).locator("..").locator(":scope > div").filter({ hasText: childPattern }).filter({ hasText: /\bCONFIRMED\b/ });
+export async function confirmSelectedApplications(page: Page, input: { prisma: PrismaClient; submissionId: string; applicationIds: string[]; childNames: string[]; childChoices: Record<string, string>; ownedCounts?: () => Promise<{ reservations: number; mappings: number }> }): Promise<void> {
+  const form = page.getByTestId("confirmation-selection-form");
+  for (const checkbox of await form.getByRole("checkbox").all()) await checkbox.uncheck();
+  for (const applicationId of input.applicationIds) {
+    const choice = input.childChoices[applicationId];
+    if (!choice) throw new Error("P20_ACTION_EXPLICIT_CHILD_CHOICE_REQUIRED");
+    const target = page.getByTestId(`confirmation-${applicationId}`);
+    await target.getByRole("checkbox").check();
+    await target.getByRole("combobox").selectOption(choice);
+  }
+  const rows = page.locator(input.applicationIds.map((id) => `#application-${id}`).join(",")).filter({ has: page.getByText("확정", { exact: true }) });
+  const confirmationLabel = `선택한 아이 ${input.applicationIds.length}명 예약 확정`;
   try {
-    await clickAndExpectPhase20Action(page, page.getByRole("button", { name: "선택한 아이 일괄 확정", exact: true }), rows.first(), Date.now, "CONFIRM", async (_state, markPhase) => {
+    await clickAndExpectPhase20Action(page, page.getByRole("button", { name: confirmationLabel, exact: true }), rows.first(), Date.now, "CONFIRM", async (_state, markPhase) => {
       assertPreviewE2eRunnerProof({ proofPath: process.env.PREVIEW_E2E_RUNNER_PROOF_PATH, proof: process.env.PREVIEW_E2E_RUNNER_PROOF });
       markPhase("RUNNER_PROOF_DONE");
       const environment = { ...process.env, VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: process.env.PREVIEW_E2E_DEPLOYMENT_SHA };
@@ -119,7 +128,7 @@ export async function confirmSelectedApplications(page: Page, input: { prisma: P
       markPhase("READ_DB_BEGIN");
       const confirmed = await input.prisma.reservationApplication.findMany({ where: { id: { in: input.applicationIds }, submissionId: input.submissionId, submission: { group: { syntheticRunId: runId } } }, select: { status: true, reservationId: true, quotedAmount: true, paymentMapping: { select: { paymentItem: { select: { amount: true, reservationId: true } } } } } });
       markPhase("READ_DB_DONE");
-      const verified = confirmed.length === input.applicationIds.length && await rows.count() === input.childNames.length && await page.getByRole("button", { name: "선택한 아이 일괄 확정", exact: true }).count() === 0 && confirmed.every((application) => application.status === "CONFIRMED" && application.reservationId !== null && application.paymentMapping?.paymentItem.reservationId === application.reservationId && application.paymentMapping.paymentItem.amount === application.quotedAmount);
+      const verified = confirmed.length === input.applicationIds.length && await rows.count() === input.childNames.length && await page.getByRole("button", { name: confirmationLabel, exact: true }).count() === 0 && confirmed.every((application) => application.status === "CONFIRMED" && application.reservationId !== null && application.paymentMapping?.paymentItem.reservationId === application.reservationId && application.paymentMapping.paymentItem.amount === application.quotedAmount);
       markPhase("PROOF_COMPLETE");
       return verified;
     });

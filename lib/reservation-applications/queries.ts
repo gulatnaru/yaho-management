@@ -130,6 +130,7 @@ export const APPLICATION_DETAIL_SELECT = {
   classScheduleId: true,
   childId: true,
   reservationId: true,
+  reservation: { select: { paymentItem: { select: { paymentId: true } } } },
   guardianRelationship: true,
   programTermsAcknowledged: true,
   legalGuardianConfirmed: true,

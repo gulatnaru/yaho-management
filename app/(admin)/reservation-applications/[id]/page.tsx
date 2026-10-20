@@ -216,9 +216,7 @@ export default async function ReservationApplicationDetailPage({ params, searchP
               <Link className="hover:underline" href={`/reservations/${application.reservationId}`}>
                 예약 상세 보기
               </Link>
-              <Link className="hover:underline" href={`/payments/new?reservationId=${application.reservationId}`}>
-                결제 등록
-              </Link>
+              {application.reservation?.paymentItem ? <Link className="hover:underline" href={`/payments/${application.reservation.paymentItem.paymentId}`}>결제 상세 보기</Link> : !isSubmissionApplication ? <Link className="hover:underline" href={`/payments/new?reservationId=${application.reservationId}`}>결제 등록</Link> : <p>결제 연결을 확인해주세요. 가족 신청 상세에서 최신 상태를 조회할 수 있습니다.</p>}
             </div>
           ) : null}
         </CardContent>

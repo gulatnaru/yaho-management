@@ -214,11 +214,11 @@ test.describe("Phase 20 finance and return browser flow", () => {
       await expect(page.getByText("반려", { exact: true })).toHaveCount(1);
       recordPhase20Stage("REJECTION", testStartedAt);
       await page.goto("/reservation-applications/submissions/" + submission.id);
-      const confirmationCheckbox = page.getByLabel("확정", { exact: true });
+      const confirmationCheckbox = page.getByTestId(`confirmation-${submission.applications[0]!.id}`).getByRole("checkbox");
       await expect(confirmationCheckbox).toHaveCount(1);
-      await expect(page.getByLabel(fixture.marker + "_one 확정 대상")).toHaveValue("NEW");
+      await expect(page.getByLabel(fixture.marker + "_one 확정 대상")).toHaveValue("");
       await confirmationCheckbox.check();
-      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: [submission.applications[0]!.id], childNames: [fixture.marker + "_one"] });
+      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: [submission.applications[0]!.id], childNames: [fixture.marker + "_one"], childChoices: { [submission.applications[0]!.id]: "NEW" } });
       recordPhase20Stage("INITIAL_CONFIRMATION", testStartedAt);
 
       await page.goto("/reservation-applications/returns");

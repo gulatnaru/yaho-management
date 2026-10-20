@@ -40,6 +40,8 @@ const workflowDepositMock = vi.fn();
 const workflowReturnMock = vi.fn();
 const workflowObligationMock = vi.fn();
 const workflowLockMock = vi.fn();
+const workflowTargetsMock = vi.fn();
+const workflowClassesMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminMock(...args),
@@ -124,7 +126,10 @@ describe("reservation application admin actions", () => {
     workflowObligationMock.mockReset().mockResolvedValue({ submissionId: "submission-1" });
     workflowLockMock.mockReset().mockResolvedValue([{ id: "submission-1", amount: 60000, returnedAmount: 0, resolvedAt: null }]);
     workflowLedgerMock.mockReset().mockResolvedValue({ applications: [{ id: "application-1", status: "SUBMITTED", quotedAmount: 100000, paymentMapping: null }], deposits: [], returnObligations: [] });
+    workflowTargetsMock.mockReset().mockResolvedValue([{ id: "application-1", classScheduleId: "class-1", status: "SUBMITTED", personalDataPurgedAt: null, programTermsAcknowledged: true, privacyConsentAgreed: true, legalGuardianConfirmed: true, refundTermsAcknowledged: true }]);
+    workflowClassesMock.mockReset().mockResolvedValue([{ id: "class-1", capacity: 8, _count: { reservations: 8 } }]);
     workflowTransactionMock.mockReset().mockImplementation((callback) => callback({
+      reservationApplication: { findMany: workflowTargetsMock }, classSchedule: { findMany: workflowClassesMock },
       $queryRaw: workflowLockMock, reservationApplicationSubmission: { findUnique: workflowLedgerMock },
       applicationDeposit: { findUnique: workflowDepositMock }, applicationReturn: { findUnique: workflowReturnMock },
       returnObligation: { findUnique: workflowObligationMock },
@@ -187,12 +192,14 @@ describe("reservation application admin actions", () => {
             classScheduleId: "class-1",
             childChoice: "NEW",
             selectionFingerprint: '[["application-1","NEW"]]',
+            classState: '["class-1",null,null,null]',
+            capacity: 8, reservedCount: 8,
           },
         }],
       };
       const form = formData({ payload: JSON.stringify(payload) });
 
-      await expect(actions.confirmApplicationSubmission(form)).resolves.toEqual({ reservationIds: ["reservation-1"] });
+      await expect(actions.confirmApplicationSubmission(form)).resolves.toEqual({ status: "success", submissionId: "submission-1", applicationIds: ["application-1"], paymentId: "payment-1", reservationIds: ["reservation-1"] });
       expect(confirmSubmissionCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         submissionId: "submission-1",
         choices: [expect.objectContaining({ confirmOverbooking: true, overbookingConfirmation: payload.choices[0]!.overbookingConfirmation })],
@@ -200,6 +207,17 @@ describe("reservation application admin actions", () => {
       }));
     });
 
+    it.each(["programTermsAcknowledged", "privacyConsentAgreed", "legalGuardianConfirmed", "refundTermsAcknowledged"])("adapter defensively blocks invalid %s before core execution", async (field) => {
+      workflowTargetsMock.mockResolvedValueOnce([{ id: "application-1", classScheduleId: "class-1", status: "SUBMITTED", programTermsAcknowledged: true, privacyConsentAgreed: true, legalGuardianConfirmed: true, refundTermsAcknowledged: true, [field]: false }]);
+      const result = await actions.confirmApplicationSubmission(formData({ payload: JSON.stringify({ submissionId: "submission-1", choices: [{ applicationId: "application-1", newChild: true }] }) }));
+      expect(result.status).toBe("failure"); expect(confirmSubmissionCoreMock).not.toHaveBeenCalled();
+    });
+    it.each(["capacity", "count", "class-time"])("does not forward an approval after latest %s changes", async (change) => {
+      workflowClassesMock.mockResolvedValueOnce([{ id: "class-1", capacity: change === "capacity" ? 9 : 8, _count: { reservations: change === "count" ? 9 : 8 }, ...(change === "class-time" ? { startsAt: new Date("2040-02-01") } : {}) }]);
+      confirmSubmissionCoreMock.mockResolvedValueOnce({ paymentId: "p1", reservationIds: ["r1"] });
+      await actions.confirmApplicationSubmission(formData({ payload: JSON.stringify({ submissionId: "submission-1", choices: [{ applicationId: "application-1", newChild: true, confirmOverbooking: true, overbookingConfirmation: { applicationId: "application-1", classScheduleId: "class-1", childChoice: "NEW", selectionFingerprint: '[["application-1","NEW"]]', classState: '["class-1",null,null,null]', capacity: 8, reservedCount: 8 } }] }) }));
+      expect(confirmSubmissionCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ choices: [expect.objectContaining({ confirmOverbooking: false, overbookingConfirmation: undefined })] }));
+    });
     describe("submission confirmation failures", () => {
       function submissionForm() {
         return formData({ payload: JSON.stringify({
@@ -218,7 +236,7 @@ describe("reservation application admin actions", () => {
           code, clientVersion: "6.19.3", meta: { privateDetails: "private input values" },
         }));
 
-        await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({ error });
+        await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({ status: "result-unknown", submissionId: "submission-1", applicationIds: ["application-1"], error });
 
         expect(consoleError.mock.calls).toEqual([
           ["[reservation-applications] failed to confirm submission:", `prisma:${code}`],
@@ -234,6 +252,7 @@ describe("reservation application admin actions", () => {
         ));
 
         await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({
+          status: "result-unknown", submissionId: "submission-1", applicationIds: ["application-1"],
           error: "데이터베이스 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
         });
 
@@ -264,7 +283,8 @@ describe("reservation application admin actions", () => {
         confirmSubmissionCoreMock.mockRejectedValueOnce(error);
 
         await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({
-          error: "가용 입금액, 아이 정보, 클래스 상태와 정원을 다시 확인해주세요.",
+          status: "result-unknown", submissionId: "submission-1", applicationIds: ["application-1"],
+          error: "예약 확정 결과가 불명확합니다. 재확정하지 말고 최신 예약·결제 상태를 조회해주세요.",
         });
 
         expect(consoleError.mock.calls).toEqual([
@@ -282,9 +302,10 @@ describe("reservation application admin actions", () => {
         ));
 
         await expect(actions.confirmApplicationSubmission(submissionForm())).resolves.toEqual({
+          status: "failure", submissionId: "submission-1", applicationIds: ["application-1"],
           overbookingConfirmation: {
             applicationId: "application-1", classScheduleId: "class-1", childChoice: "NEW",
-            selectionFingerprint, capacity: 8, reservedCount: 8, overByAfterCreate: 1,
+            selectionFingerprint, classState: '["class-1",null,null,null]', capacity: 8, reservedCount: 8, overByAfterCreate: 1,
           },
         });
         expect(consoleError).not.toHaveBeenCalled();

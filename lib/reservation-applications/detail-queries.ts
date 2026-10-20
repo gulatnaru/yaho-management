@@ -16,6 +16,7 @@ const CONSENT_HISTORY_SELECT = { id: true, consentType: true, action: true, reco
 export const WORKFLOW_APPLICATION_SELECT = {
   ...APPLICATION_DETAIL_SELECT,
   quotedAmount: true, requestedChildId: true, requestedChildPurgedAt: true,
+  classSchedule: { select: { ...APPLICATION_DETAIL_SELECT.classSchedule.select, capacity: true, _count: { select: { reservations: { where: { status: "RESERVED" } } } } } },
   child: { select: { id: true, name: true, consents: { orderBy: [{ recordedAt: "asc" }, { id: "asc" }], select: CONSENT_HISTORY_SELECT } } },
   reservation: { select: { id: true, memo: true, paymentItem: { select: { id: true, paymentId: true, refunds: { select: { id: true, amount: true, status: true, refundedAt: true }, orderBy: [{ refundedAt: "asc" }, { id: "asc" }] } } } } },
   paymentMapping: { select: { id: true, paymentItem: { select: { id: true, paymentId: true, paidAmount: true } } } },

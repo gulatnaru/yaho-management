@@ -92,7 +92,7 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
       });
       const key = await deposit(page, 30000); await expect(page.getByTestId("workflow-status")).toContainText("결과 불명확");
       const root = page.getByTestId("deposit-transaction-form"); await expect(root.getByLabel("실제 입금액", { exact: true })).toHaveAttribute("readonly", "");
-      await expect(page.getByTestId("family-confirmation").getByRole("button", { name: "선택한 아이 일괄 확정", exact: true })).toBeDisabled();
+      await expect(page.getByTestId("family-confirmation").getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
       expect(await root.locator('input[name="idempotencyKey"]').inputValue()).toBe(key);
       await root.getByRole("button", { name: "저장 결과 조회", exact: true }).click(); await latest(page);
       expect(await db.applicationDeposit.count({ where: { submissionId: fixture!.submissionId, idempotencyKey: key } })).toBe(1); await noConfirmedMoney(db, fixture!);
@@ -109,7 +109,7 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
       });
       const key = await deposit(page, 30000); await expect(page.getByTestId("workflow-status")).toContainText("갱신 실패");
       await expect(page.getByTestId("detail-ledger")).toContainText("최신 원장 금액을 표시할 수 없습니다");
-      await expect(page.getByTestId("family-confirmation").getByRole("button", { name: "선택한 아이 일괄 확정", exact: true })).toBeDisabled();
+      await expect(page.getByTestId("family-confirmation").getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
       const root = page.getByTestId("deposit-transaction-form"); expect(await root.locator('input[name="idempotencyKey"]').inputValue()).toBe(key);
       failReads = false; await page.getByRole("button", { name: "최신 서버 상태 다시 조회", exact: true }).click();
       await amounts(page, { D: 30000, A: 30000, R: 0, T: 0 }); expect(await db.applicationDeposit.count({ where: { submissionId: fixture!.submissionId } })).toBe(1);

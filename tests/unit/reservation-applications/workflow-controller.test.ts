@@ -90,7 +90,7 @@ describe("same-page authoritative workflow", () => {
     expect(workflowReceiptPresent({ ...initial, deposits: [{ id: "deposit-1" }] } as ApplicationWorkflowDetail, { ...success, submissionId: "foreign" }, "deposit")).toBe(false);
   });
   it.each([null, { ...detail(), ledger: { state: "unavailable" } }, detail()])("blocks stale confirmation and all writes after absent/invalid/unobserved refresh: %s", async (next) => {
-    initial.applications = [{ id: "a1", status: "SUBMITTED", childName: "합성 아이", childBirthDate: new Date(), quotedAmount: 40000, confirmationCandidates: [] }] as unknown as ApplicationWorkflowDetail["applications"];
+    initial.applications = [{ id: "a1", status: "SUBMITTED", childName: "합성 아이", childBirthDate: new Date(), quotedAmount: 40000, classSchedule: { id: "c1", program: { name: "합성 클래스" }, capacity: 8, _count: { reservations: 0 } }, confirmationCandidates: [] }] as unknown as ApplicationWorkflowDetail["applications"];
     mocks.refresh.mockResolvedValue(next);
     await coordinator().run(async () => success, "deposit", "key-1");
     expect(coordinator().blocked).toBe(true); expect(text(controller())).toContain("갱신 실패");
@@ -286,5 +286,31 @@ describe("independent child resolution drafts", () => {
     mocks.returns.mockResolvedValue([{ ledgerVerified: true, submissionId: "s1", returns: [{ id: "return-1" }] }]);
     await gate().run(async () => ({ status: "success", submissionId: "s1", receiptId: "return-1" }), "return", "return:one:key");
     expect(gate().blocked).toBe(false);
+  });
+});
+
+function confirmedDetail(): ApplicationWorkflowDetail {
+  return { ...initial, applications: [{ id: "a1", status: "CONFIRMED", childName: "합성 아이", quotedAmount: 40000, reservation: { id: "r1", paymentItem: { id: "pi1", paymentId: "p1" } }, paymentMapping: { id: "m1", paymentItem: { id: "pi1", paymentId: "p1", paidAmount: 40000 } } }] } as unknown as ApplicationWorkflowDetail;
+}
+describe("confirmation read-after-write and uncertain outcome coordination", () => {
+  it("verifies actual matching Reservation/PaymentItem/Mapping rather than action success alone", async () => {
+    const result: WorkflowActionResult = { status: "success", submissionId: "s1", applicationIds: ["a1"], reservationIds: ["r1"], paymentId: "p1" };
+    expect(workflowReceiptPresent(confirmedDetail(), result, "confirmation")).toBe(true);
+    const wrong = confirmedDetail(); wrong.applications[0]!.paymentMapping!.paymentItem.id = "another-item";
+    expect(workflowReceiptPresent(wrong, result, "confirmation")).toBe(false);
+    mocks.refresh.mockResolvedValue(confirmedDetail()); expect((await coordinator().run(async () => result, "confirmation", "confirmation-1")).verified).toBe(true); expect(coordinator().blocked).toBe(false);
+  });
+  it("known committed confirmation with failed authoritative refresh retains a distinct blocked refresh-failure", async () => {
+    const result: WorkflowActionResult = { status: "success", submissionId: "s1", applicationIds: ["a1"], reservationIds: ["r1"], paymentId: "p1" };
+    mocks.refresh.mockResolvedValue(null); expect((await coordinator().run(async () => result, "confirmation", "confirmation-1")).verified).toBe(false);
+    expect(coordinator().blocked).toBe(true); expect(text(controller())).toContain("갱신 실패");
+    mocks.refresh.mockResolvedValue(confirmedDetail()); await button(controller(), "최신 서버 상태 다시 조회").props.onClick!(); expect(coordinator().blocked).toBe(false);
+  });
+  it("lost confirmation response remains unknown while original request might run, then recovers solely by matching links", async () => {
+    const task = vi.fn().mockResolvedValue({ status: "result-unknown" });
+    await coordinator().run(task, "confirmation", "confirmation-1", { submissionId: "s1", applicationIds: ["a1"] });
+    mocks.refresh.mockResolvedValue(initial); await button(controller(), "최신 서버 상태 다시 조회").props.onClick!(); expect(coordinator().blocked).toBe(true); expect(text(controller())).toContain("원래 요청이 완료될 수 있으므로 재확정하지 말고");
+    const other = vi.fn(); await coordinator().run(other, "deposit", "another-attempt"); expect(other).not.toHaveBeenCalled();
+    mocks.refresh.mockResolvedValue(confirmedDetail()); await button(controller(), "최신 서버 상태 다시 조회").props.onClick!(); expect(coordinator().blocked).toBe(false); expect(task).toHaveBeenCalledTimes(1);
   });
 });

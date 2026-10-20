@@ -46,7 +46,7 @@ test.describe("Phase 4 read-only family detail", () => {
       await page.getByText(/실제 입금 및 배정 거래 내역/).click();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       const confirmation = page.getByTestId("family-confirmation");
-      await expect(confirmation.getByRole("button", { name: "선택한 아이 일괄 확정", exact: true })).toBeVisible();
+      await expect(confirmation.getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeVisible();
       for (const memo of await confirmation.locator("textarea").all()) expect(await memo.inputValue()).not.toContain(fixture!.originalRequestSentinel);
       await review.getByRole("link", { name: "아이별 신청 상세 및 기존 처리 화면", exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`/reservation-applications/${fixture!.applicationId}\\?`));

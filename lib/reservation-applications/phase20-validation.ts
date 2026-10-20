@@ -109,6 +109,9 @@ export const submissionConfirmationSchema = z.object({
       classScheduleId: z.string().trim().min(1),
       childChoice: z.string().trim().min(1),
       selectionFingerprint: z.string().trim().min(2).max(5_000),
+      classState: z.string().min(1).max(1000).optional(),
+      capacity: z.number().int().nonnegative().optional(),
+      reservedCount: z.number().int().nonnegative().optional(),
     }).optional(),
   }).refine((choice) => Boolean(choice.childId) !== Boolean(choice.newChild), "아이 선택이 필요합니다")).min(1).max(10)
     .refine((choices) => new Set(choices.map((choice) => choice.applicationId)).size === choices.length, "아이별 신청은 한 번만 선택할 수 있습니다"),

@@ -40,7 +40,7 @@ import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplica
 import { classLinkOperationSchema, issueClassLinkOperationCore, LinkOperationConflictError, LinkRevisionConflictError, LinkSettingsNotReadyError, type ClassLinkReceipt, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { reservationApplicationSettingsSchema, groupCreateSchema, submissionConfirmationSchema } from "@/lib/reservation-applications/phase20-validation";
 import { getReservationApplicationSettings, importLegacyReservationApplicationSettingsCore, isReservationApplicationSettingsReady, saveReservationApplicationSettingsCore } from "@/server/reservation-applications/settings";
-import { InsufficientApplicationDepositError, ApplicationReturnAmountExceededError, ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
+import { ApplicationPaymentAlreadyExistsError, InsufficientApplicationDepositError, ApplicationReturnAmountExceededError, ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
 import { depositInputSchema, returnInputSchema } from "@/lib/reservation-applications/phase20-validation";
 import {
   closeReservationApplicationCore,
@@ -155,6 +155,10 @@ export type WorkflowActionResult = {
   code?: "not-found";
   receiptId?: string;
   submissionId?: string;
+  applicationIds?: string[];
+  reservationIds?: string[];
+  paymentId?: string;
+  verified?: boolean;
 };
 const workflowId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const transactionKey = z.string().trim().min(16).max(200);
@@ -292,40 +296,68 @@ export async function resolveApplicationWorkflow(applicationId: string, kind: "R
 }
 
 /** Selected siblings are one atomic financial confirmation: no partial Payment mapping is left behind. */
-export type SubmissionConfirmationActionResult = {
+export type SubmissionConfirmationActionResult = WorkflowActionResult & {
   error?: string;
   reservationIds?: string[];
-  overbookingConfirmation?: { applicationId: string; classScheduleId: string; childChoice: string; selectionFingerprint: string; capacity: number; reservedCount: number; overByAfterCreate: number };
+  overbookingConfirmation?: { applicationId: string; classScheduleId: string; childChoice: string; selectionFingerprint: string; classState: string; capacity: number; reservedCount: number; overByAfterCreate: number };
 };
 
 export async function confirmApplicationSubmission(formData: FormData): Promise<SubmissionConfirmationActionResult> {
   const principal = await requireAdminPrincipal();
   let payload: unknown;
-  try { payload = JSON.parse(String(formData.get("payload") ?? "")); } catch { return { error: "확정할 아이를 다시 선택해주세요." }; }
+  try { payload = JSON.parse(String(formData.get("payload") ?? "")); } catch { return { status: "failure", error: "확정할 아이를 다시 선택해주세요." }; }
   const parsed = submissionConfirmationSchema.safeParse(payload);
-  if (!parsed.success) return { error: "확정할 아이를 다시 선택해주세요." };
+  if (!parsed.success) return { status: "failure", error: "확정할 아이와 기존 아이 연결 또는 새 아이 등록을 명시적으로 선택해주세요." };
+  const { submissionId } = parsed.data;
+  const applicationIds = parsed.data.choices.map((choice) => choice.applicationId);
+  const observedClassStates = new Map<string, string>();
   try {
-    const result = await confirmApplicationSubmissionCore(prisma, { ...parsed.data, actorUserId: principal.userId, now: new Date() });
-    revalidatePath(`/reservation-applications/submissions/${parsed.data.submissionId}`);
-    revalidatePath("/reservation-applications");
-    revalidatePath("/reservations");
-    return { reservationIds: result.reservationIds };
+    const result = await prisma.$transaction(async (tx) => {
+      // Preserve parent -> application -> class -> child lock order. The existing
+      // core takes the same (re-entrant) locks and still owns every financial write.
+      await lockWorkflowSubmission(tx, submissionId);
+      await assertWorkflowLedger(tx, submissionId);
+      const choices = parsed.data.choices.map((choice) => ({ ...choice }));
+      await tx.$queryRaw`SELECT "id" FROM "ReservationApplication" WHERE "id" IN (${Prisma.join(applicationIds)}) AND "submissionId" = ${submissionId} ORDER BY "id" FOR UPDATE`;
+      const targets = await tx.reservationApplication.findMany({ where: { id: { in: applicationIds }, submissionId }, select: { id: true, classScheduleId: true, personalDataPurgedAt: true, status: true, programTermsAcknowledged: true, privacyConsentAgreed: true, legalGuardianConfirmed: true, refundTermsAcknowledged: true }, orderBy: { id: "asc" } });
+      const submission = await tx.reservationApplicationSubmission.findUnique({ where: { id: submissionId }, select: { personalDataPurgedAt: true } });
+      if (!submission || submission.personalDataPurgedAt || targets.length !== applicationIds.length || targets.some((row) => row.status !== "SUBMITTED" || row.personalDataPurgedAt || !row.programTermsAcknowledged || !row.privacyConsentAgreed || !row.legalGuardianConfirmed || !row.refundTermsAcknowledged)) throw new ApplicationNotPendingError();
+      {
+        const classIds = [...new Set(targets.map((row) => row.classScheduleId))].sort();
+        if (classIds.length) await tx.$queryRaw`SELECT "id" FROM "ClassSchedule" WHERE "id" IN (${Prisma.join(classIds)}) ORDER BY "id" FOR UPDATE`;
+        const classes = await tx.classSchedule.findMany({ where: { id: { in: classIds } }, select: { id: true, capacity: true, status: true, startsAt: true, endsAt: true, _count: { select: { reservations: { where: { status: "RESERVED" } } } } } });
+        for (const schedule of classes) observedClassStates.set(schedule.id, JSON.stringify([schedule.id, schedule.status, schedule.startsAt, schedule.endsAt]));
+        for (const choice of choices) {
+          const binding = choice.overbookingConfirmation;
+          if (!choice.confirmOverbooking || !binding) continue;
+          const target = targets.find((row) => row.id === choice.applicationId);
+          const schedule = classes.find((row) => row.id === target?.classScheduleId);
+          // A warning may include earlier targets in this same atomic batch.
+          const earlier = targets.slice(0, targets.findIndex((row) => row.id === choice.applicationId)).filter((row) => row.classScheduleId === target?.classScheduleId).length;
+          if (!schedule || binding.classState !== observedClassStates.get(schedule.id) || binding.capacity !== schedule.capacity || binding.reservedCount !== schedule._count.reservations + earlier) {
+            choice.confirmOverbooking = false; choice.overbookingConfirmation = undefined;
+          }
+        }
+      }
+      const confirmed = await confirmApplicationSubmissionCore(financeInTransaction(tx), { submissionId, choices, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, submissionId);
+      return confirmed;
+    }, { maxWait: 10000, timeout: 20000 });
+    // A cache failure after commit must never be reported as a failed transaction.
+    try { invalidateWorkflow(submissionId); revalidatePath("/reservations"); revalidatePath("/payments"); revalidatePath("/", "layout"); } catch { /* committed; authoritative read follows */ }
+    return { status: "success", submissionId, applicationIds, reservationIds: result.reservationIds, paymentId: result.paymentId };
   } catch (error) {
     if (error instanceof ApplicationSubmissionOverbookingConfirmationError) {
-      return {
-        overbookingConfirmation: {
-          applicationId: error.applicationId,
-          classScheduleId: error.classScheduleId,
-          childChoice: error.childChoice,
-          selectionFingerprint: error.selectionFingerprint,
-          capacity: error.capacity,
-          reservedCount: error.reservedCount,
-          overByAfterCreate: error.overByAfterCreate,
-        },
-      };
+      return { status: "failure", submissionId, applicationIds, overbookingConfirmation: {
+        applicationId: error.applicationId, classScheduleId: error.classScheduleId,
+        childChoice: error.childChoice, selectionFingerprint: error.selectionFingerprint, classState: observedClassStates.get(error.classScheduleId)!,
+        capacity: error.capacity, reservedCount: error.reservedCount, overByAfterCreate: error.overByAfterCreate,
+      } };
     }
     console.error("[reservation-applications] failed to confirm submission:", describeErrorForLog(error));
-    return { error: classifyInfrastructureError(error) ?? "가용 입금액, 아이 정보, 클래스 상태와 정원을 다시 확인해주세요." };
+    const known = error instanceof ApplicationPaymentAlreadyExistsError || error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationNotPendingError || error instanceof ChildNotActiveError || error instanceof ChildNotFoundError || error instanceof ChildPersonalDataPurgedError || error instanceof ClassNotFoundError || error instanceof ClassNotScheduledError || error instanceof DuplicateReservationError || error instanceof TerminalReservationError;
+    return { status: known ? "failure" : "result-unknown", submissionId, applicationIds,
+      error: error instanceof ApplicationPaymentAlreadyExistsError ? "이미 연결된 결제가 있는 예약입니다. 기존 예약·결제 연결을 확인해주세요." : error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 예약 확정을 차단했습니다." : error instanceof InsufficientApplicationDepositError ? "선택한 아이의 청구액보다 가용 입금액이 부족합니다." : known ? "아이 연결, 중복 예약, 신청·클래스 상태를 다시 확인해주세요." : classifyInfrastructureError(error) ?? "예약 확정 결과가 불명확합니다. 재확정하지 말고 최신 예약·결제 상태를 조회해주세요." };
   }
 }
 

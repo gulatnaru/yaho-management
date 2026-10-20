@@ -125,10 +125,9 @@ test.describe("Phase 20 group sibling boundary", () => {
       await loginAsAdmin(page); await page.goto(`/reservation-applications/submissions/${submission.id}`);
       await page.locator('input[name="amount"]').fill("22000"); await page.locator('input[name="payerName"]').fill(payer); await page.locator('input[name="depositedAt"]').fill(pastKstDateTimeLocal());
       await page.getByRole("button", { name: "실제 입금 기록" }).click(); await expect(page.getByText("현재 가용 입금액 22,000원", { exact: true })).toBeVisible();
-      for (const checkbox of await page.getByLabel("확정", { exact: true }).all()) await checkbox.check();
       const firstCandidate = page.getByLabel(`${firstChild} 확정 대상`); const secondCandidate = page.getByLabel(`${secondChild} 확정 대상`);
-      expect((await firstCandidate.inputValue() === "NEW") && (await secondCandidate.inputValue() === "NEW")).toBe(true);
-      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: submission.applications.map((application) => application.id), childNames: [firstChild, secondChild], ownedCounts: async () => {
+      expect((await firstCandidate.inputValue() === "") && (await secondCandidate.inputValue() === "")).toBe(true);
+      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: submission.applications.map((application) => application.id), childNames: [firstChild, secondChild], childChoices: Object.fromEntries(submission.applications.map((application) => [application.id, "NEW"])), ownedCounts: async () => {
         assertPreviewE2eRunnerProof({ proofPath: process.env.PREVIEW_E2E_RUNNER_PROOF_PATH, proof: process.env.PREVIEW_E2E_RUNNER_PROOF });
         const environment = { ...process.env, VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: process.env.PREVIEW_E2E_DEPLOYMENT_SHA };
         const signed = parseAndVerifySignedPreviewRun(process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN ?? null, environment);

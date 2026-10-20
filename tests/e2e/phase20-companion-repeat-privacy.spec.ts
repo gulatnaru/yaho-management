@@ -167,8 +167,7 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
 
     await loginAsAdmin(page); await page.goto(`/reservation-applications/submissions/${initialSubmission.id}`);
     await page.locator('input[name="amount"]').fill("10000"); await page.locator('input[name="payerName"]').fill(payer); await page.locator('input[name="depositedAt"]').fill(pastKstDateTimeLocal()); await page.getByRole("button", { name: "실제 입금 기록" }).click(); await expect(page.getByText("현재 가용 입금액 10,000원", { exact: true })).toBeVisible();
-    for (const checkbox of await page.getByLabel("확정", { exact: true }).all()) await checkbox.check();
-    await confirmSelectedApplications(page, { prisma, submissionId: initialSubmission.id, applicationIds: initialSubmission.applications.map((application) => application.id), childNames: [childName] });
+    await confirmSelectedApplications(page, { prisma, submissionId: initialSubmission.id, applicationIds: initialSubmission.applications.map((application) => application.id), childNames: [childName], childChoices: Object.fromEntries(initialSubmission.applications.map((application) => [application.id, "NEW"])) });
     recordPhase20Stage("INITIAL_CONFIRMATION", testStartedAt);
     const confirmedInitial = await prisma.reservationApplication.findUniqueOrThrow({ where: { id: initialSubmission.applications[0]!.id }, select: { childId: true, reservationId: true } });
     if (!confirmedInitial.childId || !confirmedInitial.reservationId) throw new Error("Phase20 initial confirmation did not create owned records");
@@ -203,7 +202,7 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
 
     await loginAsAdmin(page); await page.goto(`/reservation-applications/submissions/${repeatSubmission.id}`);
     await page.locator('input[name="amount"]').fill("10000"); await page.locator('input[name="payerName"]').fill(payer); await page.locator('input[name="depositedAt"]').fill(pastKstDateTimeLocal()); await page.getByRole("button", { name: "실제 입금 기록" }).click(); await expect(page.getByText("현재 가용 입금액 10,000원", { exact: true })).toBeVisible();
-    for (const checkbox of await page.getByLabel("확정", { exact: true }).all()) await checkbox.check(); await confirmSelectedApplications(page, { prisma, submissionId: repeatSubmission.id, applicationIds: repeatSubmission.applications.map((application) => application.id), childNames: [childName] });
+    await confirmSelectedApplications(page, { prisma, submissionId: repeatSubmission.id, applicationIds: repeatSubmission.applications.map((application) => application.id), childNames: [childName], childChoices: Object.fromEntries(repeatSubmission.applications.map((application) => [application.id, confirmedInitial.childId!])) });
     recordPhase20Stage("REPEAT_CONFIRMATION", testStartedAt);
 
     const staleFixture = await createFixture(prisma, { adminId: admin.id, runId, marker, suffix: "pvs", offsetDays: 18 });
