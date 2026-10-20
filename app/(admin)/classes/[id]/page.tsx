@@ -7,14 +7,11 @@ import { WarningBanner } from "@/components/ui/warning-banner";
 import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import {
   formatKstDate,
-  formatKstDateTime,
   formatKstDateTimeRange,
   formatKstTime,
 } from "@/lib/classes/datetime";
 import { getClassDetailForPrincipal } from "@/lib/classes/queries";
-import { getApplicationLinkAdminState } from "@/lib/reservation-applications/availability";
-import { getApplicationLinkForClass } from "@/lib/reservation-applications/queries";
-import { buildApplicationAvailabilityContext } from "@/lib/reservation-applications/runtime";
+import { getClassApplicationLinks } from "@/lib/reservation-applications/link-queries";
 import { getClassDisplayStatus, type ClassDisplayStatus } from "@/lib/classes/status";
 import { isUnderStaffed } from "@/lib/classes/teacher-warning";
 import {
@@ -60,7 +57,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
         ? listOperationalReservationsByClassSchedule(id)
         : listTeacherReservationsByClassSchedule(id, principal),
     // 예약 신청 링크는 ADMIN 전용이다(ADR-053). 다른 역할은 조회하지도 않는다.
-    isAdmin ? getApplicationLinkForClass(id) : Promise.resolve(null),
+    isAdmin ? getClassApplicationLinks(id).catch(() => null) : Promise.resolve(null),
   ]);
   if (!classDetail) notFound();
 
@@ -76,7 +73,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
 
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <h1 className="text-2xl font-bold">
-          {formatKstDateTimeRange(classDetail.startsAt, classDetail.endsAt)}
+          클래스 상세
         </h1>
         <div className="flex flex-wrap gap-2">
           {canManage && classStatus === "SCHEDULED" ? (
@@ -141,22 +138,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
       </Card>
 
       {isAdmin ? (
-        <ApplicationLinkCard
-          classScheduleId={id}
-          applicationPrice={classDetail.applicationPrice}
-          upgradedGroupId={applicationLink?.groupId}
-          link={
-            applicationLink?.token
-              ? {
-                  token: applicationLink.token,
-                  isActive: applicationLink.isActive,
-                  issuedAtLabel: formatKstDateTime(applicationLink.issuedAt),
-                  issuedByName: applicationLink.issuedBy.name,
-                }
-              : null
-          }
-          state={getApplicationLinkAdminState(applicationLink, classDetail, buildApplicationAvailabilityContext(new Date()))}
-        />
+        <ApplicationLinkCard classScheduleId={id} view={applicationLink} />
       ) : null}
 
       <Card>

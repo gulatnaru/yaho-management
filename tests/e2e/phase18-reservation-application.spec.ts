@@ -554,11 +554,12 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await login(page, adminEmail, adminPassword);
     await page.goto(`/classes/${openClassId}`);
     const card = page.getByTestId("application-link-card");
-    await expect(card.getByLabel("예약 신청 링크 주소")).toHaveValue(new RegExp(`/apply/${tokens.open}$`));
+    await expect(card.getByLabel("신청 링크 주소")).toHaveValue(new RegExp(`/apply/${tokens.open}$`));
 
+    await card.getByText("고급 설정 펼치기", { exact: true }).click();
     page.once("dialog", (dialog) => dialog.accept());
-    await card.getByRole("button", { name: "재발급" }).click();
-    await expect(card.getByLabel("예약 신청 링크 주소")).not.toHaveValue(new RegExp(`/apply/${tokens.open}$`));
+    await card.getByRole("button", { name: "링크 교체" }).click();
+    await expect(card.getByLabel("신청 링크 주소")).not.toHaveValue(new RegExp(`/apply/${tokens.open}$`));
 
     const reissued = await prisma.reservationApplicationLink.findUniqueOrThrow({ where: { classScheduleId: openClassId } });
     expect(reissued.token).not.toBe(tokens.open);

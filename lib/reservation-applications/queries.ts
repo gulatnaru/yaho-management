@@ -219,9 +219,5 @@ export async function getApplicationRetention(application: {
   });
 }
 
-export async function getApplicationLinkForClass(classScheduleId: string) {
-  return prisma.reservationApplicationLink.findFirst({
-    where: { OR: [{ classScheduleId }, { group: { classes: { some: { classScheduleId } } } }] },
-    select: { token: true, groupId: true, isActive: true, issuedAt: true, issuedBy: { select: { name: true } } },
-  });
-}
+// Compatibility name now returns the complete authorized inventory.
+export { getClassApplicationLinks as getApplicationLinkForClass } from "./link-queries";

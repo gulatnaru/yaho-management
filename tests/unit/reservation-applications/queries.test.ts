@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/reservation-applications/link-queries", () => ({ getClassApplicationLinks: vi.fn() }));
+
 const applicationFindMany = vi.fn();
 const applicationFindUnique = vi.fn();
 const applicationCount = vi.fn();
@@ -84,4 +86,11 @@ describe("reservation application duplicate queries", () => {
     expect(duplicateQuery.where.OR).toEqual([{ submissionId: null }, { submission: { is: { personalDataPurgedAt: null } } }]);
     expect(duplicateQuery.select.submission).toEqual({ select: { guardianPhone: true } });
   });
+});
+
+// The compatibility export uses the complete guarded adapter, never findFirst.
+it("exports the complete class link inventory adapter", async () => {
+  const queries = await import("@/lib/reservation-applications/queries");
+  const inventory = await import("@/lib/reservation-applications/link-queries");
+  expect(queries.getApplicationLinkForClass).toBe(inventory.getClassApplicationLinks);
 });

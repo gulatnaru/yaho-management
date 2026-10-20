@@ -56,6 +56,41 @@ export type ApplicationLinkAdminState =
   | "CLASS_STARTED"
   | "RUNTIME_NOT_READY";
 
+export type LinkReadiness = {
+  issuance: "NONE" | "ACTIVE" | "STOPPED";
+  classIntake: "READY" | "CANCELLED" | "STARTED" | "PRICE_MISSING" | "OUTSIDE_SCOPE";
+  guideReady: boolean;
+  consentReady: boolean;
+  environment: "Production" | "Preview" | "로컬" | "기타";
+  publicAccessAllowed: boolean;
+  accessRestriction: "PREVIEW" | "SYNTHETIC" | "ENVIRONMENT" | null;
+};
+
+/** Independent facts: a Preview restriction must never replace the ADMIN stop state. */
+export function getLinkReadiness(input: {
+  links: readonly { isActive: boolean }[];
+  scopeActive: boolean;
+  classSchedule: { status: ClassStatus; startsAt: Date; applicationPrice: number | null };
+  modern: boolean;
+  member: boolean;
+  context: ApplicationAvailabilityContext;
+  vercelEnv?: string;
+  syntheticRunId?: string | null;
+}): LinkReadiness {
+  const { links, scopeActive, classSchedule, modern, member, context, vercelEnv } = input;
+  return {
+    issuance: links.length === 0 ? "NONE" : scopeActive && links.some((link) => link.isActive) ? "ACTIVE" : "STOPPED",
+    classIntake: !member ? "OUTSIDE_SCOPE" : classSchedule.status === "CANCELLED" ? "CANCELLED"
+      : !canIssueApplicationLink(classSchedule, context.now) ? "STARTED"
+        : modern && !(classSchedule.applicationPrice !== null && classSchedule.applicationPrice > 0) ? "PRICE_MISSING" : "READY",
+    guideReady: context.configReady,
+    consentReady: context.consentReady,
+    environment: vercelEnv === "production" ? "Production" : vercelEnv === "preview" ? "Preview" : !vercelEnv ? "로컬" : "기타",
+    publicAccessAllowed: context.environmentAllowed && !(vercelEnv === "production" && input.syntheticRunId != null),
+    accessRestriction: vercelEnv === "production" && input.syntheticRunId != null ? "SYNTHETIC" : !context.environmentAllowed ? vercelEnv === "preview" ? "PREVIEW" : "ENVIRONMENT" : null,
+  };
+}
+
 /** ADMIN 클래스 상세의 링크 카드 상태. 공개 화면 판정과 같은 기준을 쓴다. */
 export function getApplicationLinkAdminState(
   link: { isActive: boolean } | null,

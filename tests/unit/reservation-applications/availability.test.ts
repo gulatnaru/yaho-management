@@ -111,3 +111,24 @@ describe("buildApplicationAvailabilityContext", () => {
     expect(buildApplicationAvailabilityContext(NOW, {}).configReady).toBe(false);
   });
 });
+
+import { getLinkReadiness } from "@/lib/reservation-applications/availability";
+
+describe("independent link readiness", () => {
+  const input = { links: [{ isActive: true }], scopeActive: true, classSchedule: { ...futureClass, applicationPrice: 10000 }, modern: true, member: true, context };
+  it("preserves ADMIN stop and missing configuration alongside Preview restriction", () => {
+    expect(getLinkReadiness({ ...input, scopeActive: false, vercelEnv: "preview", context: { ...context, environmentAllowed: false, configReady: false, consentReady: false } })).toEqual({
+      issuance: "STOPPED", classIntake: "READY", guideReady: false, consentReady: false, environment: "Preview", publicAccessAllowed: false, accessRestriction: "PREVIEW",
+    });
+  });
+  it("preserves issuance for cancelled/past classes and distinguishes modern missing price from legacy", () => {
+    expect(getLinkReadiness({ ...input, classSchedule: { ...input.classSchedule, status: "CANCELLED" } })).toMatchObject({ issuance: "ACTIVE", classIntake: "CANCELLED" });
+    expect(getLinkReadiness({ ...input, classSchedule: { ...input.classSchedule, startsAt: NOW } }).classIntake).toBe("STARTED");
+    expect(getLinkReadiness({ ...input, classSchedule: { ...input.classSchedule, applicationPrice: null } }).classIntake).toBe("PRICE_MISSING");
+    expect(getLinkReadiness({ ...input, modern: false, classSchedule: { ...input.classSchedule, applicationPrice: null } }).classIntake).toBe("READY");
+  });
+  it("keeps valid hash issuance even when no address exists", () => {
+    expect(getLinkReadiness(input).issuance).toBe("ACTIVE");
+    expect(getLinkReadiness({ ...input, links: [] }).issuance).toBe("NONE");
+  });
+});

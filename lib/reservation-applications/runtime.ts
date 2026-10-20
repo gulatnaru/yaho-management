@@ -4,6 +4,22 @@ import { isConsentContentReady } from "./consent-content";
 import { isReservationApplicationSettingsReady } from "@/server/reservation-applications/settings";
 import type { PrismaClient } from "@prisma/client";
 
+/** Read-only ADMIN diagnostics. This never grants Preview access or a synthetic lease. */
+export function buildModeApplicationAvailabilityContext(
+  mode: "legacy" | "modern",
+  settings: unknown | null,
+  now: Date = new Date(),
+  env: EnvironmentLike = process.env,
+  syntheticSettings?: unknown,
+): ApplicationAvailabilityContext {
+  const configReady = mode === "legacy"
+    ? settings !== null ? isReservationApplicationSettingsReady(settings) : readPublicApplicationConfig(env) !== null
+    : env.VERCEL_ENV === "preview"
+      ? isReservationApplicationSettingsReady(syntheticSettings)
+      : settings !== null && isReservationApplicationSettingsReady(settings);
+  return { now, environmentAllowed: isPublicApplicationEnvironment(env.VERCEL_ENV), configReady, consentReady: isConsentContentReady(env.VERCEL_ENV) };
+}
+
 /** 현재 배포 환경·설정·동의 문구 상태로 접수 판정 컨텍스트를 만든다. */
 export function buildApplicationAvailabilityContext(
   now: Date = new Date(),

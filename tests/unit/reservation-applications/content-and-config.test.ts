@@ -109,3 +109,34 @@ describe("consent content", () => {
     expect(isConsentContentReady("production")).toBe(true);
   });
 });
+
+import { buildLegacyApplicationAvailabilityContext, buildModeApplicationAvailabilityContext } from "@/lib/reservation-applications/runtime";
+import type { PrismaClient } from "@prisma/client";
+
+describe("mode-specific ADMIN runtime diagnostics", () => {
+  const now = new Date("2026-10-20T00:00:00Z");
+  const valid = { bankName: "DB은행", accountNumber: "123", accountHolder: "예금주", blogUrl: "https://example.test/blog", instagramUrl: "https://example.test/photo", kakaoChannelUrl: "https://example.test/chat" };
+  it("uses valid DB settings despite incomplete env and rejects invalid present settings despite complete env", () => {
+    for (const mode of ["legacy", "modern"] as const) {
+      expect(buildModeApplicationAvailabilityContext(mode, valid, now, {}).configReady).toBe(true);
+      expect(buildModeApplicationAvailabilityContext(mode, {}, now, completeEnv).configReady).toBe(false);
+    }
+  });
+  it("permits env fallback only for legacy with no DB row", async () => {
+    expect(buildModeApplicationAvailabilityContext("legacy", null, now, completeEnv).configReady).toBe(true);
+    expect(buildModeApplicationAvailabilityContext("modern", null, now, completeEnv).configReady).toBe(false);
+    const client = { reservationApplicationSettings: { findUnique: async () => null } } as unknown as Pick<PrismaClient, "reservationApplicationSettings">;
+    expect(await buildLegacyApplicationAvailabilityContext(client, now, completeEnv)).toEqual(buildModeApplicationAvailabilityContext("legacy", null, now, completeEnv));
+  });
+  it("uses Preview group scoped settings but never grants ordinary public reception", () => {
+    const env = { ...completeEnv, VERCEL_ENV: "preview" };
+    expect(buildModeApplicationAvailabilityContext("modern", valid, now, env)).toMatchObject({ configReady: false, environmentAllowed: false });
+    expect(buildModeApplicationAvailabilityContext("modern", null, now, env, valid)).toMatchObject({ configReady: true, environmentAllowed: false });
+  });
+  it("preserves public consent semantics in Production and development diagnostics", () => {
+    expect(buildModeApplicationAvailabilityContext("modern", valid, now, { VERCEL_ENV: "production" }).consentReady).toBe(isConsentContentReady("production"));
+    expect(isConsentContentReady("production", { isPlaceholder: true, pendingDecisions: [] })).toBe(false);
+    expect(isConsentContentReady("production", { isPlaceholder: false, pendingDecisions: ["pending"] })).toBe(false);
+    expect(isConsentContentReady("preview", { isPlaceholder: true, pendingDecisions: ["pending"] })).toBe(true);
+  });
+});
