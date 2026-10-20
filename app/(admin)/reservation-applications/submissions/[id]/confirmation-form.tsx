@@ -6,8 +6,20 @@ import { Select } from "@/components/ui/select";
 import { confirmApplicationSubmission, type SubmissionConfirmationActionResult } from "../../actions";
 import { useWorkflowCoordinator } from "./workflow-controller";
 
-type ApplicationChoice = { id: string; childName: string | null; quotedAmount: number | null; classLabel?: string; classRevision?: string; candidates: Array<{ id: string; label: string; isRequested: boolean }> };
+type ApplicationChoice = { id: string; childName: string | null; quotedAmount: number | null; classLabel?: string; classRevision?: string; requestedChildId: string | null; requestedChildPurged: boolean; candidates: Array<{ id: string; label: string; isRequested: boolean }> };
 type Binding = NonNullable<SubmissionConfirmationActionResult["overbookingConfirmation"]>;
+function childOptions(application: ApplicationChoice) {
+  const bound = Boolean(application.requestedChildId || application.requestedChildPurged);
+  const candidates = bound ? application.candidates.filter((child) => child.id === application.requestedChildId) : application.candidates;
+  const blockedReason = application.requestedChildPurged
+    ? "보호자가 지정한 아이의 개인정보가 파기되어 이 신청을 확정할 수 없습니다."
+    : bound && candidates.length === 0 ? "보호자가 지정한 아이가 비활성 상태이거나 정보를 불러올 수 없어 이 신청을 확정할 수 없습니다." : null;
+  return { bound, candidates: blockedReason ? [] : candidates, blockedReason };
+}
+function allowedChildChoice(application: ApplicationChoice, choice: string | undefined) {
+  const options = childOptions(application);
+  return !options.blockedReason && ((!options.bound && choice === "NEW") || options.candidates.some((child) => child.id === choice));
+}
 /** Unknown quotes and unverified balances never become zero. Only current selectable IDs count. */
 export function selectedConfirmationAmounts(applications: readonly ApplicationChoice[], selected: Record<string, boolean>, available: number | null) {
   const targets = applications.filter((row) => selected[row.id]);
@@ -25,12 +37,13 @@ export function SubmissionConfirmationForm({ submissionId, applications, availab
   const [pending, setPending] = useState(false);
   const [reviewRequired, setReviewRequired] = useState(false);
   const dispatched = useRef(false);
-  const latest = JSON.stringify([availableAmount, applications.map((row) => [row.id, row.quotedAmount, row.classRevision, row.candidates.map((child) => child.id)])]);
+  const latest = JSON.stringify([availableAmount, applications.map((row) => [row.id, row.quotedAmount, row.classRevision, row.requestedChildId, row.requestedChildPurged, row.candidates.map((child) => child.id)])]);
   const reviewed = useRef(latest);
   useEffect(() => {
     if (reviewed.current === latest) return;
     reviewed.current = latest;
     setBindings({}); setState(null);
+    setChoices((current) => Object.fromEntries(Object.entries(current).filter(([id, choice]) => applications.some((row) => row.id === id && allowedChildChoice(row, choice)))));
     if (applications.some((row) => selected[row.id])) setReviewRequired(true);
   }, [latest, applications, selected]);
   const targets = applications.filter((row) => selected[row.id]);
@@ -39,10 +52,10 @@ export function SubmissionConfirmationForm({ submissionId, applications, availab
   const spendableAmount = workflow?.blocked ? null : availableAmount;
   const amounts = selectedConfirmationAmounts(applications, selected, spendableAmount);
   const selectionFingerprint = JSON.stringify(targets.map((row) => [row.id, choices[row.id]]).sort(([left], [right]) => left.localeCompare(right)));
-  const explicitChoices = targets.every((row) => choices[row.id] === "NEW" || row.candidates.some((candidate) => candidate.id === choices[row.id]));
+  const explicitChoices = targets.every((row) => allowedChildChoice(row, choices[row.id]));
   const frozen = pending || Boolean(workflow?.busy || workflow?.blocked) || state?.status === "result-unknown";
-  const ready = !frozen && !reviewRequired && amounts.count > 0 && amounts.shortfall === 0 && explicitChoices;
-  const warning = state?.overbookingConfirmation && state.overbookingConfirmation.selectionFingerprint === selectionFingerprint && choices[state.overbookingConfirmation.applicationId] === state.overbookingConfirmation.childChoice ? state.overbookingConfirmation : undefined;
+  const ready = !frozen && reviewed.current === latest && !reviewRequired && amounts.count > 0 && amounts.shortfall === 0 && explicitChoices;
+  const warning = reviewed.current === latest && explicitChoices && state?.overbookingConfirmation && state.overbookingConfirmation.selectionFingerprint === selectionFingerprint && choices[state.overbookingConfirmation.applicationId] === state.overbookingConfirmation.childChoice ? state.overbookingConfirmation : undefined;
   const warningTarget = applications.find((row) => row.id === warning?.applicationId);
   const payload = useMemo(() => ({ submissionId, choices: applications.filter((row) => selected[row.id]).map((row) => ({ applicationId: row.id, ...(choices[row.id] === "NEW" ? { newChild: true } : { childId: choices[row.id] }), memo: memos[row.id] ?? "", ...(bindings[row.id] ? { confirmOverbooking: true, overbookingConfirmation: bindings[row.id] } : {}) })) }), [applications, bindings, choices, memos, selected, submissionId]);
   const resetApproval = () => { setBindings({}); setState(null); };
@@ -62,15 +75,19 @@ export function SubmissionConfirmationForm({ submissionId, applications, availab
   }
   const money = (value: number | null) => value === null ? "검증 필요" : `${value.toLocaleString("ko-KR")}원`;
   return <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!warning) void submit(); }} data-testid="confirmation-selection-form">
-    {applications.map((application) => <fieldset className="min-w-0 space-y-3 rounded border p-3" disabled={frozen} key={application.id} data-testid={`confirmation-${application.id}`}>
+    {applications.map((application) => {
+      const options = childOptions(application);
+      return <fieldset className="min-w-0 space-y-3 rounded border p-3" disabled={frozen} key={application.id} data-testid={`confirmation-${application.id}`}>
       <legend className="px-1">{application.childName ?? "아이"} · {application.classLabel}</legend>
-      <label className="flex min-h-11 items-center gap-2 text-sm"><input checked={selected[application.id] ?? false} onChange={(event) => { setSelected((current) => ({ ...current, [application.id]: event.target.checked })); resetApproval(); }} type="checkbox" />{application.childName ?? "아이"} 예약 확정 선택 · {money(application.quotedAmount)}</label>
-      <label className="block space-y-1 text-sm"><span>{application.childName ?? "아이"} 확정 대상</span><Select aria-label={`${application.childName ?? "아이"} 확정 대상`} disabled={!selected[application.id]} onChange={(event) => { setChoices((current) => ({ ...current, [application.id]: event.target.value })); resetApproval(); }} value={choices[application.id] ?? ""}><option value="">기존 아이 연결 또는 새 아이 등록을 선택해주세요</option><option value="NEW">새 아이로 등록</option>{application.candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}{candidate.isRequested ? " · 보호자 요청 (참고)" : ""}</option>)}</Select></label>
+      <label className="flex min-h-11 items-center gap-2 text-sm"><input checked={selected[application.id] ?? false} disabled={Boolean(options.blockedReason) && !selected[application.id]} onChange={(event) => { if (event.target.checked && options.blockedReason) return; setSelected((current) => ({ ...current, [application.id]: event.target.checked })); resetApproval(); }} type="checkbox" />{application.childName ?? "아이"} 예약 확정 선택 · {money(application.quotedAmount)}</label>
+      {options.bound ? <p className="text-sm">보호자가 지정한 아이로만 확정할 수 있습니다. 확정 대상을 직접 선택해 주세요.</p> : null}
+      {options.blockedReason ? <p role="alert">{options.blockedReason}</p> : null}
+      <label className="block space-y-1 text-sm"><span>{application.childName ?? "아이"} 확정 대상</span><Select aria-label={`${application.childName ?? "아이"} 확정 대상`} disabled={!selected[application.id] || Boolean(options.blockedReason)} onChange={(event) => { const value = event.target.value; if (value && !allowedChildChoice(application, value)) return; setChoices((current) => ({ ...current, [application.id]: value })); resetApproval(); }} value={allowedChildChoice(application, choices[application.id]) ? choices[application.id] : ""}><option value="">{options.blockedReason ? "지정한 아이를 확인할 수 없어 확정할 수 없습니다" : options.bound ? "보호자가 지정한 아이를 선택해주세요" : "기존 아이 연결 또는 새 아이 등록을 선택해주세요"}</option>{!options.bound ? <option value="NEW">새 아이로 등록</option> : null}{options.candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}{options.bound ? " · 보호자가 지정한 아이" : candidate.isRequested ? " · 보호자 요청 (참고)" : ""}</option>)}</Select></label>
       <label className="block space-y-1 text-sm"><span>{application.childName ?? "아이"} 예약 운영 메모 초안</span><textarea className="min-h-24 w-full rounded border p-2" maxLength={1000} value={memos[application.id] ?? ""} onChange={(event) => { setMemos((current) => ({ ...current, [application.id]: event.target.value })); resetApproval(); }} /></label>
       <p className="text-xs text-slate-600">아직 예약에 반영되지 않은 아이별 초안입니다. 보호자 요청 원문은 유지됩니다. 건강·알레르기 등 민감정보는 메모에 옮기지 말고 기존 안전정보 관리 절차를 따르세요.</p>
-    </fieldset>)}
+    </fieldset>; })}
     <dl className="grid grid-cols-2 gap-2 rounded border p-3 text-sm" aria-live="polite" data-testid="confirmation-amounts"><dt>선택한 아이</dt><dd>{amounts.count}명</dd><dt>선택 청구액 S</dt><dd>{money(amounts.total)}</dd><dt>최신 서버 가용액 A</dt><dd>{money(spendableAmount)}</dd><dt>부족액 B</dt><dd>{money(amounts.shortfall)}</dd></dl>
-    {amounts.count === 0 ? <p role="status">확정할 아이를 선택해 주세요.</p> : !explicitChoices ? <p role="status">선택한 아이마다 기존 아이 연결 또는 새 아이 등록을 명시적으로 선택해 주세요.</p> : null}
+    {amounts.count === 0 ? <p role="status">확정할 아이를 선택해 주세요.</p> : !explicitChoices ? <p role="status">{targets.some((row) => childOptions(row).bound) ? "선택한 신청마다 허용된 확정 대상을 명시적으로 선택해 주세요. 보호자가 지정한 아이를 확인할 수 없는 신청은 선택을 해제해 주세요." : "선택한 아이마다 기존 아이 연결 또는 새 아이 등록을 명시적으로 선택해 주세요."}</p> : null}
     {amounts.shortfall !== null && amounts.shortfall > 0 ? <p role="alert">예약 확정에 {money(amounts.shortfall)}이 부족합니다.</p> : null}
     {amounts.total === null || spendableAmount === null ? <p role="alert">청구액과 최신 서버 원장 검증 전에는 확정할 수 없습니다.</p> : null}
     {reviewRequired ? <div role="alert"><p>서버 금액·신청·클래스 정보가 변경되었습니다. 선택과 아이 연결을 다시 검토해주세요.</p><Button disabled={frozen} onClick={() => { setReviewRequired(false); resetApproval(); }} type="button">최신 선택 내용 다시 검토함</Button></div> : null}

@@ -12,8 +12,8 @@ vi.mock("@/app/(admin)/reservation-applications/actions", () => ({ confirmApplic
 vi.mock("@/app/(admin)/reservation-applications/submissions/[id]/workflow-controller", () => ({ useWorkflowCoordinator: () => ({ ...mocks.workflow, run: mocks.run }) }));
 import { selectedConfirmationAmounts, SubmissionConfirmationForm } from "@/app/(admin)/reservation-applications/submissions/[id]/confirmation-form";
 const applications = [
-  { id: "a1", childName: "첫째", quotedAmount: 40000, classLabel: "첫 클래스", classRevision: "v1", candidates: [{ id: "child1", label: "기존 첫째", isRequested: true }] },
-  { id: "a2", childName: "둘째", quotedAmount: 60000, classLabel: "둘째 클래스", classRevision: "v1", candidates: [] },
+  { id: "a1", childName: "첫째", quotedAmount: 40000, classLabel: "첫 클래스", classRevision: "v1", requestedChildId: null, requestedChildPurged: false, candidates: [{ id: "child1", label: "기존 첫째", isRequested: true }] },
+  { id: "a2", childName: "둘째", quotedAmount: 60000, classLabel: "둘째 클래스", classRevision: "v1", requestedChildId: null, requestedChildPurged: false, candidates: [] },
 ];
 type Props = { children?: React.ReactNode; disabled?: boolean; checked?: boolean; value?: string; type?: string; onChange?: (event: { target: { value: string; checked: boolean } }) => void; onClick?: () => unknown; onSubmit?: (event: { preventDefault: () => void }) => void; "data-testid"?: string };
 function nodes(tree: React.ReactNode): React.ReactElement<Props>[] { return Array.isArray(tree) ? tree.flatMap(nodes) : React.isValidElement<Props>(tree) ? [tree, ...nodes(tree.props.children)] : []; }
@@ -21,6 +21,8 @@ function text(tree: React.ReactNode): string { return typeof tree === "string" |
 let props: Parameters<typeof SubmissionConfirmationForm>[0];
 function render() { hooks.cursor = 0; const result = SubmissionConfirmationForm(props); const effects = hooks.effects.splice(0); effects.forEach((effect) => effect()); return result; }
 function card(id: string) { return nodes(render()).find((row) => row.props["data-testid"] === `confirmation-${id}`)!; }
+function childSelect(id: string) { return nodes(card(id)).find((row) => row.props.onChange && row.props.type !== "checkbox" && row.type !== "textarea")!; }
+function optionValues(id: string) { return nodes(childSelect(id)).filter((row) => row.type === "option").map((row) => row.props.value); }
 function select(id: string, checked = true) { nodes(card(id)).find((row) => row.props.type === "checkbox")!.props.onChange!({ target: { checked, value: "" } }); }
 function choose(id: string, value: string) { nodes(card(id)).find((row) => row.props.onChange && row.props.type !== "checkbox" && row.type !== "textarea")!.props.onChange!({ target: { value, checked: false } }); }
 function memo(id: string, value: string) { nodes(card(id)).find((row) => row.type === "textarea")!.props.onChange!({ target: { value, checked: false } }); }
@@ -34,6 +36,59 @@ beforeEach(() => {
   mocks.run.mockImplementation((task) => task()); mocks.confirm.mockResolvedValue({ status: "success", submissionId: "s1", applicationIds: ["a1"], reservationIds: ["r1"], paymentId: "p1" });
 });
 describe("explicit confirmation selection and isolated drafts", () => {
+  it("offers only the binding requested Child and requires both explicit selections", async () => {
+    props.applications = [{ ...applications[0]!, requestedChildId: "child1", candidates: [...applications[0]!.candidates, { id: "child2", label: "다른 아이", isRequested: false }] }];
+    expect(optionValues("a1")).toEqual(["", "child1"]);
+    expect(text(card("a1"))).toContain("보호자가 지정한 아이로만 확정할 수 있습니다");
+    expect(text(card("a1"))).not.toContain("참고");
+    expect(text(childSelect("a1"))).not.toContain("새 아이");
+    expect(nodes(card("a1")).find((row) => row.props.type === "checkbox")!.props.checked).toBe(false);
+    expect(childSelect("a1").props.value).toBe(""); expect(childSelect("a1").props.disabled).toBe(true);
+    select("a1"); expect(childSelect("a1").props.value).toBe("");
+    await submit(); expect(mocks.confirm).not.toHaveBeenCalled();
+    for (const invalid of ["NEW", "child2"]) { choose("a1", invalid); await submit(); expect(mocks.confirm).not.toHaveBeenCalled(); }
+    choose("a1", "child1"); await submit();
+    expect(sent().choices).toEqual([{ applicationId: "a1", childId: "child1", memo: "" }]);
+  });
+  it.each([
+    { case: "inactive requested Child excluded from active candidates", requestedChildId: "inactive-child", requestedChildPurged: false, reason: "비활성 상태이거나 정보를 불러올 수 없어" },
+    { case: "missing or unloadable requested Child", requestedChildId: "missing-child", requestedChildPurged: false, reason: "비활성 상태이거나 정보를 불러올 수 없어" },
+    { case: "purged requested Child", requestedChildId: "child1", requestedChildPurged: true, reason: "개인정보가 파기되어" },
+    { case: "purge cleared requested Child ID", requestedChildId: null, requestedChildPurged: true, reason: "개인정보가 파기되어" },
+  ])("blocks confirmation with a reason for $case without offering alternatives", async ({ requestedChildId, requestedChildPurged, reason }) => {
+    props.applications = [{ ...applications[0]!, requestedChildId, requestedChildPurged }];
+    expect(optionValues("a1")).toEqual([""]);
+    expect(text(card("a1"))).toContain(reason);
+    expect(nodes(card("a1")).find((row) => row.props.type === "checkbox")!.props.disabled).toBe(true);
+    expect(childSelect("a1").props.disabled).toBe(true);
+    select("a1"); choose("a1", "NEW"); choose("a1", "child1"); await submit();
+    expect(button("선택한 아이 0명 예약 확정").props.disabled).toBe(true); expect(mocks.confirm).not.toHaveBeenCalled();
+  });
+  it.each(["NEW", "child2"])("invalidates a stale %s choice when binding metadata arrives", async (previousChoice) => {
+    props.applications = [{ ...applications[0]!, candidates: [...applications[0]!.candidates, { id: "child2", label: "다른 아이", isRequested: false }] }];
+    select("a1"); choose("a1", previousChoice); expect(button("선택한 아이 1명 예약 확정").props.disabled).toBe(false);
+    props.applications = [{ ...props.applications[0]!, requestedChildId: "child1" }]; render(); render();
+    expect(childSelect("a1").props.value).toBe(""); expect(optionValues("a1")).toEqual(["", "child1"]);
+    expect(text(render())).toContain("서버 금액·신청·클래스 정보가 변경");
+    button("최신 선택 내용 다시 검토함").props.onClick!(); await submit(); expect(mocks.confirm).not.toHaveBeenCalled();
+    choose("a1", "child1"); await submit(); expect(sent().choices[0].childId).toBe("child1"); expect(sent().choices[0].newChild).toBeUndefined();
+  });
+  it("allows deselecting a newly unavailable bound application and confirming an eligible sibling", async () => {
+    props.applications = [{ ...applications[0]!, requestedChildId: "child1" }, applications[1]!];
+    select("a1"); choose("a1", "child1"); select("a2"); choose("a2", "NEW");
+    props.applications = [{ ...props.applications[0]!, candidates: [] }, applications[1]!]; render(); render();
+    expect(childSelect("a1").props.value).toBe("");
+    expect(nodes(card("a1")).find((row) => row.props.type === "checkbox")!.props.disabled).toBe(false);
+    button("최신 선택 내용 다시 검토함").props.onClick!(); await submit(); expect(mocks.confirm).not.toHaveBeenCalled();
+    select("a1", false); await submit(); expect(sent().choices).toEqual([{ applicationId: "a2", newChild: true, memo: "" }]);
+  });
+  it("preserves unbound explicit existing and NEW options without initial selection", () => {
+    expect(optionValues("a1")).toEqual(["", "NEW", "child1"]); expect(optionValues("a2")).toEqual(["", "NEW"]);
+    expect(childSelect("a1").props.value).toBe(""); expect(childSelect("a2").props.value).toBe("");
+    select("a1"); expect(text(render())).toContain("선택한 아이마다 기존 아이 연결 또는 새 아이 등록을 명시적으로 선택해 주세요.");
+    choose("a1", "NEW"); expect(button("선택한 아이 1명 예약 확정").props.disabled).toBe(false);
+    choose("a1", "child1"); expect(button("선택한 아이 1명 예약 확정").props.disabled).toBe(false);
+  });
   it("starts empty, never defaults to requested Child or NEW, and requires explicit per-child choice", async () => {
     expect(button("선택한 아이 0명 예약 확정").props.disabled).toBe(true);
     expect(text(render())).toContain("확정할 아이를 선택해 주세요");

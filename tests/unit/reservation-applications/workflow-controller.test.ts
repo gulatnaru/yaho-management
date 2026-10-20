@@ -31,6 +31,7 @@ import { awaitWorkflowRead, awaitWorkflowResult, WorkflowController, workflowRec
 import { BankTransactionForm } from "@/app/(admin)/reservation-applications/submissions/[id]/deposit-form";
 import { ApplicationResolveForm } from "@/app/(admin)/reservation-applications/_components/application-resolve-form";
 import { ApplicationReturnsWorkbench } from "@/app/(admin)/reservation-applications/_components/application-return-card";
+import { SubmissionConfirmationForm } from "@/app/(admin)/reservation-applications/submissions/[id]/confirmation-form";
 
 type Props = { children?: React.ReactNode; onClick?: () => unknown; onSubmit?: (event: { preventDefault: () => void }) => unknown; onChange?: (event: { target: { value: string } }) => unknown; value?: unknown; disabled?: boolean; readOnly?: boolean; name?: string; "data-testid"?: string; ref?: { current: unknown } };
 function elements(node: React.ReactNode): React.ReactElement<Props>[] {
@@ -82,6 +83,15 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("same-page authoritative workflow", () => {
+  it.each([
+    { requestedChildId: "requested-child", requestedChildPurgedAt: null, requestedChildPurged: false },
+    { requestedChildId: null, requestedChildPurgedAt: new Date("2026-01-01T00:00:00Z"), requestedChildPurged: true },
+  ])("passes requested Child binding and purge metadata to confirmation UI: %s", ({ requestedChildId, requestedChildPurgedAt, requestedChildPurged }) => {
+    const candidates = [{ id: "requested-child", label: "지정한 아이", isRequested: true }];
+    initial.applications = [{ id: "a1", status: "SUBMITTED", childName: "합성 아이", childBirthDate: new Date(), quotedAmount: 40000, requestedChildId, requestedChildPurgedAt, classSchedule: { id: "c1", program: { name: "합성 클래스" }, capacity: 8, _count: { reservations: 0 } }, confirmationCandidates: candidates }] as unknown as ApplicationWorkflowDetail["applications"];
+    const confirmation = elements(controller()).find((row) => row.type === SubmissionConfirmationForm) as React.ReactElement<Parameters<typeof SubmissionConfirmationForm>[0]>;
+    expect(confirmation.props.applications[0]).toMatchObject({ id: "a1", requestedChildId, requestedChildPurged, candidates });
+  });
   it("accepts success only after an authoritative matching receipt and valid ledger", async () => {
     await coordinator().run(async () => success, "deposit", "key-1");
     expect(mocks.refresh).toHaveBeenCalledWith("s1"); expect(coordinator().blocked).toBe(false);
