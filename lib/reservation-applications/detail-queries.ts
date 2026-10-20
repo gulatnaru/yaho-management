@@ -7,6 +7,7 @@ import { APPLICATION_CONSENT_CONTENT } from "./consent-content";
 import { loadConfirmedCustomerFacts } from "./last-reserved-class";
 import { summarizeDetailLedger } from "./ledger-summary";
 import { familyDetailHref, type ApplicationSearchParams } from "./navigation";
+import { APPLICATION_RETURN_SELECT, redactApplicationReturn } from "./return-queries";
 import { APPLICATION_DETAIL_SELECT } from "./queries";
 import { computeApplicationRetention, computeConfirmedCustomerRetention } from "./retention";
 
@@ -48,10 +49,7 @@ export async function getApplicationWorkflowDetail(id: string, applicationId?: u
         id: true, amount: true, payerName: true, depositedAt: true, confirmedAt: true, confirmedBy: { select: { name: true } },
         allocations: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, depositId: true, amount: true, paymentMappingId: true, returnObligationId: true, createdAt: true } },
       } },
-      returnObligations: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: {
-        id: true, applicationId: true, kind: true, amount: true, returnedAmount: true, resolvedAt: true, createdAt: true,
-        returns: { orderBy: [{ returnedAt: "asc" }, { id: "asc" }], select: { id: true, amount: true, returnedAt: true, createdAt: true, reason: true, processedBy: { select: { name: true } } } },
-      } },
+      returnObligations: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: APPLICATION_RETURN_SELECT },
     } });
     if (!submission) return null;
     // Preserve the exact existing confirmation candidate policy. Read-only review candidates
@@ -70,7 +68,9 @@ export async function getApplicationWorkflowDetail(id: string, applicationId?: u
       return { ...row,
         // Defensive masking uses the existing purge state; it never repairs stored records.
         childName: purged ? null : row.childName, childBirthDate: purged ? null : row.childBirthDate,
-        childGender: purged ? null : row.childGender, requestNote: purged ? null : row.requestNote,
+        childGender: purged ? null : row.childGender, child: purged ? null : row.child,
+        guardianName: purged ? null : row.guardianName, guardianPhone: purged ? null : row.guardianPhone, guardianRelationship: purged ? null : row.guardianRelationship,
+        requestNote: purged ? null : row.requestNote,
         resolutionNote: purged ? null : row.resolutionNote,
         isPurged: purged, retention,
         consentOriginal: row.consentVersion === APPLICATION_CONSENT_CONTENT.version ? APPLICATION_CONSENT_CONTENT : null,
@@ -80,6 +80,12 @@ export async function getApplicationWorkflowDetail(id: string, applicationId?: u
       };
     });
     return { kind: "submission" as const, ...submission, applications,
+      guardianName: submission.personalDataPurgedAt ? null : submission.guardianName,
+      guardianPhone: submission.personalDataPurgedAt ? null : submission.guardianPhone,
+      guardianRelationship: submission.personalDataPurgedAt ? null : submission.guardianRelationship,
+      declaredPayerName: submission.personalDataPurgedAt ? null : submission.declaredPayerName,
+      deposits: submission.deposits.map((row) => ({ ...row, payerName: submission.personalDataPurgedAt ? null : row.payerName })),
+      returnObligations: submission.returnObligations.map((row) => redactApplicationReturn(row, Boolean(submission.personalDataPurgedAt))),
       ledger: summarizeDetailLedger(submission),
       focusedApplicationId: resolveApplicationFocus(applicationId, applications.map((row) => row.id)),
       invalidApplicationFocus: applicationId !== undefined && !resolveApplicationFocus(applicationId, applications.map((row) => row.id)),

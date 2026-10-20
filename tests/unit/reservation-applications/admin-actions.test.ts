@@ -33,11 +33,23 @@ const importSettingsCoreMock = vi.fn();
 const recordDepositCoreMock = vi.fn();
 const recordReturnCoreMock = vi.fn();
 const confirmSubmissionCoreMock = vi.fn();
+const closeReturnCoreMock = vi.fn();
+const workflowTransactionMock = vi.fn();
+const workflowLedgerMock = vi.fn();
+const workflowDepositMock = vi.fn();
+const workflowReturnMock = vi.fn();
+const workflowObligationMock = vi.fn();
+const workflowLockMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminMock(...args),
 }));
-vi.mock("@/lib/db/prisma", () => ({ prisma: { reservationApplication: { findUnique: (...args: unknown[]) => applicationLookupMock(...args) } } }));
+vi.mock("@/lib/db/prisma", () => ({ prisma: {
+  $transaction: (...args: unknown[]) => workflowTransactionMock(...args),
+  applicationDeposit: { findUnique: (...args: unknown[]) => workflowDepositMock(...args) },
+  applicationReturn: { findUnique: (...args: unknown[]) => workflowReturnMock(...args) },
+  reservationApplication: { findUnique: (...args: unknown[]) => applicationLookupMock(...args) },
+} }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((destination: string) => {
@@ -74,8 +86,8 @@ vi.mock("@/server/reservation-applications/settings", () => ({
   saveReservationApplicationSettingsCore: (...args: unknown[]) => saveSettingsCoreMock(...args),
 }));
 vi.mock("@/server/reservation-applications/finance", async (importOriginal) => ({
-  ApplicationSubmissionOverbookingConfirmationError: (await importOriginal<typeof import("@/server/reservation-applications/finance")>()).ApplicationSubmissionOverbookingConfirmationError,
-  closeApplicationWithReturnCore: vi.fn(),
+  ...(await importOriginal<typeof import("@/server/reservation-applications/finance")>()),
+  closeApplicationWithReturnCore: (...args: unknown[]) => closeReturnCoreMock(...args),
   confirmApplicationSubmissionCore: (...args: unknown[]) => confirmSubmissionCoreMock(...args),
   recordApplicationDepositCore: (...args: unknown[]) => recordDepositCoreMock(...args),
   recordApplicationReturnCore: (...args: unknown[]) => recordReturnCoreMock(...args),
@@ -99,7 +111,7 @@ function formData(values: Record<string, string>) {
   return data;
 }
 
-const allCores = [atomicIssueMock, confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock, createGroupCoreMock, updateGroupCoreMock, stopGroupCoreMock, issueGroupCoreMock, upgradeLegacyCoreMock, saveSettingsCoreMock, importSettingsCoreMock, recordDepositCoreMock, recordReturnCoreMock, confirmSubmissionCoreMock];
+const allCores = [closeReturnCoreMock, atomicIssueMock, confirmCoreMock, depositCoreMock, closeCoreMock, issueCoreMock, stopCoreMock, purgeCoreMock, createGroupCoreMock, updateGroupCoreMock, stopGroupCoreMock, issueGroupCoreMock, upgradeLegacyCoreMock, saveSettingsCoreMock, importSettingsCoreMock, recordDepositCoreMock, recordReturnCoreMock, confirmSubmissionCoreMock];
 
 describe("reservation application admin actions", () => {
   beforeEach(() => {
@@ -108,6 +120,15 @@ describe("reservation application admin actions", () => {
     applicationLookupMock.mockReset();
     applicationLookupMock.mockResolvedValue(null);
     for (const core of allCores) core.mockReset();
+    workflowDepositMock.mockReset().mockResolvedValue(null); workflowReturnMock.mockReset().mockResolvedValue(null);
+    workflowObligationMock.mockReset().mockResolvedValue({ submissionId: "submission-1" });
+    workflowLockMock.mockReset().mockResolvedValue([{ id: "submission-1", amount: 60000, returnedAmount: 0, resolvedAt: null }]);
+    workflowLedgerMock.mockReset().mockResolvedValue({ applications: [{ id: "application-1", status: "SUBMITTED", quotedAmount: 100000, paymentMapping: null }], deposits: [], returnObligations: [] });
+    workflowTransactionMock.mockReset().mockImplementation((callback) => callback({
+      $queryRaw: workflowLockMock, reservationApplicationSubmission: { findUnique: workflowLedgerMock },
+      applicationDeposit: { findUnique: workflowDepositMock }, applicationReturn: { findUnique: workflowReturnMock },
+      returnObligation: { findUnique: workflowObligationMock },
+    }));
   });
 
   afterEach(() => {
@@ -135,6 +156,11 @@ describe("reservation application admin actions", () => {
       () => actions.importLegacyReservationApplicationSettings(),
       () => actions.recordApplicationDeposit("submission-1", new FormData()),
       () => actions.recordApplicationReturn("obligation-1", new FormData()),
+      () => actions.lookupWorkflowReceipt("deposit", "submission-1", "key-1234567890123456"),
+      () => actions.refreshApplicationWorkflow("submission-1"),
+      () => actions.refreshApplicationReturn("obligation-1"),
+      () => actions.refreshApplicationReturns(),
+      () => actions.resolveApplicationWorkflow("application-1", "REJECTED", new FormData()),
       () => actions.confirmApplicationSubmission(new FormData()),
     ];
     for (const call of calls) {
@@ -533,4 +559,72 @@ it("validates atomic issuance and returns only its one-time receipt; metadata re
   const replay = await actions.issueClassApplicationLink(input); expect(replay.token).toBeUndefined(); expect(replay.active).toBe(false);
   const count = atomicIssueMock.mock.calls.length;
   expect((await actions.issueClassApplicationLink({ ...input, operationId: "invalid" })).error).toBeTruthy(); expect(atomicIssueMock.mock.calls).toHaveLength(count);
+});
+
+
+describe("Phase 5 bank/resolution action adapters", () => {
+  const bank = () => formData({ amount: "30000", payerName: "SYNTHETIC_ACTUAL_PAYER", depositedAt: "2026-01-01T09:30", idempotencyKey: "phase5-explicit-deposit-key" });
+  const transfer = () => formData({ amount: "20000", reason: "SYNTHETIC_RETURN_REASON", returnedAt: "2026-01-01T09:30", idempotencyKey: "phase5-explicit-return-key", observedAmount: "60000", observedReturnedAmount: "0" });
+  beforeEach(() => {
+    vi.clearAllMocks(); requireAdminMock.mockResolvedValue(adminPrincipal);
+    workflowDepositMock.mockResolvedValue(null); workflowReturnMock.mockResolvedValue(null);
+    workflowLedgerMock.mockResolvedValue({ applications: [{ id: "application-1", status: "SUBMITTED", quotedAmount: 100000, paymentMapping: null }], deposits: [], returnObligations: [] });
+    workflowObligationMock.mockResolvedValue({ submissionId: "submission-1" });
+    workflowLockMock.mockResolvedValue([{ id: "submission-1", amount: 60000, returnedAmount: 0, resolvedAt: null }]);
+    workflowTransactionMock.mockImplementation((callback) => callback({ $queryRaw: workflowLockMock, reservationApplicationSubmission: { findUnique: workflowLedgerMock }, applicationDeposit: { findUnique: workflowDepositMock }, applicationReturn: { findUnique: workflowReturnMock }, returnObligation: { findUnique: workflowObligationMock } }));
+    recordDepositCoreMock.mockResolvedValue({ depositId: "deposit-1" }); recordReturnCoreMock.mockResolvedValue({ returnId: "return-1" });
+    applicationLookupMock.mockResolvedValue({ submissionId: "submission-1" }); closeReturnCoreMock.mockResolvedValue(undefined);
+  });
+  it("passes actual payer/amount/KST date and the unchanged key to the existing core under the submission lock", async () => {
+    expect(await actions.recordApplicationDeposit("submission-1", bank())).toEqual({ status: "success", receiptId: "deposit-1", submissionId: "submission-1" });
+    expect(recordDepositCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: 30000, payerName: "SYNTHETIC_ACTUAL_PAYER", depositedAt: new Date("2026-01-01T00:30:00Z"), idempotencyKey: "phase5-explicit-deposit-key" }));
+    expect(workflowLockMock.mock.invocationCallOrder[0]).toBeLessThan(workflowDepositMock.mock.invocationCallOrder[0]!);
+    expect(workflowLedgerMock).toHaveBeenCalledTimes(2); expect(confirmSubmissionCoreMock).not.toHaveBeenCalled();
+  });
+  it.each(["amount", "payerName", "depositedAt"])("blocks same-key changed %s before calling the core", async (field) => {
+    const record = { id: "deposit-1", submissionId: "submission-1", amount: 30000, payerName: "SYNTHETIC_ACTUAL_PAYER", depositedAt: new Date("2026-01-01T00:30:00Z") };
+    workflowDepositMock.mockResolvedValue({ ...record, [field]: field === "amount" ? 1 : field === "payerName" ? "DIFFERENT" : new Date(0) });
+    expect((await actions.recordApplicationDeposit("submission-1", bank())).status).toBe("failure"); expect(recordDepositCoreMock).not.toHaveBeenCalled();
+  });
+  it("keeps an already committed receipt successful even when cache invalidation fails", async () => {
+    vi.mocked(revalidatePath).mockImplementationOnce(() => { throw new Error("SYNTHETIC_INVALIDATION_FAILURE"); });
+    expect((await actions.recordApplicationDeposit("submission-1", bank())).status).toBe("success");
+  });
+  it("distinguishes uncertain database outcomes and never retries the core", async () => {
+    recordDepositCoreMock.mockRejectedValueOnce(new Error("SYNTHETIC_PRIVATE_DB_ERROR"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await actions.recordApplicationDeposit("submission-1", bank()); expect(result.status).toBe("result-unknown");
+    expect(JSON.stringify(result)).not.toContain("SYNTHETIC_PRIVATE"); expect(recordDepositCoreMock).toHaveBeenCalledTimes(1); expect(log).not.toHaveBeenCalled(); log.mockRestore();
+  });
+  it.each(["deposit", "return", "resolution"])("blocks %s against unknown quotes/invalid ledgers before any mutation", async (kind) => {
+    workflowLedgerMock.mockResolvedValue({ applications: [{ id: "application-1", status: "SUBMITTED", quotedAmount: null, paymentMapping: null }], deposits: [], returnObligations: [] });
+    const result = kind === "deposit" ? await actions.recordApplicationDeposit("submission-1", bank()) : kind === "return" ? await actions.recordApplicationReturn("obligation-1", transfer()) : await actions.resolveApplicationWorkflow("application-1", "REJECTED", formData({ resolutionNote: "합성 반려" }));
+    expect(result.status).toBe("failure"); expect(recordDepositCoreMock).not.toHaveBeenCalled(); expect(recordReturnCoreMock).not.toHaveBeenCalled(); expect(closeReturnCoreMock).not.toHaveBeenCalled();
+  });
+  it("requires explicit return observations and rejects stale/completed obligations", async () => {
+    const missing = transfer(); missing.delete("observedAmount"); expect((await actions.recordApplicationReturn("obligation-1", missing)).status).toBe("failure");
+    workflowLockMock.mockResolvedValue([{ id: "obligation-1", amount: 60000, returnedAmount: 20000, resolvedAt: null }]);
+    expect((await actions.recordApplicationReturn("obligation-1", transfer())).status).toBe("failure");
+    workflowLockMock.mockResolvedValue([{ id: "obligation-1", amount: 60000, returnedAmount: 60000, resolvedAt: new Date() }]);
+    expect((await actions.recordApplicationReturn("obligation-1", transfer())).status).toBe("failure"); expect(recordReturnCoreMock).not.toHaveBeenCalled();
+  });
+  it("recognizes a matching return replay before stale-observation checks, but rejects changed payload", async () => {
+    const prior = { id: "return-1", returnObligationId: "obligation-1", amount: 20000, reason: "SYNTHETIC_RETURN_REASON", returnedAt: new Date("2026-01-01T00:30:00Z") };
+    workflowReturnMock.mockResolvedValue(prior); workflowLockMock.mockResolvedValue([{ id: "obligation-1", amount: 60000, returnedAmount: 20000, resolvedAt: null }]);
+    expect((await actions.recordApplicationReturn("obligation-1", transfer())).status).toBe("success");
+    workflowReturnMock.mockResolvedValue({ ...prior, amount: 10000 }); recordReturnCoreMock.mockClear();
+    expect((await actions.recordApplicationReturn("obligation-1", transfer())).status).toBe("failure"); expect(recordReturnCoreMock).not.toHaveBeenCalled();
+  });
+  it("receipt recovery is read-only and distinguishes absent, matching, changed and foreign targets", async () => {
+    expect(await actions.lookupWorkflowReceipt("deposit", "submission-1", "phase5-explicit-deposit-key", bank())).toMatchObject({ status: "failure", code: "not-found" });
+    workflowDepositMock.mockResolvedValue({ id: "deposit-1", submissionId: "submission-1", amount: 30000, payerName: "SYNTHETIC_ACTUAL_PAYER", depositedAt: new Date("2026-01-01T00:30:00Z") });
+    expect((await actions.lookupWorkflowReceipt("deposit", "submission-1", "phase5-explicit-deposit-key", bank())).status).toBe("success");
+    const changed = bank(); changed.set("amount", "30001"); expect((await actions.lookupWorkflowReceipt("deposit", "submission-1", "phase5-explicit-deposit-key", changed)).status).toBe("failure");
+    expect((await actions.lookupWorkflowReceipt("deposit", "foreign", "phase5-explicit-deposit-key", bank())).status).toBe("failure"); expect(recordDepositCoreMock).not.toHaveBeenCalled();
+  });
+  it.each(["REJECTED", "CANCELLED"] as const)("requires the child-specific %s reason and delegates only that child", async (kind) => {
+    expect((await actions.resolveApplicationWorkflow("application-1", kind, formData({ resolutionNote: " " }))).status).toBe("failure");
+    expect((await actions.resolveApplicationWorkflow("application-1", kind, formData({ resolutionNote: " 합성 사유 " }))).status).toBe("success");
+    expect(closeReturnCoreMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ applicationId: "application-1", status: kind, resolutionNote: "합성 사유" }));
+  });
 });

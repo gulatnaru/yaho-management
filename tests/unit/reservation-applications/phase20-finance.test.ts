@@ -120,3 +120,17 @@ describe("Phase 20 submission overbooking authority", () => {
     }
   });
 });
+
+
+describe("Phase 5 preserved return-core idempotency contract", () => {
+  it("keeps the core target-only replay behavior; stricter immutable payload comparison belongs to the workflow adapter", async () => {
+    const { client, applicationReturn, returnObligation } = returnClient(
+      { id: "obligation-1", amount: 60000, returnedAmount: 20000 },
+      { prior: { id: "existing-transfer", returnObligationId: "obligation-1" } },
+    );
+    // The existing core deliberately returns the prior receipt without comparing
+    // amount/reason/time. Phase 5 must not silently alter that legacy contract.
+    expect(await recordApplicationReturnCore(client, input({ amount: 999, reason: "changed replay payload" }))).toEqual({ returnId: "existing-transfer", remainingAmount: 40000 });
+    expect(applicationReturn.create).not.toHaveBeenCalled(); expect(returnObligation.update).not.toHaveBeenCalled();
+  });
+});

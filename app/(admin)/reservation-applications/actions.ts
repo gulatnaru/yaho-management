@@ -1,7 +1,11 @@
 "use server";
 
 import { randomBytes } from "node:crypto";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { getApplicationWorkflowDetail } from "@/lib/reservation-applications/detail-queries";
+import { getApplicationReturn, listApplicationReturns, WORKFLOW_LEDGER_SELECT } from "@/lib/reservation-applications/return-queries";
 import { z } from "zod";
+import { summarizeDetailLedger } from "@/lib/reservation-applications/ledger-summary";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
@@ -36,7 +40,7 @@ import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplica
 import { classLinkOperationSchema, issueClassLinkOperationCore, LinkOperationConflictError, LinkRevisionConflictError, LinkSettingsNotReadyError, type ClassLinkReceipt, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { reservationApplicationSettingsSchema, groupCreateSchema, submissionConfirmationSchema } from "@/lib/reservation-applications/phase20-validation";
 import { getReservationApplicationSettings, importLegacyReservationApplicationSettingsCore, isReservationApplicationSettingsReady, saveReservationApplicationSettingsCore } from "@/server/reservation-applications/settings";
-import { ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
+import { InsufficientApplicationDepositError, ApplicationReturnAmountExceededError, ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
 import { depositInputSchema, returnInputSchema } from "@/lib/reservation-applications/phase20-validation";
 import {
   closeReservationApplicationCore,
@@ -144,33 +148,146 @@ export async function importLegacyReservationApplicationSettings(): Promise<Appl
   }
 }
 
-/** Actual bank transactions are ADMIN-only and remain separate from Payment until confirmation. */
-export async function recordApplicationDeposit(submissionId: string, formData: FormData): Promise<{ error?: string; availableAmount?: number }> {
-  const principal = await requireAdminPrincipal();
-  const parsed = depositInputSchema.safeParse({ amount: formData.get("amount"), payerName: formData.get("payerName"), depositedAt: formData.get("depositedAt"), idempotencyKey: formData.get("idempotencyKey") || undefined });
-  if (!parsed.success) return { error: "실제 입금액·입금자명·입금일시를 확인해주세요." };
-  try {
-    const result = await recordApplicationDepositCore(prisma, { submissionId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
-    revalidatePath(`/reservation-applications/submissions/${submissionId}`);
-    revalidatePath("/reservation-applications/returns");
-    return { availableAmount: result.availableAmount };
-  } catch (error) {
-    console.error("[reservation-applications] failed to record deposit:", describeErrorForLog(error));
-    return { error: "입금을 기록하지 못했습니다. 같은 거래를 다시 입력하지 않았는지 확인해주세요." };
-  }
+export type WorkflowActionResult = {
+  status: "success" | "failure" | "result-unknown";
+  error?: string;
+  errors?: Record<string, string[]>;
+  code?: "not-found";
+  receiptId?: string;
+  submissionId?: string;
+};
+const workflowId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+const transactionKey = z.string().trim().min(16).max(200);
+class WorkflowConflict extends Error {}
+class WorkflowLedgerUnavailable extends Error {}
+async function assertWorkflowLedger(tx: Prisma.TransactionClient, submissionId: string) {
+  const records = await tx.reservationApplicationSubmission.findUnique({ where: { id: submissionId }, select: WORKFLOW_LEDGER_SELECT });
+  if (!records || summarizeDetailLedger(records).state !== "available") throw new WorkflowLedgerUnavailable();
 }
 
-export async function recordApplicationReturn(obligationId: string, formData: FormData): Promise<{ error?: string; remainingAmount?: number }> {
+/** Join an existing transaction without changing the finance cores or their lock order. */
+function financeInTransaction(tx: Prisma.TransactionClient) {
+  return { $transaction: async (callback: (value: Prisma.TransactionClient) => Promise<unknown>) => callback(tx) } as Pick<PrismaClient, "$transaction">;
+}
+async function lockWorkflowSubmission(tx: Prisma.TransactionClient, id: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ReservationApplicationSubmission" WHERE "id" = ${id} FOR UPDATE`;
+  if (rows.length !== 1) throw new WorkflowConflict();
+}
+function invalidateWorkflow(submissionId: string) {
+  revalidatePath(`/reservation-applications/submissions/${submissionId}`);
+  revalidatePath("/reservation-applications");
+  revalidatePath("/reservation-applications/returns");
+}
+export async function refreshApplicationWorkflow(submissionId: string) {
+  await requireAdminPrincipal();
+  if (!workflowId.safeParse(submissionId).success) return null;
+  try { return await getApplicationWorkflowDetail(submissionId); } catch { return null; }
+}
+export async function refreshApplicationReturn(obligationId: string) {
+  await requireAdminPrincipal();
+  if (!workflowId.safeParse(obligationId).success) return null;
+  try { return await getApplicationReturn(obligationId); } catch { return null; }
+}
+export async function refreshApplicationReturns() {
+  await requireAdminPrincipal();
+  try { return await listApplicationReturns(); } catch { return null; }
+}
+
+/** Receipt lookup is read-only. An unclear financial request is never replayed here. */
+export async function lookupWorkflowReceipt(kind: "deposit" | "return", targetId: string, key: string, formData?: FormData): Promise<WorkflowActionResult> {
+  await requireAdminPrincipal();
+  if (!z.enum(["deposit", "return"]).safeParse(kind).success || !workflowId.safeParse(targetId).success || !transactionKey.safeParse(key).success) return { status: "failure", error: "거래 식별자를 확인해주세요." };
+  try {
+    if (kind === "deposit") {
+      const record = await prisma.applicationDeposit.findUnique({ where: { idempotencyKey: key }, select: { id: true, submissionId: true, amount: true, payerName: true, depositedAt: true } });
+      if (record && formData) {
+        const parsed = depositInputSchema.safeParse(Object.fromEntries(formData));
+        if (!parsed.success || parsed.data.amount !== record.amount || parsed.data.payerName !== record.payerName || parsed.data.depositedAt.getTime() !== record.depositedAt.getTime()) return { status: "failure", error: "같은 거래 식별자의 입력이 다릅니다. 원래 거래를 확인해주세요." };
+      }
+      if (record && record.submissionId !== targetId) return { status: "failure", error: "거래 대상이 일치하지 않습니다." };
+      return record ? { status: "success", receiptId: record.id, submissionId: record.submissionId } : { status: "failure", code: "not-found", error: "저장 기록이 없습니다. 같은 거래 식별자와 입력으로만 다시 시도하세요." };
+    }
+    const record = await prisma.applicationReturn.findUnique({ where: { idempotencyKey: key }, select: { id: true, amount: true, reason: true, returnedAt: true, returnObligationId: true, returnObligation: { select: { submissionId: true } } } });
+    if (record && formData) {
+      const parsed = returnInputSchema.safeParse(Object.fromEntries(formData));
+      if (!parsed.success || parsed.data.amount !== record.amount || parsed.data.reason !== record.reason || parsed.data.returnedAt.getTime() !== record.returnedAt.getTime()) return { status: "failure", error: "같은 거래 식별자의 입력이 다릅니다. 원래 거래를 확인해주세요." };
+    }
+    if (record && record.returnObligationId !== targetId) return { status: "failure", error: "거래 대상이 일치하지 않습니다." };
+    return record ? { status: "success", receiptId: record.id, submissionId: record.returnObligation.submissionId } : { status: "failure", code: "not-found", error: "저장 기록이 없습니다. 같은 거래 식별자와 입력으로만 다시 시도하세요." };
+  } catch { return { status: "result-unknown", error: "저장 결과를 확인하지 못했습니다. 금융 요청을 반복하지 말고 결과를 다시 조회하세요." }; }
+}
+
+/** Compare the complete immutable bank payload under the same Submission lock as the core. */
+export async function recordApplicationDeposit(submissionId: string, formData: FormData): Promise<WorkflowActionResult> {
+  const principal = await requireAdminPrincipal();
+  const parsed = depositInputSchema.extend({ idempotencyKey: transactionKey }).safeParse({ amount: formData.get("amount"), payerName: formData.get("payerName"), depositedAt: formData.get("depositedAt"), idempotencyKey: formData.get("idempotencyKey") });
+  if (!workflowId.safeParse(submissionId).success || !parsed.success) return { status: "failure", error: "실제 입금액·입금자명·입금일시를 확인해주세요.", errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors };
+  let receiptId: string;
+  try {
+    receiptId = await prisma.$transaction(async (tx) => {
+      await lockWorkflowSubmission(tx, submissionId);
+      await assertWorkflowLedger(tx, submissionId);
+      const prior = await tx.applicationDeposit.findUnique({ where: { idempotencyKey: parsed.data.idempotencyKey }, select: { id: true, submissionId: true, amount: true, payerName: true, depositedAt: true } });
+      if (prior && (prior.submissionId !== submissionId || prior.amount !== parsed.data.amount || prior.payerName !== parsed.data.payerName || prior.depositedAt.getTime() !== parsed.data.depositedAt.getTime())) throw new WorkflowConflict();
+      const result = await recordApplicationDepositCore(financeInTransaction(tx), { submissionId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, submissionId);
+      return result.depositId;
+    }, { maxWait: 10000, timeout: 20000 });
+  } catch (error) {
+    return { status: error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationReturnAmountExceededError || error instanceof ApplicationNotPendingError ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다. 최신 서버 기록을 확인해주세요." : error instanceof WorkflowConflict ? "같은 거래 식별자의 대상·금액·입금자·일시를 변경할 수 없습니다." : "입금 저장 결과를 확인해주세요. 결과 조회 전에는 다시 기록하지 마세요." };
+  }
+  // Invalidation is advisory; only a separate successful authoritative read proves freshness.
+  try { invalidateWorkflow(submissionId); } catch { /* receipt remains committed */ }
+  return { status: "success", receiptId, submissionId };
+}
+
+export async function recordApplicationReturn(obligationId: string, formData: FormData): Promise<WorkflowActionResult> {
   const principal = await requireAdminPrincipal();
   const parsed = returnInputSchema.safeParse({ amount: formData.get("amount"), reason: formData.get("reason"), returnedAt: formData.get("returnedAt"), idempotencyKey: formData.get("idempotencyKey") });
-  if (!parsed.success) return { error: "반환 금액·사유·실제 반환일시를 확인해주세요." };
+  const observed = z.object({ amount: z.coerce.number().int().positive().max(2147483647), returnedAmount: z.coerce.number().int().nonnegative().max(2147483647) }).safeParse({ amount: formData.get("observedAmount"), returnedAmount: formData.get("observedReturnedAmount") });
+  if (!workflowId.safeParse(obligationId).success || !parsed.success || !observed.success) return { status: "failure", error: "반환 금액·사유·실제 반환일시와 최신 반환 대상을 확인해주세요.", errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors };
+  let saved: { receiptId: string; submissionId: string };
   try {
-    const result = await recordApplicationReturnCore(prisma, { obligationId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
-    revalidatePath("/reservation-applications/returns");
-    return { remainingAmount: result.remainingAmount };
+    saved = await prisma.$transaction(async (tx) => {
+      const target = await tx.returnObligation.findUnique({ where: { id: obligationId }, select: { submissionId: true } });
+      if (!target) throw new WorkflowConflict();
+      await lockWorkflowSubmission(tx, target.submissionId);
+      await assertWorkflowLedger(tx, target.submissionId);
+      const [obligation] = await tx.$queryRaw<{ id: string; amount: number; returnedAmount: number; resolvedAt: Date | null }[]>`SELECT "id", "amount", "returnedAmount", "resolvedAt" FROM "ReturnObligation" WHERE "id" = ${obligationId} FOR UPDATE`;
+      const prior = await tx.applicationReturn.findUnique({ where: { idempotencyKey: parsed.data.idempotencyKey }, select: { id: true, returnObligationId: true, amount: true, reason: true, returnedAt: true } });
+      if (prior && (prior.returnObligationId !== obligationId || prior.amount !== parsed.data.amount || prior.reason !== parsed.data.reason || prior.returnedAt.getTime() !== parsed.data.returnedAt.getTime())) throw new WorkflowConflict();
+      if (!obligation || (!prior && (obligation.resolvedAt || obligation.amount !== observed.data.amount || obligation.returnedAmount !== observed.data.returnedAmount))) throw new WorkflowConflict();
+      const result = await recordApplicationReturnCore(financeInTransaction(tx), { obligationId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, target.submissionId);
+      return { receiptId: result.returnId, submissionId: target.submissionId };
+    }, { maxWait: 10000, timeout: 20000 });
   } catch (error) {
-    console.error("[reservation-applications] failed to record return:", describeErrorForLog(error));
-    return { error: "남은 반환 필요 금액을 초과했거나 처리할 수 없습니다." };
+    return { status: error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationReturnAmountExceededError || error instanceof ApplicationNotPendingError ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다. 최신 서버 기록을 확인해주세요." : error instanceof WorkflowConflict ? "반환 대상이 변경되었거나 같은 거래의 입력이 다릅니다. 최신 기록을 확인해주세요." : "반환 저장 결과를 확인해주세요. 결과 조회 전에는 다시 기록하지 마세요." };
+  }
+  try { invalidateWorkflow(saved.submissionId); } catch { /* receipt remains committed */ }
+  return { status: "success", ...saved };
+}
+
+/** Family route adapter: preserve the existing child route actions and finance-aware core. */
+export async function resolveApplicationWorkflow(applicationId: string, kind: "REJECTED" | "CANCELLED", formData: FormData): Promise<WorkflowActionResult> {
+  const principal = await requireAdminPrincipal();
+  const parsed = applicationResolutionSchema.safeParse({ resolutionNote: formData.get("resolutionNote") });
+  if (!workflowId.safeParse(applicationId).success || !z.enum(["REJECTED", "CANCELLED"]).safeParse(kind).success || !parsed.success) return { status: "failure", error: "대상과 필수 사유를 확인해주세요.", errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors };
+  let submissionId: string | undefined;
+  try {
+    const application = await prisma.reservationApplication.findUnique({ where: { id: applicationId }, select: { submissionId: true } });
+    if (!application?.submissionId) return { status: "failure", error: "가족 신청 대상을 찾을 수 없습니다." };
+    submissionId = application.submissionId;
+    await prisma.$transaction(async (tx) => {
+      await lockWorkflowSubmission(tx, application.submissionId!);
+      await assertWorkflowLedger(tx, application.submissionId!);
+      await closeApplicationWithReturnCore(financeInTransaction(tx), { applicationId, status: kind, resolutionNote: parsed.data.resolutionNote, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, application.submissionId!);
+    }, { maxWait: 10000, timeout: 20000 });
+    try { invalidateWorkflow(application.submissionId); revalidateApplication(applicationId); } catch { /* committed */ }
+    return { status: "success", receiptId: applicationId, submissionId: application.submissionId };
+  } catch (error) {
+    return { submissionId, status: error instanceof ApplicationNotPendingError || error instanceof WorkflowLedgerUnavailable ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다." : error instanceof ApplicationNotPendingError ? "이미 처리가 끝난 신청입니다." : "처리 결과가 불명확합니다. 최신 신청 상태를 조회해주세요." };
   }
 }
 

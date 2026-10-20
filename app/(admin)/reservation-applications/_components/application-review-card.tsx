@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatKstDate, formatKstDateTime, formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { APPLICATION_GENDER_LABEL, APPLICATION_STATUS_LABEL } from "@/lib/reservation-applications/constants";
-import { applicationReviewAnchor, type ApplicationReview } from "@/lib/reservation-applications/detail-queries";
+import type { ApplicationReview } from "@/lib/reservation-applications/detail-queries";
 import { familyDetailHref, type ApplicationSearchParams } from "@/lib/reservation-applications/navigation";
 
 const historyType = { PRIVACY: "개인정보", SENSITIVE_INFO: "민감정보", PHOTO_SHARE: "사진 공유", PHOTO_MARKETING: "홍보 활용" };
@@ -17,7 +17,7 @@ export function ApplicationReviewCard({ application: item, context }: { applicat
     ["사진·영상 촬영 및 참여 보호자 공유", false, item.photoShareConsentAgreed],
     ["사진·영상 YAHO 홍보 활용", false, item.photoMarketingConsentAgreed],
   ] as const;
-  return <section id={applicationReviewAnchor(item.id)} tabIndex={-1} aria-labelledby={`title-${item.id}`} className="scroll-mt-4 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600" data-testid="application-review-card">
+  return <section id={`application-${item.id}`} tabIndex={-1} aria-labelledby={`title-${item.id}`} className="scroll-mt-4 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600" data-testid="application-review-card">
     <Card className="min-w-0 [overflow-wrap:anywhere]">
       <CardHeader><CardTitle id={`title-${item.id}`}>{item.childName ?? "개인정보 파기됨"} 신청 검토</CardTitle><Badge>{APPLICATION_STATUS_LABEL[item.status]}</Badge></CardHeader>
       <CardContent className="space-y-5">

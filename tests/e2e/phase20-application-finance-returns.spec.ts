@@ -6,8 +6,30 @@ import { submitAndExpectPublicCompletion } from "./support/public-completion";
 import { confirmSelectedApplications, clickAndExpectPhase20Action, recordPhase20Stage, initialDepositProven, replayDepositProven, recordReplayDepositProof, recordInitialDepositProof } from "./support/phase20-action";
 import { assertPreviewE2eRunnerProof } from "@/lib/e2e/preview-runner";
 import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun } from "@/lib/e2e/phase20-lease";
-import { observeDepositPending, readDepositPending, stopDepositPending } from "./support/phase20-deposit-state";
 import { installClipboardVerification, finishClipboardVerification } from "./support/phase20-clipboard";
+
+
+// Preserve the existing proof/lease contract while observing the Phase 5 frozen
+// receipt UI, whose saved submit button intentionally no longer remains enabled.
+async function observeDepositPending(page: Page, nonce: string) {
+  await page.evaluate((key) => {
+    const target = window as typeof window & { __ux5Observer?: MutationObserver; __ux5State?: { pendingSeen: boolean; settled: boolean } };
+    const form = Array.from(document.querySelectorAll<HTMLFormElement>("form")).find((item) => item.querySelector<HTMLInputElement>('input[name="idempotencyKey"]')?.value === key);
+    if (!form || target.__ux5Observer) throw new Error("P20_DEPOSIT_OBSERVER_SCOPE_DENIED");
+    const state = { pendingSeen: false, settled: false }; target.__ux5State = state;
+    const observer = new MutationObserver(() => {
+      const root = form.closest('[data-testid="deposit-transaction-form"]');
+      if (form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled || document.querySelector('[data-testid="workflow-status"]')?.textContent?.includes("확인 중")) state.pendingSeen = true;
+      if (state.pendingSeen && root?.textContent?.includes("저장 기록 확인됨") && document.querySelector('[data-testid="workflow-status"]')?.textContent?.includes("저장 결과와 최신 서버 원장을 확인했습니다")) state.settled = true;
+    }); observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true }); target.__ux5Observer = observer;
+  }, nonce);
+}
+async function readDepositPending(page: Page) {
+  return page.evaluate(() => { const state = (window as typeof window & { __ux5State?: { pendingSeen: boolean; settled: boolean } }).__ux5State; return { pendingSeen: state?.pendingSeen === true, settled: state?.settled === true }; });
+}
+async function stopDepositPending(page: Page) {
+  await page.evaluate(() => { const target = window as typeof window & { __ux5Observer?: MutationObserver; __ux5State?: unknown }; target.__ux5Observer?.disconnect(); delete target.__ux5Observer; delete target.__ux5State; });
+}
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -106,14 +128,16 @@ test.describe("Phase 20 finance and return browser flow", () => {
       expect(submission.applications[0]?.childName === fixture.marker + "_one" && submission.applications[0].classScheduleId === fixture.classIds[0] && submission.applications[0].quotedAmount === fixture.prices[0] && submission.applications[1]?.childName === fixture.marker + "_two" && submission.applications[1].classScheduleId === fixture.classIds[1] && submission.applications[1].quotedAmount === fixture.prices[1]).toBe(true);
       await loginAsAdmin(page);
       await page.goto("/reservation-applications/submissions/" + submission.id);
-      await expect(page.getByText("보호자가 입금 알림을 보냈습니다.")).toBeVisible();
+      await expect(page.getByTestId("family-detail-summary")).toContainText("입금 알림:");
+      await page.getByRole("button", { name: "새 입금 거래 시작", exact: true }).click();
       await page.locator('input[name="amount"]').fill("30000");
       await page.locator('input[name="payerName"]').fill(fixture.marker);
       const actualDepositAt = pastKstDateTimeLocal();
       await page.locator('input[name="depositedAt"]').fill(actualDepositAt);
       const depositForm = page.locator("form").filter({ has: page.locator('input[name="depositedAt"]') });
       const originalKey = await depositForm.locator('input[name="idempotencyKey"]').inputValue();
-      const available = depositForm.getByText("현재 가용 입금액 22,000원", { exact: true });
+      const depositRoot = page.getByTestId("deposit-transaction-form");
+      const available = page.getByTestId("workflow-status").getByText("저장 결과와 최신 서버 원장을 확인했습니다.", { exact: true });
       const initialBalanceAbsent = await available.count() === 0;
       const beforeCount = await prisma.applicationDeposit.count({ where: { submissionId: submission.id } });
       if (!initialBalanceAbsent || beforeCount !== 0) throw new Error("P20_INITIAL_DEPOSIT_PRECONDITION_DENIED");
@@ -145,24 +169,24 @@ test.describe("Phase 20 finance and return browser flow", () => {
       const originalRows = await ownedDeposits();
       if (originalRows.length !== 1 || originalRows[0]?.idempotencyKey !== originalKey) throw new Error("P20_REPLAY_PRECONDITION_DENIED");
       const originalRow = originalRows[0];
-      // A document reload resets useActionState: the next balance must come from
-      // this replay, rather than the first action's retained receipt.
+      // A reload must recover the original transaction identity explicitly.
+      // It must never silently generate a replacement key for a prior bank record.
       await page.reload();
-      await expect(depositForm.getByRole("button", { name: "실제 입금 기록", exact: true })).toBeVisible();
+      await depositRoot.getByLabel("다른 브라우저의 기존 거래 식별자").fill(originalKey);
+      await depositRoot.getByRole("button", { name: "기존 거래 조회 준비", exact: true }).click();
       const replayBalanceAbsent = await available.count() === 0;
       if (!replayBalanceAbsent) throw new Error("P20_REPLAY_STALE_RESULT");
-      await expect(depositForm.getByRole("button", { name: "실제 입금 기록", exact: true })).toBeEnabled();
+      await expect(depositRoot.getByRole("button", { name: "저장 결과 조회", exact: true })).toBeEnabled();
       await depositForm.locator('input[name="amount"]').fill("30000");
       await depositForm.locator('input[name="payerName"]').fill(fixture.marker);
       await depositForm.locator('input[name="depositedAt"]').fill(actualDepositAt);
-      // The product rotates its nonce after success. Replay the same generated
-      // nonce deliberately; hidden inputs cannot be edited with fill().
-      await depositForm.locator('input[name="idempotencyKey"]').evaluate((element, value) => { (element as HTMLInputElement).value = value; }, originalKey);
+      // Recovery preserves the entered original key in React state as well as FormData.
+      expect(await depositForm.locator('input[name="idempotencyKey"]').inputValue()).toBe(originalKey);
       expect(await depositForm.locator('input[name="amount"]').inputValue() === "30000" && await depositForm.locator('input[name="payerName"]').inputValue() === fixture.marker && await depositForm.locator('input[name="depositedAt"]').inputValue() === actualDepositAt).toBe(true);
       await observeDepositPending(page, originalKey);
       try {
-        await clickAndExpectPhase20Action(page, depositForm.getByRole("button", { name: "실제 입금 기록", exact: true }), available, Date.now, "DEPOSIT_REPLAY", async (action) => {
-          await expect(depositForm.getByRole("button", { name: "실제 입금 기록", exact: true })).toBeEnabled();
+        await clickAndExpectPhase20Action(page, depositRoot.getByRole("button", { name: "저장 결과 조회", exact: true }), available, Date.now, "DEPOSIT_REPLAY", async (action) => {
+          await expect(depositRoot.getByRole("button", { name: "저장 결과 조회", exact: true })).toBeEnabled();
           await assertActiveRun();
           const after = await ownedDeposits();
           const row = after[0];
@@ -208,27 +232,26 @@ test.describe("Phase 20 finance and return browser flow", () => {
         const card = page.getByTestId("return-obligation-" + obligation!.id);
         await expect(card).toBeVisible();
         for (let index = 0; index < amounts.length; index += 1) {
+          await card.getByRole("button", { name: "새 반환 거래 시작", exact: true }).click();
           const form = card.locator("form");
           const amount = amounts[index]!;
           await form.locator('input[name="amount"]').fill(String(amount));
           await form.locator('input[name="reason"]').fill("테스트 반환");
           await form.getByLabel("실제 반환일시 (KST)").fill(pastKstDateTimeLocal());
-          await form.getByRole("button", { name: "반환 기록" }).click();
-          if (index === 0) await expect(form.getByRole("status")).toHaveText("남은 반환 " + partialRemaining.toLocaleString("ko-KR") + "원");
+          await form.getByRole("button", { name: "반환 이체 기록", exact: true }).click();
+          if (index === 0) await expect(card.getByTestId("return-obligation-remaining")).toHaveText(partialRemaining.toLocaleString("ko-KR") + "원");
         }
-        await expect(card).toHaveCount(0);
+        await expect(card).toContainText("반환 완료");
+        await expect(card.getByTestId("return-obligation-remaining")).toHaveText("0원");
       }
       await page.goto("/reservation-applications/submissions/" + submission.id);
-      await expect(page.getByRole("heading", { name: "예약 확정 전 반환 내역" })).toBeVisible();
       recordPhase20Stage("PARTIAL_RETURNS", testStartedAt);
-      const returnHistory = page.getByRole("heading", { name: "예약 확정 전 반환 내역", exact: true }).locator("..");
-      for (const [kind, amount] of [["EXCESS", 8_000], ["REJECTED", 12_000]] as const) {
-        const formatted = amount.toLocaleString("ko-KR");
-        const card = returnHistory.locator(":scope > div").filter({ hasText: new RegExp(`^${kind} · 반환 필요 ${formatted}원 ·`) });
-        await expect(card).toHaveCount(1);
-        await expect(card).toBeVisible();
-        await expect(card).toContainText(`완료 반환 ${formatted}원`);
-        await expect(card).toContainText(new RegExp(`완료 반환 ${formatted}원 · 완료`));
+      for (const obligation of [excess!, rejected!]) {
+        const card = page.getByTestId("return-obligation-" + obligation.id);
+        await expect(card).toContainText("반환 완료");
+        await card.getByText(/반환 내역 펼치기/).click();
+        await expect(card).toContainText("테스트 반환");
+        await expect(card.getByTestId("return-obligation-remaining")).toHaveText("0원");
       }
 
       const [payment, mappings, returns, refunds] = await Promise.all([
