@@ -27,6 +27,7 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
   const [receipt, setReceipt] = useState<ClassLinkReceipt>();
   const [legacyIntent, setLegacyIntent] = useState<{ kind: LinkIntent; revision: string }>();
   const [legacyUnresolved, setLegacyUnresolved] = useState(false);
+  const [legacyRefresh, setLegacyRefresh] = useState<{ kind: LinkIntent; revision: string }>();
   const legacyAttempt = useRef<{ kind: LinkIntent; revision: string } | undefined>(undefined);
   const attempt = useRef<ClassLinkOperation | undefined>(undefined);
   const [unresolved, setUnresolved] = useState(false);
@@ -38,7 +39,9 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
   useEffect(() => { setOrigin(window.location.origin); }, []);
 
   if (!view) return <Card data-testid="application-link-card"><CardHeader><CardTitle>이 클래스 신청 링크</CardTitle></CardHeader><CardContent>
-    <p role="alert">링크 정보를 불러오지 못했습니다.</p><Button onClick={() => router.refresh()} type="button">다시 불러오기</Button>
+    <p role="alert">링크 정보를 불러오지 못했습니다.</p>
+    {legacyRefresh?.kind === "replace" ? <p>기존 방식으로 재발급된 주소는 클래스 상세에서 다시 확인할 수 있습니다. 다시 불러와 현재 주소를 확인해 주세요.</p> : null}
+    <Button onClick={() => { if (legacyRefresh) window.location.reload(); else router.refresh(); }} type="button">다시 불러오기</Button>
   </CardContent></Card>;
 
   const currentScopes = view.scopes.filter((scope) => scope.currentClassMember);
@@ -46,7 +49,8 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
   const direct = currentScopes.find((scope) => scope.id === `class:${classScheduleId}`);
   const active = currentScopes.some((scope) => scope.activeForCurrentClass);
   const issued = currentScopes.some((scope) => scope.links.length > 0);
-  const rawLinks = currentScopes.filter((scope) => scope.activeForCurrentClass).flatMap((scope) => scope.links.filter((link) => link.rawPath).map((link) => ({ ...link, scopeLabel: scope.label })));
+  const legacyRefreshPending = Boolean(legacyRefresh && legacyRefresh.revision === view.revision);
+  const rawLinks = currentScopes.filter((scope) => scope.activeForCurrentClass && !(legacyRefreshPending && scope.id === `class:${classScheduleId}`)).flatMap((scope) => scope.links.filter((link) => link.rawPath).map((link) => ({ ...link, scopeLabel: scope.label })));
   const canIssueLegacy = view.canIssue && !directHistory?.upgraded;
   const receiptCurrent = receipt?.linkId && currentScopes.some((scope) => scope.activeForCurrentClass && scope.links.some((link) => link.id === receipt.linkId && link.isActive));
   const currentUrl = receipt?.token && receiptCurrent && origin ? `${origin}/apply/group/${receipt.token}` : "";
@@ -72,9 +76,18 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
       try {
         const result = await (request.kind === "stop" ? stopApplicationLink(classScheduleId, request.revision) : request.kind === "replace" ? issueApplicationLink(classScheduleId, request.revision) : upgradeLegacyApplicationLink(classScheduleId, request.revision));
         legacyAttempt.current = undefined; setLegacyUnresolved(false);
-        if (result.error) setError(result.error); else setNotice("처리했습니다.");
+        // Even an error can follow a committed mutation when path revalidation fails.
+        // Never keep offering the address from before that operation as current.
+        setLegacyRefresh(request);
+        if (result.error) setError(result.error); else {
+          setNotice(request.kind === "replace" ? "기존 주소를 무효화하고 재발급했습니다. 새 주소는 클래스 상세에서 다시 확인할 수 있습니다. 현재 주소가 보이지 않으면 다시 불러와 주세요." : "처리했습니다.");
+        }
         router.refresh();
-      } catch { setError("처리 결과를 확인하지 못했습니다. 다시 불러와 현재 링크 상태를 확인해 주세요. 같은 작업 재시도는 최초 상태로만 확인합니다."); router.refresh(); }
+      } catch {
+        setLegacyRefresh(request);
+        setError(`처리 결과를 확인하지 못했습니다. ${request.kind === "replace" ? "기존 방식으로 재발급된 주소는 클래스 상세에서 다시 확인할 수 있습니다. " : ""}다시 불러와 현재 링크 상태를 확인해 주세요. 같은 작업 재시도는 최초 상태로만 확인합니다.`);
+        router.refresh();
+      }
     });
   }
   return <Card data-testid="application-link-card">
@@ -88,7 +101,8 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
       {!view.canIssue ? <p className="text-sm">클래스 상태로 신규 접수 불가 · 기존 신청과 예약은 유지됩니다.</p> : null}
       {currentScopes.length === 0 ? <LinkReadinessIssues classScheduleId={classScheduleId} readiness={view.unissuedReadiness} /> : null}
       {currentScopes.filter((scope) => scope.readiness.issuance === "STOPPED" || scope.readiness.classIntake !== "READY" || !scope.readiness.guideReady || !scope.readiness.consentReady || scope.readiness.accessRestriction === "SYNTHETIC").map((scope) => <div className="rounded border p-2" key={scope.id}><p className="break-words text-sm font-medium">{scope.label} · {scope.members.map((member) => member.label).join(" / ")}</p><LinkReadinessIssues classScheduleId={classScheduleId} readiness={scope.readiness} /></div>)}
-      {active && rawLinks.length === 0 && !currentUrl ? <p className="text-sm">활성 상태로 발급된 링크가 있습니다. 주소는 발급할 때만 확인할 수 있습니다. 새 주소가 필요하면 고급 설정에서 해당 범위의 링크 교체를 확인해 주세요.</p> : null}
+      {legacyRefreshPending ? <div className="space-y-2"><p className="text-sm">현재 링크 상태와 주소를 다시 확인해야 합니다.{legacyRefresh?.kind === "replace" ? " 기존 방식으로 재발급된 주소는 클래스 상세에서 다시 확인할 수 있습니다." : ""}</p><Button disabled={pending} onClick={() => window.location.reload()} type="button">현재 링크 다시 불러오기</Button></div> : null}
+      {active && rawLinks.length === 0 && !currentUrl && !legacyRefreshPending ? <p className="text-sm">활성 상태로 발급된 링크가 있습니다. 주소는 발급할 때만 확인할 수 있습니다. 새 주소가 필요하면 고급 설정에서 해당 범위의 링크 교체를 확인해 주세요.</p> : null}
       {!issued && view.canIssue ? <><p className="text-sm">주소는 발급 직후 현재 화면에서만 확인할 수 있습니다. 화면을 떠나기 전에 복사하거나 공유해 주세요.</p><Button className="min-h-11 w-full md:w-auto" disabled={pending || !view.revision || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={issueSingle} type="button">{pending ? "링크 발급 중…" : unresolved ? "같은 작업 다시 시도" : "신청 링크 발급"}</Button></> : null}
       {unresolved && issued ? <Button disabled={pending} onClick={issueSingle} type="button">같은 작업 결과 확인</Button> : null}
       {currentUrl ? <IssuedLinkControls disabled={pending} url={currentUrl} /> : null}
@@ -113,9 +127,9 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
           <LinkScopeList scopes={view.scopes} />
           {view.scopes.length === 0 ? <LinkReadiness readiness={view.unissuedReadiness} /> : null}
           {direct && canIssueLegacy ? <div className="space-y-2">
-            {direct.readiness.issuance === "ACTIVE" ? <Button disabled={pending || legacyUnresolved || !view.revision} onClick={() => setLegacyIntent({ kind: "stop", revision: view.revision! })} type="button">신청 접수 중지</Button> : null}
-            <Button disabled={pending || legacyUnresolved || !view.revision} onClick={() => setLegacyIntent({ kind: "replace", revision: view.revision! })} type="button">기존 주소 무효화 후 재발급</Button>
-            <Button disabled={pending || legacyUnresolved || !view.revision || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={() => setLegacyIntent({ kind: "upgrade", revision: view.revision! })} type="button">기존 주소를 유지하고 새 방식으로 전환</Button>
+            {direct.readiness.issuance === "ACTIVE" ? <Button disabled={pending || legacyUnresolved || legacyRefreshPending || !view.revision} onClick={() => setLegacyIntent({ kind: "stop", revision: view.revision! })} type="button">신청 접수 중지</Button> : null}
+            <Button disabled={pending || legacyUnresolved || legacyRefreshPending || !view.revision} onClick={() => setLegacyIntent({ kind: "replace", revision: view.revision! })} type="button">기존 주소 무효화 후 재발급</Button>
+            <Button disabled={pending || legacyUnresolved || legacyRefreshPending || !view.revision || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={() => setLegacyIntent({ kind: "upgrade", revision: view.revision! })} type="button">기존 주소를 유지하고 새 방식으로 전환</Button>
             <p className="text-sm">기존 금액 없는 주소는 명시 전환 전까지 유지됩니다. 가격을 저장해도 기존 신청의 금액은 바뀌지 않습니다.</p>
           </div> : null}
           {currentScopes.filter((scope) => scope.groupId).map((scope) => <div className="space-y-2 rounded border p-3" key={scope.id}><p>{scope.label}</p><GroupLinkButton activeLinkIds={scope.links.filter((link) => link.isActive).map((link) => link.id)} groupId={scope.groupId!} hasLinks={scope.links.length > 0} isActive={scope.scopeActive && scope.links.some((link) => link.isActive)} members={scope.members} onIssued={setReceipt} revision={scope.revision} revisions={Object.fromEntries(scope.members.map((member) => [member.id, member.revision ?? (member.id === classScheduleId ? view.revision ?? "" : options?.find((row) => row.id === member.id)?.revision ?? "")]))} /></div>)}
