@@ -109,7 +109,7 @@ export async function countPendingReservationApplications(): Promise<number> {
   return (await countPendingApplicationFamilies()).families;
 }
 
-const APPLICATION_DETAIL_SELECT = {
+export const APPLICATION_DETAIL_SELECT = {
   id: true,
   submissionId: true,
   status: true,
@@ -157,6 +157,7 @@ export type ApplicationDetail = Prisma.ReservationApplicationGetPayload<{
 }> & { isPossibleDuplicate: boolean };
 
 export async function getReservationApplicationDetail(id: string): Promise<ApplicationDetail | null> {
+  await requireAdminPrincipal();
   const application = await prisma.reservationApplication.findUnique({
     where: { id },
     select: APPLICATION_DETAIL_SELECT,

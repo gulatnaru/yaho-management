@@ -17,7 +17,8 @@ import {
   getReservationApplicationDetail,
   listChildCandidatesForApplication,
 } from "@/lib/reservation-applications/queries";
-import { familyReturnHref, familyDetailHref, type ApplicationSearchParams } from "@/lib/reservation-applications/navigation";
+import { familyReturnHref, type ApplicationSearchParams } from "@/lib/reservation-applications/navigation";
+import { applicationReviewHref } from "@/lib/reservation-applications/detail-queries";
 import { toTelHref } from "@/lib/shared/contact";
 import { ApplicationConfirmForm, type ApplicationChildOption } from "../_components/application-confirm-form";
 import { ApplicationResolveForm } from "../_components/application-resolve-form";
@@ -263,7 +264,7 @@ export default async function ReservationApplicationDetailPage({ params, searchP
             {isSubmissionApplication && application.submission ? (
               <div className="space-y-2" data-testid="submission-application-finance-link">
                 <p className="text-sm text-slate-600">보호자 {application.submission.guardianName ?? "파기됨"} · 신고 입금자 {application.submission.declaredPayerName ?? "파기됨"}의 입금과 선택 확정은 가족 신청 단위에서 처리합니다.</p>
-                <Link className="text-sm underline" href={familyDetailHref("submission", application.submission.id, context)}>가족 신청의 입금·확정 내역 보기</Link>
+                <Link className="text-sm underline" href={applicationReviewHref(application.submission.id, application.id, context)}>가족 신청의 입금·확정 내역 보기</Link>
               </div>
             ) : canConfirm ? (
               <ApplicationConfirmForm
