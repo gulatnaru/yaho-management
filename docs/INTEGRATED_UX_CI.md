@@ -85,6 +85,11 @@ The runner executes specs in this explicit order:
 The list runs before any mutation, so its global pending-family snapshot is stable.
 Each spec is a new Playwright process, supplied with the manifest BEFORE import-time
 env reads/skip decisions, using exactly one selected project and one worker.
+All eight specs are attempted even when an earlier spec fails. Strict accounting
+still rejects unexpected skips, failures and incomplete discovery/execution.
+Per-spec missing-file, setup, process/spawn/signal and owned-settings cleanup
+failures are retained and make the final suite fail. DB safety, fixture admission
+and real auth prerequisites remain global, fail-closed gates.
 Class-links receives a run-owned valid settings singleton created and removed in
 `finally` with an ownership predicate. Completion, guardian and full journey each
 require an absent singleton and create/remove their own, with no overwrite.
@@ -93,8 +98,18 @@ Runtime credentials, fixture manifests and storageState live only beneath
 `test-results/ux-runtime/` (already ignored by the existing `test-results/`
 rule), with private file permissions. Browser output uses the sibling
 `test-results/ux-output/`; Playwright cleanup cannot delete the runtime manifest
-or auth states. No new .gitignore rule is needed. Artifacts are never uploaded;
-video, screenshots and traces are disabled. The final always-run step removes
+or auth states. No new .gitignore rule is needed. On failure, the workflow uploads
+only `test-results/ux-diagnostics/results.json` and `statuses.json`, retained for
+three days in a project/run-attempt-specific artifact. The reporter writes a
+Playwright-shaped allowlisted results projection and strict per-test statuses,
+including full suite/role titles, synthetic assertion messages/stacks, source
+locations, BLOCKED reasons and counters. Earlier specs survive later Playwright
+output-directory cleanup. Config, environment, stdio, attachments and source
+snippets are excluded; credential inventory, auth/runtime paths, cookie/header
+and page dumps, capabilities and credential-bearing URLs are scrubbed. Safe
+loopback list/class navigation context and expected/actual assertions remain.
+Raw reports, auth states, manifests and browser output are never uploaded;
+video, screenshots and traces remain disabled. The final always-run step removes
 runtime states, reports and withheld server logs. Auth.js uses a fresh masked
 runtime secret written to GITHUB_ENV, never a repository/deployment secret.
 
@@ -112,7 +127,7 @@ used; service containers disappear with the job.
 Order: checkout → Node/npm ci → random auth secret → Prisma generate → browsers →
 DB verify → role shim → migrations → seed fixtures → typecheck/lint → production
 build → production Next start at fixed loopback origin → real auth/probe → all
-UX specs → stop/remove runtime files. The build checks for a next dev process
+UX specs → failure-only diagnostic upload → stop/remove runtime files. The build checks for a next dev process
 before touching shared .next output; the workflow starts no dev server.
 
 With the dedicated DB/service environment supplied, the execution entrypoints are:
@@ -129,7 +144,7 @@ npx tsx tests/e2e/support/ux-cli.ts run
 Discovery (does not connect to PostgreSQL or start browsers) uses the same safe DB
 environment and `npx playwright test --config playwright.ux.config.ts --list`.
 The sandbox has no supported PostgreSQL/container runtime; no local browser/DB
-execution is claimed. The orchestrator pushes and runs CI after handoff.
+execution is claimed. A separately authorized future CI run is required for browser/database verification.
 
 ## Full original Gate A title inventory
 
@@ -263,12 +278,73 @@ after a 40000 payment; it verifies PaymentItem/refund totals, unchanged applicat
 allocation and paidAt, and separate payment-date, refund-date and class-date revenue
 attribution in the real revenue UI. No refund policy or revenue rule is changed.
 
-## Local verification / handoff
+## Historical iteration 1 verification / handoff
 
 - `npx tsc --noEmit`: PASS.
 - `npm run lint`: PASS, zero errors; one existing unused `_body` warning in `tests/unit/ai-service/selection-safety.test.ts`.
 - `npm test`: PASS, 200 files and 2449 tests, including 11 new focused manifest/privacy/reporter safety tests.
 - `npm run build`: PASS; no `next dev` process existed before the build; compiled, typechecked and generated all 19 static pages.
 - Safe-environment `npx playwright test --config playwright.ux.config.ts --list`: PASS, 272 tests in 8 files. The first attempt without DB env was safely rejected before loading specs; listing with dedicated loopback URL metadata succeeds without connecting to PostgreSQL.
-- Browser/database execution remains unperformed here because the sandbox cannot run PostgreSQL/container services. The orchestrator will push and dispatch the new CI workflow.
+- Browser/database execution remains unperformed here because the sandbox cannot run PostgreSQL/container services. That handoff preceded the no-commit iteration 2 work below.
 - No commits, pushes, deployments, remote DB access, migrations/schema edits or Production Schema Gate changes were performed by this build-out.
+
+## CI iteration 2: family-list static inspection
+
+Run `39580320176` reached real auth and then failed four family-list executions
+at original lines 43, 57 and 69 (MANAGER and TEACHER share line 69). The old reporter
+withheld assertion text and the old runner stopped at that first failing spec;
+its logs alone cannot establish which assertion failed.
+
+- **Line 43, test defect:** after native GET-form submission and Next Link clicks,
+  immediate `page.url()` snapshots race navigation. Assertions now retry until
+  pathname, status, class filter and page-reset semantics match. The responsive
+  badge check scopes to the actual desktop navigation or open mobile dialog and
+  waits for drawer closure before submitting. No debounce exists in this form.
+- **Line 57, test defect:** the class entry Next Link was followed by an immediate
+  URL snapshot. It now awaits the list route and the exact fixture class filter,
+  retaining the default-page requirement.
+- **Line 69, test transport assumption:** `requireAdminPrincipal()` calls
+  `notFound()` for both real non-admin roles. Next.js can return HTTP 200 when
+  streaming a not-found document ([official behavior](https://nextjs.org/docs/app/api-reference/file-conventions/not-found)).
+  The test accepts only HTTP 404 or 200 with the actual default 404 headings,
+  unchanged protected route and no redirect, list form, cards or counts. It also
+  checks the initial HTML and separate RSC payload for protected family IDs and
+  privacy sentinels. Login pages, generic errors and successful protected pages
+  do not satisfy this test. Several other denial specs still use unconditional
+  HTTP-404 assertions; they are left unchanged for the next diagnostic run.
+
+No product defect was established statically. The fixture class filter uniquely
+selects the detail family's first application; its page count is one, so page 999
+is intentionally clamped before form submission. The pending-family badge is a
+snapshot captured after seed completion and before any suite mutation. No search
+term is used in these failing cases. Family query SQL has no date filter, future
+classes are seeded 30 days ahead and displayed with explicit Asia/Seoul formatting.
+The class-entry read still returns its view with global settings absent; readiness
+checks do not remove the existing class entry link. Thus there is no evidence for
+KST, seed collision, ordering or pagination fixture changes.
+
+The next CI artifact must expose any remaining runtime assertion failures, whether
+non-admin documents use streamed 200, and the state of all seven later specs. The
+historical assertion values from run `39580320176` cannot be recovered if these
+failures disappear; the identified causes remain static findings until reproduced.
+These fixes do not claim a successful browser/database run. A genuine protected-data
+disclosure or other product behavior failure remains a failing test.
+
+Iteration 2 verification:
+
+- `npx tsc --noEmit`: PASS.
+- `npm run lint`: PASS (zero errors; the existing unused `_body` warning in
+  `tests/unit/ai-service/selection-safety.test.ts` remains).
+- `npm test`: PASS, 203 files / 2476 tests at that run. After the final narrow
+  diagnostic regressions were added, the focused `ux-diagnostics`, `ux-runner`,
+  `ux-ci-safety` and `ux-auth` run passed all 40 tests in four files.
+- `npm run build`: PASS, including production compilation, lint/type validation
+  and all 19 static pages. Process-based checks found no `next dev` server.
+- Real Playwright reporter smoke without app/DB/browser: three independent
+  processes exercised assertion failure plus a documented BLOCKED case, a later
+  passing spec and an import/setup error. Exits were `[1, 0, 1]`; all three spec
+  reports survived browser-output cleanup, numeric expected/actual and stack
+  locations remained, and planted credential/stdio/source canaries were absent
+  from artifacts and console. Temporary smoke fixtures/results were removed.
+- Actual app/browser/PostgreSQL behavior remains unverified locally. No commit,
+  stage, push, deployment, remote DB access or product behavior changes occurred.

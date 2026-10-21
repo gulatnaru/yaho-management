@@ -46,13 +46,20 @@ test.describe("Phase 3 read-only family list", () => {
     const openMenu = page.getByRole("button", { name: "메뉴 열기", exact: true });
     const mobileMenu = await openMenu.isVisible();
     if (mobileMenu) await openMenu.click();
-    await expect(page.getByRole("link", { name: fixtures!.globalPendingFamilies > 0 ? `예약 신청 (대기 ${fixtures!.globalPendingFamilies}가족)` : "예약 신청", exact: true }).first()).toBeVisible();
-    if (mobileMenu) await page.keyboard.press("Escape");
+    const navigation = mobileMenu ? page.getByRole("dialog", { name: "사이드 메뉴" }).getByRole("navigation") : page.locator("header").getByRole("navigation");
+    await expect(navigation.getByRole("link", { name: fixtures!.globalPendingFamilies > 0 ? `예약 신청 (대기 ${fixtures!.globalPendingFamilies}가족)` : "예약 신청", exact: true })).toBeVisible();
+    if (mobileMenu) {
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog", { name: "사이드 메뉴" })).toBeHidden();
+      await expect(openMenu).toHaveAttribute("aria-expanded", "false");
+    }
     await page.getByLabel("상태", { exact: true }).selectOption("all"); await page.getByRole("button", { name: "조회", exact: true }).click();
-    expect(new URL(page.url()).searchParams.has("page")).toBe(false);
+    await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
+      && !url.searchParams.has("page") && url.searchParams.get("status") === "all"
+      && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId);
     await page.getByRole("link", { name: "클래스 필터 해제", exact: true }).click();
-    expect(new URL(page.url()).searchParams.has("classScheduleId")).toBe(false);
-    expect(new URL(page.url()).searchParams.get("status")).toBe("all");
+    await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
+      && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all");
   });
   test("no matches offers reset and preserves existing class entry context", async ({ page }) => {
     await page.goto(`/reservation-applications?classScheduleId=${fixtures!.emptyClassId}`);
@@ -60,7 +67,9 @@ test.describe("Phase 3 read-only family list", () => {
     await expect(page.getByRole("link", { name: "필터 초기화", exact: true }).last()).toBeVisible();
     await page.goto(`/classes/${fixtures!.classScheduleId}`);
     await page.getByRole("link", { name: "이 클래스 신청 보기", exact: true }).click();
-    expect(new URL(page.url()).searchParams.get("classScheduleId")).toBe(fixtures!.classScheduleId);
+    await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
+      && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId
+      && !url.searchParams.has("page"));
   });
 });
 for (const role of ["MANAGER", "TEACHER"] as const) {
@@ -70,7 +79,26 @@ for (const role of ["MANAGER", "TEACHER"] as const) {
       const response = await page.goto("/reservation-applications?status=all&notification=received&bankRecord=recorded");
       await expect(page.getByTestId("family-application-card")).toHaveCount(0);
       await expect(page.getByText(/전역 대기 \d+가족/)).toHaveCount(0);
-      expect(response?.status()).toBe(404);
+      // Next.js notFound() can stream a genuine not-found document with HTTP 200.
+      // Require the actual denied UI and unchanged route; a login/error page or
+      // protected page with temporarily absent cards cannot satisfy this assertion.
+      expect(response).not.toBeNull();
+      expect([200, 404]).toContain(response!.status());
+      expect(response!.request().redirectedFrom()).toBeNull();
+      await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications");
+      await expect(page.getByRole("heading", { name: "404", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "This page could not be found.", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "조회", exact: true })).toHaveCount(0);
+      const html = await response!.text();
+      const rsc = await page.request.get("/reservation-applications?status=all&notification=received&bankRecord=recorded", { headers: { RSC: "1" } });
+      expect([200, 404]).toContain(rsc.status());
+      const payload = await rsc.text();
+      for (const value of [...(fixtures?.privateSentinels ?? []), ...(fixtures ? [fixtures.familyId] : [])]) {
+        expect(html.includes(value)).toBe(false);
+        expect(payload.includes(value)).toBe(false);
+      }
+      expect(html.includes('data-testid="family-application-card"')).toBe(false);
+      expect(payload.includes('family-application-card')).toBe(false);
     });
   });
 }

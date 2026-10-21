@@ -108,11 +108,21 @@ jobs:
         run: npx tsx tests/e2e/support/ux-cli.ts auth
       - name: Execute every UX spec with strict skip accounting
         run: npx tsx tests/e2e/support/ux-cli.ts run
+      - name: Upload synthetic test-result diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-diagnostics-${{ matrix.project }}-${{ github.run_attempt }}
+          path: |
+            test-results/ux-diagnostics/results.json
+            test-results/ux-diagnostics/statuses.json
+          retention-days: 3
+          if-no-files-found: warn
       - name: Stop app and remove credentials, auth states and browser output
         if: always()
         run: |
           if [ -f /tmp/yaho-ux-app.pid ]; then kill "$(cat /tmp/yaho-ux-app.pid)" 2>/dev/null || true; fi
           rm -rf test-results playwright-report
           rm -f /tmp/yaho-ux-app.log /tmp/yaho-ux-app.pid
-    # No artifact uploads: storageState/manifest and failure-page content stay
-    # ephemeral. Screenshot, trace and video are disabled in the UX config.
+    # Only allowlisted, scrubbed synthetic assertion/status JSON is uploaded.
+    # Runtime/auth, browser output, app logs, traces and page content stay ephemeral.

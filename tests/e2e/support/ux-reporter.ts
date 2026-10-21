@@ -1,5 +1,6 @@
-import type { FullResult, Reporter, Suite, TestCase, TestResult } from "@playwright/test/reporter";
+import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestError, TestResult } from "@playwright/test/reporter";
 import { basename } from "node:path";
+import { diagnosticSecrets, publishUxDiagnostics, scrubDiagnosticText, type DiagnosticError, type DiagnosticTest } from "./ux-diagnostics";
 
 // These cases require a separately provisioned app/read-failure mechanism. Never
 // disable authentication, break the shared DB, or silently count them as passing.
@@ -25,9 +26,31 @@ export default class UxReporter implements Reporter {
   private passed = 0;
   private blocked = 0;
   private invalid = false;
-  onBegin(_: unknown, suite: Suite) { this.expected = suite.allTests().length; }
+  private tests: DiagnosticTest[] = [];
+  private errors: DiagnosticError[] = [];
+  private project = process.env.UX_PROJECT ?? "unknown";
+  private spec = process.env.UX_DIAGNOSTIC_SPEC ?? "unknown";
+  private secrets: string[] = process.env.UX_CI === "1" ? diagnosticSecrets() : [];
+  onBegin(config: FullConfig | undefined, suite: Suite) {
+    this.expected = suite.allTests().length;
+    this.project = process.env.UX_PROJECT ?? suite.allTests()[0]?.parent?.project()?.name ?? config?.projects[0]?.name ?? "unknown";
+    this.spec = process.env.UX_DIAGNOSTIC_SPEC ?? basename(suite.allTests()[0]?.location.file ?? "unknown");
+  }
+  private error(error: TestError): DiagnosticError {
+    return {
+      ...(error.message ? { message: scrubDiagnosticText(error.message, this.secrets) } : {}),
+      ...(error.stack ? { stack: scrubDiagnosticText(error.stack, this.secrets) } : {}),
+    };
+  }
   onTestEnd(test: TestCase, result: TestResult) {
     this.completed++;
+    const blockedReason = result.status === "skipped" ? blockedUxReason(test.location.file, test.title) : undefined;
+    this.tests.push({
+      title: scrubDiagnosticText(typeof test.titlePath === "function" ? test.titlePath().filter(Boolean).join(" › ") : test.title, this.secrets), file: basename(test.location.file), line: test.location.line,
+      status: result.status, expectedStatus: test.expectedStatus,
+      classification: blockedReason ? "BLOCKED" : result.status === "passed" && test.expectedStatus === "passed" ? "passed" : "failed",
+      ...(blockedReason ? { blockedReason } : {}), errors: (result.errors ?? []).map((error) => this.error(error)),
+    });
     if (result.status === "passed" && test.expectedStatus === "passed") this.passed++;
     else if (result.status === "skipped" && blockedUxReason(test.location.file, test.title)) {
       this.blocked++;
@@ -38,9 +61,20 @@ export default class UxReporter implements Reporter {
       console.error(`[UX FAILURE] ${basename(test.location.file)}:${test.location.line} status=${result.status}; inspect locally with synthetic data.`);
     }
   }
-  onError() { this.invalid = true; console.error("[UX FAILURE] Runner/setup error; sensitive diagnostics suppressed."); }
+  onError(error?: TestError) { if (error) this.errors.push(this.error(error)); this.invalid = true; console.error("[UX FAILURE] Runner/setup error; sensitive diagnostics suppressed."); }
   async onEnd(result: FullResult) {
     console.log(`[UX TOTAL] discovered=${this.expected} completed=${this.completed} passed=${this.passed} BLOCKED=${this.blocked}`);
-    if (!this.expected || this.completed !== this.expected || this.invalid || result.status !== "passed") return { status: "failed" as const };
+    const failed = !this.expected || this.completed !== this.expected || this.invalid || result.status !== "passed";
+    if (process.env.UX_CI === "1") {
+      try {
+        publishUxDiagnostics({ project: this.project, spec: this.spec, status: failed ? "failed" : "passed",
+          counts: { discovered: this.expected, completed: this.completed, passed: this.passed, blocked: this.blocked },
+          tests: this.tests, errors: this.errors });
+      } catch {
+        this.invalid = true;
+        console.error("[UX FAILURE] Safe diagnostic publication failed; sensitive diagnostics suppressed.");
+      }
+    }
+    if (failed || this.invalid) return { status: "failed" as const };
   }
 }
