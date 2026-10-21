@@ -58,8 +58,17 @@ async function noFinance() {
   expect(await db.applicationDeposit.count({ where: { submission: { groupId: fixture.group } } })).toBe(0);
 }
 async function noBrowserPii(page: Page) {
+  await page.waitForLoadState("load");
+  const readStorage = () => page.evaluate(() => [localStorage, sessionStorage].every((storage) => Object.keys(storage).every((key) => !storage.getItem(key)?.includes("합성"))));
+  // A completion redirect may replace WebKit's execution context after the load
+  // check. Retry only an interrupted read, never a failed privacy assertion.
+  const noStoredPii = await readStorage().catch(async (error: unknown) => {
+    if (!(error instanceof Error) || !error.message.includes("Execution context was destroyed")) throw error;
+    await page.waitForLoadState("load");
+    return readStorage();
+  });
   expect(page.url()).not.toContain("합성");
-  expect(await page.evaluate(() => [localStorage, sessionStorage].every((storage) => Object.keys(storage).every((key) => !storage.getItem(key)?.includes("합성"))))).toBe(true);
+  expect(noStoredPii).toBe(true);
 }
 async function operator(browser: Browser, baseURL: string) {
   if (!process.env.UX_ADMIN_STORAGE_STATE) throw new Error("BLOCKED: synthetic ADMIN login state is required for operator actions");

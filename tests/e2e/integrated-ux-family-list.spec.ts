@@ -53,7 +53,15 @@ test.describe("Phase 3 read-only family list", () => {
       await expect(page.getByRole("dialog", { name: "사이드 메뉴" })).toBeHidden();
       await expect(openMenu).toHaveAttribute("aria-expanded", "false");
     }
-    await page.getByLabel("상태", { exact: true }).selectOption("all"); await page.getByRole("button", { name: "조회", exact: true }).click();
+    await page.getByLabel("상태", { exact: true }).selectOption("all");
+    // This is a native GET document navigation. Matching the URL alone only
+    // observes its commit; finish loading it before clicking a Next Link in it.
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/reservation-applications"
+        && !url.searchParams.has("page") && url.searchParams.get("status") === "all"
+        && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId, { waitUntil: "load", timeout: 15000 }),
+      page.getByRole("button", { name: "조회", exact: true }).click(),
+    ]);
     await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
       && !url.searchParams.has("page") && url.searchParams.get("status") === "all"
       && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId);
@@ -63,9 +71,17 @@ test.describe("Phase 3 read-only family list", () => {
     await expect(removeClass).toHaveAttribute("href", "/reservation-applications?status=all");
     await expect(page.getByLabel("보호자 입금 알림", { exact: true })).toHaveValue("all");
     await expect(page.getByLabel("은행 확인 입금", { exact: true })).toHaveValue("all");
-    await removeClass.click();
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/reservation-applications"
+        && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all", { timeout: 15000 }),
+      removeClass.click(),
+    ]);
     await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
       && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all");
+    await expect(removeClass).toHaveCount(0);
+    await expect(page.getByLabel("상태", { exact: true })).toHaveValue("all");
+    await expect(page.getByLabel("보호자 입금 알림", { exact: true })).toHaveValue("all");
+    await expect(page.getByLabel("은행 확인 입금", { exact: true })).toHaveValue("all");
   });
   test("no matches offers reset and preserves existing class entry context", async ({ page }) => {
     await page.goto(`/reservation-applications?classScheduleId=${fixtures!.emptyClassId}`);

@@ -127,7 +127,15 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
     const fixture = fixtures.cancel; test.skip(!fixture || !adminState, "BLOCKED: dedicated cancellation family and ADMIN state required."); const db = new PrismaClient();
     try {
       await pristine(db, fixture!); await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
-      await deposit(page, 60000); await latest(page);
+      const depositForm = page.getByTestId("deposit-transaction-form");
+      await test.step("record and verify the initial 60000 bank receipt", async () => {
+        await deposit(page, 60000); await latest(page);
+        // latest() alone can match the previous operation's retained message.
+        // This receipt and exact visible projection belong to this deposit.
+        await expect(depositForm.getByRole("status")).toContainText("저장 기록 확인됨");
+        await amounts(page, { D: 60000, A: 60000, P: 0, R: 0, T: 0 });
+        await expect(depositForm.getByRole("button", { name: "새 입금 거래 시작", exact: true })).toBeEnabled();
+      });
       const cancelled = page.locator(`#${fixture!.secondApplicationId}-CANCELLED-reason`);
       await cancelled.fill("합성 보호자가 둘째 신청 취소 요청"); page.once("dialog", (dialog) => dialog.accept());
       await cancelled.locator("..").getByRole("button", { name: "보호자 요청으로 취소", exact: true }).click(); await latest(page);
@@ -140,15 +148,27 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
       expect(sibling).toMatchObject({ status: "CANCELLED", quotedAmount: 60000, resolutionNote: "합성 보호자가 둘째 신청 취소 요청" });
       const obligation = await db.returnObligation.findFirstOrThrow({ where: { applicationId: sibling.id, kind: "CANCELLED" } });
       expect(obligation).toMatchObject({ submissionId: fixture!.submissionId, amount: 60000, returnedAmount: 0 });
+      await amounts(page, { D: 60000, A: 0, P: 0, R: 60000, T: 0 });
       await assertFamilyLedger(db, fixture!.submissionId, { D: 60000, A: 0, P: 0, R: 60000, T: 0 });
       expect(sibling.status).toBe("CANCELLED"); expect(sibling.quotedAmount).toBe(60000);
       const first = page.getByTestId(`confirmation-${fixture!.firstApplicationId}`);
       await first.getByRole("checkbox").check(); await first.getByRole("combobox").selectOption("NEW");
       await expect(page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled();
       await expect(page.getByText("예약 확정에 40,000원이 부족합니다.", { exact: true })).toBeVisible();
-      await deposit(page, 40000); await latest(page);
-      await page.getByRole("button", { name: "최신 선택 내용 다시 검토함", exact: true }).click();
-      await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click(); await latest(page);
+      await test.step("verify the additional 40000 receipt before reviewing selection", async () => {
+        await deposit(page, 40000); await latest(page);
+        await expect(depositForm.getByRole("status")).toContainText("저장 기록 확인됨");
+        await amounts(page, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+        await expect(depositForm.getByRole("button", { name: "새 입금 거래 시작", exact: true })).toBeEnabled();
+        const review = page.getByRole("button", { name: "최신 선택 내용 다시 검토함", exact: true });
+        await expect(review).toBeEnabled();
+        await review.click({ timeout: 15000 });
+      });
+      await test.step("confirm only the first child after the refreshed ledger review", async () => {
+        const confirm = page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true });
+        await expect(confirm).toBeEnabled();
+        await confirm.click({ timeout: 15000 }); await latest(page);
+      });
       await expect(first).toHaveCount(0);
       await amounts(page, { D: 100000, A: 0, P: 40000, R: 60000, T: 0 });
       await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 0, P: 40000, R: 60000, T: 0 });

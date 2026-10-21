@@ -20,7 +20,9 @@ const db = new PrismaClient();
 const otherAdminDb = new PrismaClient();
 const run = `ux2-${crypto.randomUUID()}`;
 const now = new Date();
-const startsAt = new Date(now.getTime() + 86400000 * 100);
+// Keep the future KST date, but never let the one-hour class cross midnight:
+// the edit action receives start/end times on one date.
+const startsAt = new Date(`${formatKstDate(new Date(now.getTime() + 86400000 * 100))}T10:00:00+09:00`);
 const classIds = [0, 1, 2].map((n) => `${run}-class-${n}`);
 const actorIds = [0, 1].map((n) => `${run}-admin-${n}`);
 let ownedSettings = false;

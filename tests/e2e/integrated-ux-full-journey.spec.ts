@@ -51,9 +51,18 @@ test("real ADMIN login → class creation/prices → issued link → two childre
     }
     await page.goto("/reservation-applications/groups");
     const composer = page.locator("form").filter({ has: page.getByRole("heading", { name: "여러 클래스 통합 신청", exact: true }) });
-    for (const checkbox of await composer.getByRole("checkbox", { name: new RegExp(marker) }).all()) await checkbox.check();
+    const classCheckboxes = composer.getByRole("checkbox", { name: new RegExp(marker) });
+    // all() snapshots immediately; a streamed form can still have no options.
+    // Require both newly created classes before performing either UI selection.
+    await expect(classCheckboxes).toHaveCount(2);
+    for (let index = 0; index < classIds.length; index++) {
+      await classCheckboxes.nth(index).check();
+      await expect(classCheckboxes.nth(index)).toBeChecked();
+    }
     await expect(composer.getByRole("checkbox", { checked: true })).toHaveCount(2);
-    await composer.getByRole("button", { name: "선택한 클래스로 새 링크 발급", exact: true }).click();
+    const issueLink = composer.getByRole("button", { name: "선택한 클래스로 새 링크 발급", exact: true });
+    await expect(issueLink).toBeEnabled();
+    await issueLink.click();
     const address = page.getByRole("textbox", { name: "신청 링크 주소", exact: true });
     await expect(address).not.toHaveValue("");
     const link = await address.inputValue();
