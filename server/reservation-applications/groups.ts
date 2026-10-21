@@ -8,7 +8,7 @@ import { ApplicationClosedError, ApplicationLinkClassClosedError, ApplicationLin
 import { hashApplicationCapabilityToken, generateApplicationCapabilityToken, isWellFormedApplicationLinkToken } from "@/lib/reservation-applications/token";
 import { reservationApplicationSettingsSchema, groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
 
-import { applicationReviewScope, issueApplicationPriceReview, verifyApplicationPriceReview, ApplicationPriceChangedError, ApplicationAlreadySubmittedError } from "./price-review";
+import { applicationReviewScope, issueApplicationPriceReview, authenticateApplicationPriceReview, isApplicationPriceReviewExpired, ApplicationPriceReviewExpiredError, ApplicationPriceChangedError, ApplicationAlreadySubmittedError, type ApplicationPriceReview } from "./price-review";
 
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
@@ -214,14 +214,16 @@ async function lockPublicApplicationScope(tx: Prisma.TransactionClient, input: {
 }
 
 /** No family writes, seat holds or reservations happen during review. */
-export async function recheckApplicationGroupPricesCore(client: GroupSubmitClient, input: { token?: string; companionToken?: string; classScheduleIds: string[]; reviewedPriceProof?: string; now: Date }) {
+export async function recheckApplicationGroupPricesCore(client: GroupSubmitClient, input: { token?: string; companionToken?: string; classScheduleIds: string[]; reviewedPriceProof?: string; now: Date }): Promise<ApplicationPriceReview & { priceReviewExpired?: boolean }> {
   const ids = z.array(z.string().min(1).max(200)).min(1).max(10).parse(input.classScheduleIds);
   const scope = applicationReviewScope(input);
-  const previous = input.reviewedPriceProof ? verifyApplicationPriceReview(input.reviewedPriceProof, scope, input.now) : undefined;
+  const previous = input.reviewedPriceProof ? authenticateApplicationPriceReview(input.reviewedPriceProof, scope, input.now) : undefined;
   return client.$transaction(async (tx) => {
     const { schedules } = await lockPublicApplicationScope(tx, { ...input, classScheduleIds: ids });
+    // Never renew an operation whose original submission may already have committed.
+    if (previous && await tx.reservationApplicationSubmission.findUnique({ where: { id: `phase8_${previous.operation}` }, select: { id: true } })) throw new ApplicationAlreadySubmittedError();
     const prices = [...new Set(ids)].sort().map((classScheduleId) => ({ classScheduleId, amount: schedules.get(classScheduleId)!.applicationPrice! }));
-    return issueApplicationPriceReview({ scope, prices, now: input.now, operation: previous?.operation });
+    return { ...issueApplicationPriceReview({ scope, prices, now: input.now, operation: previous?.operation }), priceReviewExpired: previous ? isApplicationPriceReviewExpired(previous, input.now) : false };
   }, TX_OPTIONS);
 }
 
@@ -238,7 +240,7 @@ export async function submitApplicationGroupCore(
   const data = groupSubmissionSchema.parse(input.data);
   if (input.consentVersion !== APPLICATION_CONSENT_CONTENT.version || data.consentVersion !== APPLICATION_CONSENT_CONTENT.version) throw new ApplicationClosedError();
   const scope = applicationReviewScope(input);
-  const review = verifyApplicationPriceReview(data.reviewedPriceProof, scope, input.now);
+  const review = authenticateApplicationPriceReview(data.reviewedPriceProof, scope, input.now);
   const assignedIds = [...new Set(data.children.map((child) => child.classScheduleId))].sort();
   if (review.prices.length !== assignedIds.length || assignedIds.some((id) => !review.prices.some((row) => row.classScheduleId === id))) throw new ApplicationClosedError();
   return client.$transaction(async (tx) => {
@@ -252,6 +254,9 @@ export async function submitApplicationGroupCore(
       throw new ApplicationAlreadySubmittedError();
     }
     const prices = assignedIds.map((classScheduleId) => ({ classScheduleId, amount: schedules.get(classScheduleId)!.applicationPrice! }));
+    if (isApplicationPriceReviewExpired(review, input.now)) {
+      throw new ApplicationPriceReviewExpiredError(issueApplicationPriceReview({ scope, prices, now: input.now, operation: review.operation }));
+    }
     if (prices.some((current) => review.prices.find((row) => row.classScheduleId === current.classScheduleId)?.amount !== current.amount)) {
       throw new ApplicationPriceChangedError(issueApplicationPriceReview({ scope, prices, now: input.now, operation: review.operation }));
     }

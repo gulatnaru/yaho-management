@@ -8,7 +8,7 @@ import { ApplicationClosedError } from "@/lib/reservation-applications/errors";
 import { recheckApplicationGroupPricesCore, stopApplicationGroupCore, submitApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { runPhase20PostgresRace } from "../../e2e/support/phase20-race-barrier";
 import { submitReservationApplicationCore } from "@/server/reservation-applications/submit";
-import { ApplicationAlreadySubmittedError, ApplicationPriceChangedError } from "@/server/reservation-applications/price-review";
+import { ApplicationAlreadySubmittedError, ApplicationPriceChangedError, ApplicationPriceReviewExpiredError, applicationReviewScope, verifyApplicationPriceReview } from "@/server/reservation-applications/price-review";
 
 // This suite is discovered by the EXISTING integration glob, and cannot run against Preview/Production.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_INTEGRATION_LOCAL_ONLY");
@@ -16,6 +16,7 @@ assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: 
 const db = new PrismaClient();
 const run = `ux8-${randomUUID()}`, classes = [`${run}-c1`, `${run}-c2`], groups: string[] = [], devices: string[] = [], children: string[] = [], legacyApplications: string[] = [];
 const now = new Date(), later = new Date(now.getTime() + 86400000);
+const expiredAt = new Date(now.getTime() + 2 * 60 * 60 * 1000 + 1);
 let groupId = "", token = "";
 const version = APPLICATION_CONSENT_CONTENT.version;
 const child = (classScheduleId: string, suffix = "1") => ({ classScheduleId, childName: `합성 아이 ${suffix}`, childBirthDate: "2020-01-01", childGender: "UNSPECIFIED" as const, programTerms: true as const, privacyConsent: true as const, legalGuardianConfirmation: true as const, refundTerms: true as const, photoShareConsent: false, photoMarketingConsent: false });
@@ -125,6 +126,68 @@ describe.sequential("Policy A real PostgreSQL price recheck and atomic submissio
     const result = await submitApplicationGroupCore(db, await submission(final.proof));
     const amounts = await db.reservationApplication.findMany({ where: { submissionId: result.submissionId }, orderBy: { classScheduleId: "asc" }, select: { quotedAmount: true } });
     expect(amounts.map((row) => row.quotedAmount)).toEqual([50000, 60000]); await noFinance();
+  });
+  it("safely renews expired unchanged prices under the same operation, with zero saves until explicit resubmit", async () => {
+    const original = await review(), payload = { ...await submission(original.proof), now: expiredAt };
+    const renewed = await recheckApplicationGroupPricesCore(db, { token, classScheduleIds: classes, reviewedPriceProof: original.proof, now: expiredAt });
+    const scope = applicationReviewScope({ token });
+    expect(renewed.priceReviewExpired).toBe(true); expect(renewed.prices).toEqual(original.prices);
+    expect(verifyApplicationPriceReview(renewed.proof, scope, expiredAt).operation).toBe(verifyApplicationPriceReview(original.proof, scope, now).operation);
+    expect(await counts()).toEqual([0, 0, 0]);
+    await expect(submitApplicationGroupCore(db, payload)).rejects.toBeInstanceOf(ApplicationPriceReviewExpiredError);
+    expect(await counts()).toEqual([0, 0, 0]);
+    const result = await submitApplicationGroupCore(db, { ...payload, data: { ...payload.data, reviewedPriceProof: renewed.proof } });
+    expect(result.submissionId).toBe(`phase8_${verifyApplicationPriceReview(original.proof, scope, now).operation}`);
+    expect(await counts()).toEqual([1, 2, 0]); await noFinance();
+  });
+  it("expiry recovery and a price change during reconfirmation save zero records until the latest explicit resubmit", async () => {
+    const original = await review(), payload = { ...await submission(original.proof), now: expiredAt };
+    const draft = structuredClone(payload.data);
+    await db.classSchedule.update({ where: { id: classes[0]! }, data: { applicationPrice: 45000 } });
+    let renewed: typeof original | undefined;
+    try { await submitApplicationGroupCore(db, payload); } catch (error) {
+      expect(error).toBeInstanceOf(ApplicationPriceReviewExpiredError);
+      renewed = { ...(error as ApplicationPriceReviewExpiredError).priceReview!, priceReviewExpired: true };
+    }
+    expect(renewed?.prices).toEqual([{ classScheduleId: classes[0], amount: 45000 }, { classScheduleId: classes[1], amount: 60000 }]);
+    expect(await counts()).toEqual([0, 0, 0]); expect(payload.data).toEqual(draft);
+    await db.classSchedule.update({ where: { id: classes[0]! }, data: { applicationPrice: 50000 } });
+    await expect(submitApplicationGroupCore(db, { ...payload, data: { ...payload.data, reviewedPriceProof: renewed!.proof } })).rejects.toBeInstanceOf(ApplicationPriceChangedError);
+    expect(await counts()).toEqual([0, 0, 0]);
+    const final = await recheckApplicationGroupPricesCore(db, { token, classScheduleIds: classes, reviewedPriceProof: renewed!.proof, now: expiredAt });
+    expect(await counts()).toEqual([0, 0, 0]);
+    await submitApplicationGroupCore(db, { ...payload, data: { ...payload.data, reviewedPriceProof: final.proof } });
+    expect(await counts()).toEqual([1, 2, 0]); await noFinance();
+  });
+  it("concurrent submissions of a safely renewed proof share one durable operation and one family", async () => {
+    const original = await review();
+    const renewed = await recheckApplicationGroupPricesCore(db, { token, classScheduleIds: classes, reviewedPriceProof: original.proof, now: expiredAt });
+    const payload = { ...await submission(renewed.proof), now: expiredAt };
+    expect(await counts()).toEqual([0, 0, 0]);
+    const result = await Promise.allSettled([submitApplicationGroupCore(db, payload), submitApplicationGroupCore(db, payload)]);
+    expect(result.filter((row) => row.status === "fulfilled")).toHaveLength(1);
+    expect((result.find((row) => row.status === "rejected") as PromiseRejectedResult).reason).toBeInstanceOf(ApplicationAlreadySubmittedError);
+    await expect(recheckApplicationGroupPricesCore(db, { token, classScheduleIds: classes, reviewedPriceProof: original.proof, now: expiredAt })).rejects.toBeInstanceOf(ApplicationAlreadySubmittedError);
+    expect(await counts()).toEqual([1, 2, 0]); await noFinance();
+  });
+  it.each([false, true])("response-loss plus proof-expiry never duplicates an already saved operation (completion cookie present: %s)", async (ownedCookie) => {
+    const original = await review(), payload = await submission(original.proof);
+    const saved = await submitApplicationGroupCore(db, payload);
+    await db.classSchedule.update({ where: { id: classes[0]! }, data: { applicationPrice: 70000 } });
+    const retry = { ...payload, now: expiredAt, previousCompletionTokenHash: ownedCookie ? payload.completionTokenHash : undefined };
+    if (ownedCookie) await expect(submitApplicationGroupCore(db, retry)).resolves.toMatchObject({ submissionId: saved.submissionId, replayed: true });
+    else await expect(submitApplicationGroupCore(db, retry)).rejects.toBeInstanceOf(ApplicationAlreadySubmittedError);
+    await expect(recheckApplicationGroupPricesCore(db, { token, classScheduleIds: classes, reviewedPriceProof: original.proof, now: expiredAt })).rejects.toBeInstanceOf(ApplicationAlreadySubmittedError);
+    expect(await counts()).toEqual([1, 2, 0]);
+    expect((await db.reservationApplication.findMany({ where: { submissionId: saved.submissionId }, orderBy: { classScheduleId: "asc" }, select: { quotedAmount: true } })).map((row) => row.quotedAmount)).toEqual([40000, 60000]);
+    await noFinance();
+  });
+  it("a revoked link cannot renew an authentic expired proof or expose current prices", async () => {
+    const original = await review(), payload = { ...await submission(original.proof), now: expiredAt };
+    await db.reservationApplicationLink.updateMany({ where: { groupId }, data: { isActive: false } });
+    await expect(recheckApplicationGroupPricesCore(db, { token, classScheduleIds: classes, reviewedPriceProof: original.proof, now: expiredAt })).rejects.toBeInstanceOf(ApplicationClosedError);
+    await expect(submitApplicationGroupCore(db, payload)).rejects.toBeInstanceOf(ApplicationClosedError);
+    expect(await counts()).toEqual([0, 0, 0]); await noFinance();
   });
   it("serializes a class-price update versus save without ever saving an unreviewed amount", async () => {
     const payload = await submission((await review()).proof);

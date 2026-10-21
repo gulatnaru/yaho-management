@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
 import { ApplicationClosedError } from "@/lib/reservation-applications/errors";
-import { applicationReviewScope, issueApplicationPriceReview, verifyApplicationPriceReview, ApplicationPriceChangedError, ApplicationAlreadySubmittedError } from "@/server/reservation-applications/price-review";
+import { applicationReviewScope, issueApplicationPriceReview, verifyApplicationPriceReview, ApplicationPriceReviewExpiredError, ApplicationPriceChangedError, ApplicationAlreadySubmittedError } from "@/server/reservation-applications/price-review";
 import { recheckApplicationGroupPricesCore, submitApplicationGroupCore } from "@/server/reservation-applications/groups";
 const token = "a".repeat(43), now = new Date("2030-01-01T00:00:00Z");
 const scope = applicationReviewScope({ token });
+const expiredAt = new Date(now.getTime() + 2 * 60 * 60 * 1000 + 1);
 const prices = [{ classScheduleId: "class-1", amount: 40000 }];
 const child = { classScheduleId: "class-1", childName: "합성 아이", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED" as const, programTerms: true as const, privacyConsent: true as const, legalGuardianConfirmation: true as const, refundTerms: true as const, photoShareConsent: false, photoMarketingConsent: false };
 function harness(amount = 40000) {
@@ -41,9 +42,76 @@ describe("signed Policy A price review", () => {
     const forged = JSON.parse(Buffer.from(body!, "base64url").toString()); forged.prices[0].amount = 1;
     expect(() => verifyApplicationPriceReview(`${Buffer.from(JSON.stringify(forged)).toString("base64url")}.${sig}`, scope, now)).toThrow(ApplicationClosedError);
     expect(() => verifyApplicationPriceReview("invalid", scope, now)).toThrow(ApplicationClosedError);
-    expect(() => verifyApplicationPriceReview(review.proof, scope, new Date("2030-01-02"))).toThrow(ApplicationClosedError);
+    expect(() => verifyApplicationPriceReview(review.proof, scope, new Date("2030-01-02"))).toThrow(ApplicationPriceReviewExpiredError);
     vi.stubEnv("AUTH_SECRET", "");
     expect(() => issueApplicationPriceReview({ scope, prices, now })).toThrow(ApplicationClosedError);
+  });
+  it("recovers a signed proof older than two hours with current prices and the same operation before any writes", async () => {
+    const h = harness(65000); const original = issueApplicationPriceReview({ scope, prices, now });
+    const expiredAt = new Date(now.getTime() + 2 * 60 * 60 * 1000 + 1);
+    const renewed = await recheckApplicationGroupPricesCore(h.client, { token, classScheduleIds: ["class-1"], reviewedPriceProof: original.proof, now: expiredAt });
+    expect(renewed.prices).toEqual([{ classScheduleId: "class-1", amount: 65000 }]);
+    expect(verifyApplicationPriceReview(renewed.proof, scope, expiredAt).operation).toBe(verifyApplicationPriceReview(original.proof, scope, now).operation);
+    expect(h.write).not.toHaveBeenCalled();
+  });
+  it("normal submission at the two-hour boundary saves the reviewed amount", async () => {
+    const h = harness();
+    await expect(submitApplicationGroupCore(h.client, { ...input(), now: new Date(now.getTime() + 2 * 60 * 60 * 1000) })).resolves.toMatchObject({ applicationIds: ["saved"] });
+    expect(h.tx.reservationApplication.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ quotedAmount: 40000 }) }));
+  });
+  it.each([40000, 65000])("expired submit renews current price %i without writes, preserves the draft, then permits a separate resubmit", async (amount) => {
+    const h = harness(amount), payload = input();
+    payload.data.children[0] = { ...child, photoShareConsent: true, photoMarketingConsent: true };
+    const original = structuredClone(payload.data);
+    let recovery: ApplicationPriceReviewExpiredError | undefined;
+    try { await submitApplicationGroupCore(h.client, { ...payload, now: expiredAt }); } catch (error) { expect(error).toBeInstanceOf(ApplicationPriceReviewExpiredError); recovery = error as ApplicationPriceReviewExpiredError; }
+    expect(recovery?.priceReview?.prices).toEqual([{ classScheduleId: "class-1", amount }]);
+    expect(h.write).not.toHaveBeenCalled(); expect(payload.data).toEqual(original);
+    const renewed = recovery!.priceReview!;
+    expect(verifyApplicationPriceReview(renewed.proof, scope, expiredAt).operation).toBe(verifyApplicationPriceReview(payload.data.reviewedPriceProof, scope, now).operation);
+    // Merely fetching the replacement does not make the old review usable.
+    await expect(submitApplicationGroupCore(h.client, { ...payload, now: expiredAt })).rejects.toBeInstanceOf(ApplicationPriceReviewExpiredError);
+    expect(h.write).not.toHaveBeenCalled();
+    await expect(submitApplicationGroupCore(h.client, { ...payload, now: expiredAt, data: { ...payload.data, reviewedPriceProof: renewed.proof } })).resolves.toMatchObject({ applicationIds: ["saved"] });
+  });
+  it("rechecking expired unchanged prices still marks explicit reconfirmation required", async () => {
+    const h = harness(), original = input();
+    const result = await recheckApplicationGroupPricesCore(h.client, { token, classScheduleIds: ["class-1"], reviewedPriceProof: original.data.reviewedPriceProof, now: expiredAt });
+    expect(result).toMatchObject({ priceReviewExpired: true, prices }); expect(h.write).not.toHaveBeenCalled();
+  });
+  it.each(["tampered", "cross-group"])("expired %s proofs are rejected before scope/price access or writes", async (kind) => {
+    const h = harness();
+    const review = issueApplicationPriceReview({ scope: kind === "cross-group" ? applicationReviewScope({ token: "another-link" }) : scope, prices, now });
+    const [body, signature] = review.proof.split(".");
+    const proof = kind === "tampered" ? `${body}.${signature!.startsWith("A") ? "B" : "A"}${signature!.slice(1)}` : review.proof;
+    await expect(recheckApplicationGroupPricesCore(h.client, { token, classScheduleIds: ["class-1"], reviewedPriceProof: proof, now: expiredAt })).rejects.toBeInstanceOf(ApplicationClosedError);
+    await expect(submitApplicationGroupCore(h.client, { ...input(proof), now: expiredAt })).rejects.toBeInstanceOf(ApplicationClosedError);
+    expect(h.tx.reservationApplicationLink.findUnique).not.toHaveBeenCalled(); expect(h.write).not.toHaveBeenCalled();
+  });
+  it("revocation during locking rejects expired recovery before price or prior-operation lookup", async () => {
+    const h = harness(), payload = input();
+    h.tx.reservationApplicationLink.findUnique.mockResolvedValueOnce({ id: "link-1", isActive: true, group: { id: "group-1", isActive: true, classes: [] } } as never).mockResolvedValue({ isActive: false } as never);
+    await expect(submitApplicationGroupCore(h.client, { ...payload, now: expiredAt })).rejects.toBeInstanceOf(ApplicationClosedError);
+    await expect(recheckApplicationGroupPricesCore(h.client, { token, classScheduleIds: ["class-1"], reviewedPriceProof: payload.data.reviewedPriceProof, now: expiredAt })).rejects.toBeInstanceOf(ApplicationClosedError);
+    expect(h.tx.classSchedule.findMany).not.toHaveBeenCalled(); expect(h.tx.reservationApplicationSubmission.findUnique).not.toHaveBeenCalled(); expect(h.write).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("lost-response then proof-expiry never renews a saved operation (completion cookie present: %s)", async (ownedCookie) => {
+    const h = harness(65000), payload = input();
+    h.tx.reservationApplicationSubmission.findUnique.mockResolvedValue({ id: "saved", completionTokenHash: "owned-cookie", completionExpiresAt: new Date("2030-01-02"), personalDataPurgedAt: null } as never);
+    const request = submitApplicationGroupCore(h.client, { ...payload, now: expiredAt, previousCompletionTokenHash: ownedCookie ? "owned-cookie" : undefined });
+    if (ownedCookie) await expect(request).resolves.toMatchObject({ submissionId: "saved", replayed: true });
+    else await expect(request).rejects.toBeInstanceOf(ApplicationAlreadySubmittedError);
+    await expect(recheckApplicationGroupPricesCore(h.client, { token, classScheduleIds: ["class-1"], reviewedPriceProof: payload.data.reviewedPriceProof, now: expiredAt })).rejects.toBeInstanceOf(ApplicationAlreadySubmittedError);
+    const operation = verifyApplicationPriceReview(payload.data.reviewedPriceProof, scope, now).operation;
+    expect(h.tx.reservationApplicationSubmission.findUnique).toHaveBeenLastCalledWith({ where: { id: `phase8_${operation}` }, select: { id: true } });
+    expect(h.write).not.toHaveBeenCalled();
+  });
+  it("renewed proof reuses the durable original identity and cannot duplicate its saved application", async () => {
+    const h = harness(), payload = input();
+    const renewed = await recheckApplicationGroupPricesCore(h.client, { token, classScheduleIds: ["class-1"], reviewedPriceProof: payload.data.reviewedPriceProof, now: expiredAt });
+    h.tx.reservationApplicationSubmission.findUnique.mockResolvedValue({ id: "saved" } as never);
+    await expect(submitApplicationGroupCore(h.client, { ...payload, now: expiredAt, data: { ...payload.data, reviewedPriceProof: renewed.proof } })).rejects.toBeInstanceOf(ApplicationAlreadySubmittedError);
+    expect(h.write).not.toHaveBeenCalled();
   });
   it("rechecks only assigned valid-link prices without family writes", async () => {
     const { client, tx, write } = harness();

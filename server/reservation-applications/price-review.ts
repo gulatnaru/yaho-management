@@ -31,7 +31,8 @@ export function issueApplicationPriceReview(input: { scope: string; prices: Revi
   const body = Buffer.from(JSON.stringify(data)).toString("base64url");
   return { proof: `${body}.${signature(body).toString("base64url")}`, prices: data.prices };
 }
-export function verifyApplicationPriceReview(proof: string, scope: string, now: Date): Review {
+/** Authenticate before considering freshness; expiry never relaxes signature or scope checks. */
+export function authenticateApplicationPriceReview(proof: string, scope: string, now: Date): Review {
   if (proof.length > 10000) throw new ApplicationClosedError();
   const parts = proof.split(".");
   if (parts.length !== 2 || !parts[0] || !parts[1]) throw new ApplicationClosedError();
@@ -40,8 +41,20 @@ export function verifyApplicationPriceReview(proof: string, scope: string, now: 
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new ApplicationClosedError();
   let data: Review;
   try { data = reviewSchema.parse(JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"))); } catch { throw new ApplicationClosedError(); }
-  if (data.scope !== scope || data.issuedAt > now.getTime() || now.getTime() - data.issuedAt > REVIEW_LIFETIME_MS || data.consentVersion !== APPLICATION_CONSENT_CONTENT.version || new Set(data.prices.map((row) => row.classScheduleId)).size !== data.prices.length) throw new ApplicationClosedError();
+  if (data.scope !== scope || data.issuedAt > now.getTime() || data.consentVersion !== APPLICATION_CONSENT_CONTENT.version || new Set(data.prices.map((row) => row.classScheduleId)).size !== data.prices.length) throw new ApplicationClosedError();
   return data;
+}
+export function isApplicationPriceReviewExpired(review: Review, now: Date): boolean {
+  return now.getTime() - review.issuedAt > REVIEW_LIFETIME_MS;
+}
+export function verifyApplicationPriceReview(proof: string, scope: string, now: Date): Review {
+  const review = authenticateApplicationPriceReview(proof, scope, now);
+  if (isApplicationPriceReviewExpired(review, now)) throw new ApplicationPriceReviewExpiredError();
+  return review;
+}
+/** A current replacement is attached only after the live capability and prior operation are checked. */
+export class ApplicationPriceReviewExpiredError extends Error {
+  constructor(readonly priceReview?: ApplicationPriceReview) { super("APPLICATION_PRICE_REVIEW_EXPIRED"); }
 }
 export class ApplicationPriceChangedError extends Error {
   constructor(readonly priceReview: ApplicationPriceReview) { super("APPLICATION_PRICE_CHANGED"); }

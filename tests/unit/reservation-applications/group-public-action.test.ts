@@ -4,6 +4,7 @@ import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/cons
 const linkLookup = vi.fn();
 const companionLookup = vi.fn();
 const submitCore = vi.fn();
+const recheckCore = vi.fn();
 const cookieSet = vi.fn();
 const consentReady = vi.fn();
 
@@ -16,7 +17,7 @@ vi.mock("@/lib/reservation-applications/consent-content", async (original) => ({
   ...await original<typeof import("@/lib/reservation-applications/consent-content")>(),
   isConsentContentReady: () => consentReady(),
 }));
-vi.mock("@/server/reservation-applications/groups", () => ({ submitApplicationGroupCore: (...args: unknown[]) => submitCore(...args) }));
+vi.mock("@/server/reservation-applications/groups", () => ({ submitApplicationGroupCore: (...args: unknown[]) => submitCore(...args), recheckApplicationGroupPricesCore: (...args: unknown[]) => recheckCore(...args) }));
 vi.mock("@/server/reservation-applications/settings", () => ({
   getReservationApplicationSettings: vi.fn().mockResolvedValue({}),
   isReservationApplicationSettingsReady: () => true,
@@ -28,7 +29,10 @@ vi.mock("@/lib/e2e/phase20-lease", () => ({
 }));
 vi.mock("@/lib/e2e/preview-manual-session", () => ({ resolvePreviewApplyAccess: vi.fn() }));
 
-const { submitApplicationGroup, submitApplicationGroupWithCompanion } = await import("@/app/(public)/apply/group/[token]/actions");
+const { submitApplicationGroup, submitApplicationGroupWithCompanion, recheckApplicationGroupPrices } = await import("@/app/(public)/apply/group/[token]/actions");
+
+const { ApplicationPriceReviewExpiredError, ApplicationAlreadySubmittedError } = await import("@/server/reservation-applications/price-review");
+const { ApplicationClosedError } = await import("@/lib/reservation-applications/errors");
 
 const requiredConsents = {
   programTerms: "프로그램 안전 및 이용사항을 확인해주세요",
@@ -100,6 +104,44 @@ describe("group application consent validation", () => {
       data: { children: [child()] },
     });
     expect(cookieSet).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([40000, 65000])("expired proof returns recoverable current price %i without closed or any new cookie", async (amount) => {
+    const priceReview = { proof: "same-operation-renewed", prices: [{ classScheduleId: "synthetic-class-1", amount }] };
+    submitCore.mockRejectedValue(new ApplicationPriceReviewExpiredError(priceReview));
+    const state = await submitApplicationGroup("test-token", {}, form());
+    expect(state).toMatchObject({ priceReviewExpired: true, priceReview });
+    expect(state.error).toContain("확인 시간이 만료");
+    expect(state.closed).toBeUndefined(); expect(state.resultUnknown).toBeUndefined(); expect(cookieSet).not.toHaveBeenCalled();
+  });
+  it("expired unchanged recheck exposes the explicit reconfirmation flag and the renewed review", async () => {
+    const priceReview = { proof: "same-operation-renewed", prices: [{ classScheduleId: "synthetic-class-1", amount: 40000 }] };
+    recheckCore.mockResolvedValue({ ...priceReview, priceReviewExpired: true });
+    expect(await recheckApplicationGroupPrices("test-token", undefined, { classScheduleIds: ["synthetic-class-1"], reviewedPriceProof: "expired" })).toEqual({ priceReview, priceReviewExpired: true });
+    expect(submitCore).not.toHaveBeenCalled(); expect(cookieSet).not.toHaveBeenCalled();
+  });
+  it("an already-saved operation during recheck preserves result-check recovery and never returns prices or completion access", async () => {
+    recheckCore.mockRejectedValue(new ApplicationAlreadySubmittedError());
+    const state = await recheckApplicationGroupPrices("test-token", undefined, { classScheduleIds: ["synthetic-class-1"], reviewedPriceProof: "expired" });
+    expect(state).toMatchObject({ resultUnknown: true }); expect(state.closed).toBeUndefined(); expect(state.priceReview).toBeUndefined(); expect(cookieSet).not.toHaveBeenCalled();
+  });
+  it("an expired saved-operation submit keeps the existing result-check response or authorized replay", async () => {
+    submitCore.mockRejectedValueOnce(new ApplicationAlreadySubmittedError()).mockResolvedValueOnce({ replayed: true });
+    const unknown = await submitApplicationGroup("test-token", {}, form());
+    expect(unknown).toMatchObject({ resultUnknown: true }); expect(unknown.closed).toBeUndefined(); expect(unknown.priceReview).toBeUndefined();
+    expect(await submitApplicationGroup("test-token", {}, form())).toEqual({ submitted: true }); expect(cookieSet).not.toHaveBeenCalled();
+  });
+  it.each(["invalid signature", "scope mismatch", "revoked link"])("%s during recovery gives only a generic closed response", async () => {
+    submitCore.mockRejectedValue(new ApplicationClosedError()); recheckCore.mockRejectedValue(new ApplicationClosedError());
+    const submitted = await submitApplicationGroup("test-token", {}, form());
+    const rechecked = await recheckApplicationGroupPrices("test-token", undefined, { classScheduleIds: ["synthetic-class-1"], reviewedPriceProof: "untrusted" });
+    for (const state of [submitted, rechecked]) expect(state).toEqual({ closed: true, error: "현재 신청을 받을 수 없습니다." });
+    expect(JSON.stringify([submitted, rechecked])).not.toMatch(/합성|amount|proof|prices/); expect(cookieSet).not.toHaveBeenCalled();
+  });
+  it("unavailable public permission rejects recheck before reading current prices", async () => {
+    consentReady.mockReturnValue(false);
+    expect(await recheckApplicationGroupPrices("test-token", undefined, { classScheduleIds: ["synthetic-class-1"], reviewedPriceProof: "expired" })).toEqual({ closed: true, error: "현재 신청을 받을 수 없습니다." });
+    expect(recheckCore).not.toHaveBeenCalled(); expect(cookieSet).not.toHaveBeenCalled();
   });
 
   it.each(["honeypot", "unready consent content"])("keeps %s failures generic before returning field errors", async (gate) => {

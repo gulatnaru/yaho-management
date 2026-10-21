@@ -119,6 +119,54 @@ describe("guardian three-step handlers (isolated hooks; browser focus is not sim
     await review(); agree(); consent().updateOptional("child-1", "photoMarketingConsent", true); await click("신청서 제출");
     expect(text(render())).toContain("60,000원 → 65,000원"); await click("변경 금액 확인"); expect(props.action).toHaveBeenCalledTimes(1); await click("신청서 제출"); expect(text(render())).toContain("65,000원 → 70,000원"); expect(consent().drafts[0]!.photoMarketingConsent).toBe(true); await click("변경 금액 확인"); await click("신청서 제출"); expect(mocks.navigate).toHaveBeenCalledOnce();
   });
+  it("expired unchanged review preserves the whole family draft and optional consents until explicit reconfirmation and resubmit", async () => {
+    props.action = vi.fn().mockResolvedValueOnce({ priceReviewExpired: true, priceReview: { ...proof(), proof: "same-operation-renewed" }, fieldErrors: { reviewedPriceProof: "최신 참가비 확인" } }).mockResolvedValue({ submitted: true });
+    await click("다음"); field("guardianName", "합성 보호자"); field("guardianPhone", "010-0000-0000"); field("declaredPayerName", "합성 입금자"); fillChild(); updateChild(0, "requestNote", "첫째 요청"); updateChild(0, "photoShareConsent", true);
+    await click("내 자녀 추가"); fillChild(1); updateChild(1, "photoMarketingConsent", true); await click("다음"); agree();
+    const before = structuredClone(consent().drafts), confirmations = structuredClone(consent().required);
+    await click("신청서 제출"); expect(step()).toBe(3);
+    expect(text(render())).toContain("참가비 확인 시간이 만료되었습니다."); expect(text(render())).toContain("입력 내용은 유지됩니다."); expect(text(render())).toContain("가족 예상 합계 120,000원 → 120,000원");
+    expect(consent().drafts).toEqual(before); expect(consent().required).toEqual(confirmations);
+    expect(text(render())).toContain("합성 보호자 · 010-0000-0000"); expect(text(render())).toContain("합성 입금자");
+    await click("신청서 제출"); expect(props.action).toHaveBeenCalledTimes(1);
+    await click("최신 금액 다시 확인"); expect(props.action).toHaveBeenCalledTimes(1); expect(consent().drafts).toEqual(before);
+    await click("신청서 제출"); expect(props.action).toHaveBeenCalledTimes(2);
+    const sent = JSON.parse(String(vi.mocked(props.action).mock.calls[1]![1].get("payload")));
+    expect(sent).toMatchObject({ reviewedPriceProof: "same-operation-renewed", children: [expect.objectContaining({ classScheduleId: "c1", requestNote: "첫째 요청", photoShareConsent: true, photoMarketingConsent: false }), expect.objectContaining({ classScheduleId: "c1", photoShareConsent: false, photoMarketingConsent: true })] });
+  });
+  it("returning from details with expired unchanged prices still requires confirmation and carries the old operation proof", async () => {
+    props.recheck = vi.fn().mockResolvedValueOnce({ priceReview: proof() }).mockResolvedValue({ priceReviewExpired: true, priceReview: { ...proof(), proof: "renewed" } });
+    await review(); agree(); consent().updateOptional("child-1", "photoShareConsent", true); await click("이전"); await click("다음");
+    expect(props.recheck).toHaveBeenLastCalledWith({ classScheduleIds: ["c1"], reviewedPriceProof: "proof-60000" });
+    expect(text(render())).toContain("참가비 확인 시간이 만료되었습니다."); expect(consent().drafts[0]!.photoShareConsent).toBe(true);
+    await click("신청서 제출"); expect(props.action).not.toHaveBeenCalled(); await click("최신 금액 다시 확인"); expect(props.action).not.toHaveBeenCalled();
+    await click("신청서 제출"); expect(props.action).toHaveBeenCalledOnce();
+  });
+  it("expiry recovery shows every affected class before/after and the child-weighted new family total", async () => {
+    props.classes.push({ id: "c2", label: "합성 클래스2", applicationPrice: 40000 });
+    const original = { proof: "original", prices };
+    props.recheck = vi.fn().mockResolvedValue({ priceReview: original });
+    props.action = vi.fn().mockResolvedValue({ priceReviewExpired: true, priceReview: { proof: "renewed", prices: [{ classScheduleId: "c1", amount: 65000 }, { classScheduleId: "c2", amount: 45000 }] } });
+    selectedClasses()[0]!.props.onChange(); selectedClasses()[1]!.props.onChange(); await click("다음");
+    field("guardianName", "합성 보호자"); field("guardianPhone", "010-0000-0000"); field("declaredPayerName", "합성 입금자"); fillChild(); updateChild(0, "classScheduleId", "c1");
+    await click("내 자녀 추가"); fillChild(1); updateChild(1, "classScheduleId", "c1"); await click("내 자녀 추가"); fillChild(2); updateChild(2, "classScheduleId", "c2"); await click("다음"); agree();
+    await click("신청서 제출"); expect(text(render())).toContain("60,000원 → 65,000원"); expect(text(render())).toContain("40,000원 → 45,000원"); expect(text(render())).toContain("가족 예상 합계 160,000원 → 175,000원");
+    await click("최신 금액 다시 확인"); expect(text(render())).toContain("예상 총 참가비 175,000원"); expect(props.action).toHaveBeenCalledOnce();
+  });
+  it("a saved-operation response during expired recheck preserves the draft and blocks resubmission for result checking", async () => {
+    await review(); agree(); consent().updateOptional("child-1", "photoShareConsent", true);
+    props.recheck = vi.fn().mockResolvedValue({ resultUnknown: true, error: "이미 접수된 신청일 수 있습니다." });
+    await click("이전"); await click("다음");
+    expect(text(render())).toContain("신청서를 자동으로 다시 보내지 않습니다."); expect(props.action).not.toHaveBeenCalled();
+    expect(cards()[0]!.props.child).toMatchObject({ childName: "합성 자녀 0", photoShareConsent: true });
+    expect(elements(render()).find((node) => node.type === "fieldset")!.props.disabled).toBe(true);
+    await click("신청 결과 확인"); expect(mocks.navigate).toHaveBeenCalledOnce(); expect(props.action).not.toHaveBeenCalled();
+  });
+  it("a revoked link after expired review still closes the form and removes private inputs and visible prices", async () => {
+    props.action = vi.fn().mockResolvedValueOnce({ priceReviewExpired: true, priceReview: proof(65000) }).mockResolvedValue({ closed: true });
+    await review(); agree(); await click("신청서 제출"); await click("최신 금액 다시 확인"); await click("신청서 제출");
+    expect(text(render())).toBe("현재 신청을 받지 않는 링크입니다."); expect(JSON.stringify(hooks.slots)).not.toContain("합성 보호자"); expect(JSON.stringify(hooks.slots)).not.toContain("합성 자녀 0");
+  });
   it("lost response never auto-resubmits, and the active submit form is blocked", async () => {
     props.action = vi.fn().mockRejectedValue(new Error("synthetic transport loss")); await review(); agree(); await click("신청서 제출"); await click("신청서 제출");
     expect(props.action).toHaveBeenCalledOnce(); expect(text(render())).toContain("자동으로 다시 보내지 않습니다"); expect(mocks.navigate).not.toHaveBeenCalled();

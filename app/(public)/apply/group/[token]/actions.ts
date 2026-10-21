@@ -17,11 +17,12 @@ import { resolvePreviewApplyAccess } from "@/lib/e2e/preview-manual-session";
 
 import { mapApplicationFieldErrors, type ApplicationFieldErrors } from "@/lib/reservation-applications/field-errors";
 import { ApplicationClosedError } from "@/lib/reservation-applications/errors";
-import { ApplicationPriceChangedError, ApplicationAlreadySubmittedError, type ApplicationPriceReview } from "@/server/reservation-applications/price-review";
+import { ApplicationPriceReviewExpiredError, ApplicationPriceChangedError, ApplicationAlreadySubmittedError, type ApplicationPriceReview } from "@/server/reservation-applications/price-review";
 
 export type GroupSubmissionState = {
   priceReview?: ApplicationPriceReview;
   priceChanged?: boolean;
+  priceReviewExpired?: boolean;
   fieldErrors?: ApplicationFieldErrors;
   closed?: boolean;
   resultUnknown?: boolean;
@@ -64,9 +65,12 @@ export async function recheckApplicationGroupPrices(token: string | undefined, c
   if (!parsed.success) return { error: "입력 내용을 다시 확인해주세요." };
   try {
     if (!isConsentContentReady(process.env.VERCEL_ENV) || !await publicApplicationAvailable(token, companionToken)) return { closed: true, error: "현재 신청을 받을 수 없습니다." };
-    const priceReview = await recheckApplicationGroupPricesCore(prisma, { token, companionToken, ...parsed.data, now: new Date() });
-    return { priceReview };
-  } catch { return { closed: true, error: "현재 신청을 받을 수 없습니다." }; }
+    const { priceReviewExpired, ...priceReview } = await recheckApplicationGroupPricesCore(prisma, { token, companionToken, ...parsed.data, now: new Date() });
+    return { priceReview, priceReviewExpired };
+  } catch (error) {
+    if (error instanceof ApplicationAlreadySubmittedError) return { resultUnknown: true, error: "이미 접수된 신청일 수 있습니다. 다시 제출하지 말고 접수 결과를 확인해주세요." };
+    return { closed: true, error: "현재 신청을 받을 수 없습니다." };
+  }
 }
 
 export async function submitApplicationGroup(token: string, _state: GroupSubmissionState, formData: FormData): Promise<GroupSubmissionState> {
@@ -107,6 +111,7 @@ export async function submitApplicationGroupWithCompanion(token: string | undefi
     });
     if (result.replayed) return { submitted: true };
   } catch (error) {
+    if (error instanceof ApplicationPriceReviewExpiredError && error.priceReview) return { error: "참가비 확인 시간이 만료되었습니다. 최신 금액을 다시 확인한 뒤 직접 제출해주세요.", priceReviewExpired: true, priceReview: error.priceReview, fieldErrors: { reviewedPriceProof: "최신 참가비를 다시 확인해주세요" } };
     if (error instanceof ApplicationPriceChangedError) return { error: "신청 금액이 변경되었습니다. 변경된 금액을 확인한 뒤 다시 제출해주세요.", priceChanged: true, priceReview: error.priceReview, fieldErrors: { reviewedPriceProof: "변경된 신청 금액을 다시 확인해주세요" } };
     if (error instanceof ApplicationAlreadySubmittedError) return { resultUnknown: true, error: "이미 접수된 신청일 수 있습니다. 다시 제출하지 말고 접수 결과를 확인해주세요." };
     if (error instanceof ApplicationClosedError) return { closed: true, error: "현재 신청을 받을 수 없습니다." };
