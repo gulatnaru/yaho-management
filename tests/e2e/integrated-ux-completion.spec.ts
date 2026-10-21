@@ -4,6 +4,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { COMPLETION_COOKIE_NAME } from "@/lib/reservation-applications/completion";
 import { hashApplicationCapabilityToken } from "@/lib/reservation-applications/token";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
+import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
 
 // Self-owned synthetic fixtures only. Run with playwright.ux.config.ts against its
 // dedicated loopback DB, migrated beforehand, and an EMPTY settings singleton.
@@ -169,6 +170,7 @@ test.describe("Phase 7 public completion presentation", () => {
     await open(page);
     await page.getByRole("button", { name: "초대 링크 만들기", exact: true }).evaluate((element: HTMLButtonElement) => { element.click(); element.click(); });
     const value = page.getByRole("textbox", { name: "초대 링크 복사 값", exact: true }); await expect(value).toBeVisible();
+    const cancelledAddress = await value.inputValue();
     expect(await db.companionInvite.count({ where: { issuerSubmissionId: ids.submission } })).toBe(1);
     await expect(page.getByRole("button", { name: "초대 링크 만들기", exact: true })).toHaveCount(0);
     await page.route("**/apply/complete", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
@@ -178,7 +180,9 @@ test.describe("Phase 7 public completion presentation", () => {
     await page.unrouteAll({ behavior: "wait" });
     await page.getByRole("button", { name: "초대 취소", exact: true }).evaluate((element: HTMLButtonElement) => { element.click(); element.click(); });
     await expect(page.getByRole("status")).toHaveText("친구 보호자 초대 링크를 취소했습니다."); await expect(value).toHaveCount(0);
-    expect(await db.companionInvite.count({ where: { issuerSubmissionId: ids.submission, revokedAt: { not: null } } })).toBe(1); await noFinance();
+    expect(await db.companionInvite.count({ where: { issuerSubmissionId: ids.submission, revokedAt: { not: null } } })).toBe(1);
+    await page.goto(cancelledAddress); await expect(page.locator("body")).toContainText("현재 신청을 받지 않는 링크입니다.");
+    await expect(page.getByLabel("보호자 이름", { exact: true })).toHaveCount(0); await noFinance();
   });
 
   for (const kind of ["legacy", "invalid", "expired"] as const) test(`${kind} completion retains generic account/channels and never exposes family details`, async ({ page, context, baseURL }) => {
@@ -206,21 +210,25 @@ test.describe("Phase 7 public completion presentation", () => {
   });
 
   test("successful submission replaces the document; reload and back do not restore inputs or resubmit", async ({ page, context }) => {
+    test.skip(process.env.UX_SECURE_LOOPBACK_COOKIE_SUPPORTED === "false", "BLOCKED: this browser rejects the app's Secure completion cookie on the required HTTP loopback origin.");
     const linkToken = randomUUID();
     await db.reservationApplicationLink.create({ data: { groupId: ids.group, tokenHash: hashApplicationCapabilityToken(linkToken), issuedById: owner } });
     // The earlier safe completion entry lets Back exercise actual history after replacement.
     await open(page); await page.goto(`/apply/group/${linkToken}`);
-    await page.getByLabel("보호자 이름", { exact: true }).fill("합성새신청보호자");
-    await page.getByLabel("보호자 연락처", { exact: true }).fill("010-0000-0000");
-    await page.getByLabel("입금자명", { exact: true }).fill("합성새입금자");
-    await page.getByLabel("아이 이름", { exact: true }).fill("합성새신청아이");
-    await page.getByLabel("생년월일", { exact: true }).fill("2020-01-01");
-    for (const checkbox of await page.locator('input[type="checkbox"][required]').all()) await checkbox.check();
+    await enterGuardianInformation(page);
+    await page.locator("#application-guardianName").fill("합성새신청보호자");
+    await page.locator("#application-guardianPhone").fill("010-0000-0000");
+    await page.locator("#application-declaredPayerName").fill("합성새입금자");
+    await page.locator("#application-child-1-childName").fill("합성새신청아이");
+    await page.locator("#application-child-1-childBirthDate").fill("2020-01-01");
+    await page.getByLabel("아이 1 클래스", { exact: true }).selectOption(ids.schedule);
+    await enterConsentReview(page);
+    for (const checkbox of await page.getByRole("group", { name: "필수 확인·동의", exact: true }).getByRole("checkbox").all()) await checkbox.check();
     let fullDocumentCompletion = false;
     page.on("request", (request) => {
       if (request.method() === "GET" && new URL(request.url()).pathname === "/apply/complete" && request.isNavigationRequest()) fullDocumentCompletion = true;
     });
-    await page.getByRole("button", { name: "신청하기", exact: true }).click();
+    await page.getByRole("button", { name: "신청서 제출", exact: true }).click();
     await expect(page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true })).toBeVisible();
     expect(fullDocumentCompletion).toBe(true);
     const completionCookie = (await context.cookies()).find((cookie) => cookie.name === COMPLETION_COOKIE_NAME);
@@ -228,8 +236,19 @@ test.describe("Phase 7 public completion presentation", () => {
     await page.reload(); await page.goBack();
     await expect(page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true })).toBeVisible();
     await expect(page.getByLabel("보호자 이름", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "신청하기", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "신청서 제출", exact: true })).toHaveCount(0);
     expect(await db.reservationApplicationSubmission.count({ where: { groupId: ids.group } })).toBe(2);
     await noFinance();
+  });
+
+  test("expired companion capability exposes no issuer family or input form", async ({ page }) => {
+    // Expiry is a fixture condition, not a replacement for a guardian action.
+    const token = randomUUID();
+    const companion = await db.companionGroup.create({ data: { groupId: ids.group, issuerSubmissionId: ids.submission } });
+    await db.companionInvite.create({ data: { groupId: ids.group, issuerSubmissionId: ids.submission, companionGroupId: companion.id, tokenHash: hashApplicationCapabilityToken(token), expiresAt: new Date(Date.now() - 1000) } });
+    await page.goto(`/apply/companion/${token}`);
+    await expect(page.locator("body")).toContainText("현재 신청을 받지 않는 링크입니다.");
+    for (const value of [...childNames, payer]) await expect(page.locator("body")).not.toContainText(value);
+    await expect(page.getByLabel("보호자 이름", { exact: true })).toHaveCount(0); await noFinance();
   });
 });

@@ -2,9 +2,10 @@ import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
+import { assertFamilyLedger } from "./support/integrated-ux-invariants";
 
-// AUTHORING ONLY — NOT EXECUTED in the Phase 5 build. Each writing test requires
-// its own operator-provisioned, pristine local synthetic fixture. No automatic seed/reset.
+// Each writing test requires its own pristine synthetic fixture, supplied by the
+// CI fixture runner. Admission never accepts a Preview or Production database.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -114,6 +115,36 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
       failReads = false; await page.getByRole("button", { name: "최신 서버 상태 다시 조회", exact: true }).click();
       await amounts(page, { D: 30000, A: 30000, R: 0, T: 0 }); expect(await db.applicationDeposit.count({ where: { submissionId: fixture!.submissionId } })).toBe(1);
     } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
+  });
+
+  test("guardian cancellation reserves return money; confirmation cannot spend it and a partial return never increases available amount", async ({ page }) => {
+    const fixture = fixtures.cancel; test.skip(!fixture || !adminState, "BLOCKED: dedicated cancellation family and ADMIN state required."); const db = new PrismaClient();
+    try {
+      await pristine(db, fixture!); await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
+      await deposit(page, 60000); await latest(page);
+      const cancelled = page.locator(`#${fixture!.secondApplicationId}-CANCELLED-reason`);
+      await cancelled.fill("합성 보호자가 둘째 신청 취소 요청"); page.once("dialog", (dialog) => dialog.accept());
+      await cancelled.locator("..").getByRole("button", { name: "보호자 요청으로 취소", exact: true }).click(); await latest(page);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 60000, A: 0, P: 0, R: 60000, T: 0 });
+      const sibling = await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.secondApplicationId } });
+      expect(sibling.status).toBe("CANCELLED"); expect(sibling.quotedAmount).toBe(60000);
+      const first = page.getByTestId(`confirmation-${fixture!.firstApplicationId}`);
+      await first.getByRole("checkbox").check(); await first.getByRole("combobox").selectOption("NEW");
+      await expect(page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled();
+      await expect(page.getByText("예약 확정에 40,000원이 부족합니다.", { exact: true })).toBeVisible();
+      await deposit(page, 40000); await latest(page);
+      await page.getByRole("button", { name: "최신 선택 내용 다시 검토함", exact: true }).click();
+      await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click(); await latest(page);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 0, P: 40000, R: 60000, T: 0 });
+      const obligation = await db.returnObligation.findFirstOrThrow({ where: { applicationId: sibling.id, kind: "CANCELLED" } });
+      const card = page.getByTestId(`return-obligation-${obligation.id}`);
+      await card.getByRole("button", { name: "새 반환 거래 시작", exact: true }).click();
+      await card.getByLabel("실제 반환 금액", { exact: true }).fill("20000"); await card.getByLabel("실제 반환일시 (KST)").fill(date); await card.getByLabel("반환 사유", { exact: true }).fill("합성 취소 일부 반환");
+      await card.getByRole("button", { name: "반환 이체 기록", exact: true }).click(); await latest(page);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 0, P: 40000, R: 40000, T: 20000 });
+      expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling.id } })).toEqual(sibling);
+      expect(await db.refund.count({ where: { paymentItem: { reservation: { classSchedule: { program: { name: fixture!.marker } } } } } })).toBe(0);
+    } finally { await db.$disconnect(); }
   });
 });
 for (const role of ["MANAGER", "TEACHER"] as const) {

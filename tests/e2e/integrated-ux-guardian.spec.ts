@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Browser } from "@playwright/test";
 import { generateApplicationCapabilityToken, generateApplicationLinkToken, hashApplicationCapabilityToken } from "@/lib/reservation-applications/token";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
+import { applicationReviewScope, issueApplicationPriceReview } from "@/server/reservation-applications/price-review";
 
-// SPEC ONLY in Phase 8 BUILD: NOT EXECUTED. Admission remains local-only, with
-// isolated synthetic fixtures and no screenshots, videos or traces (UX config).
+// CI admission remains loopback-only, with isolated synthetic fixtures and
+// no screenshots, videos or traces (UX config).
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
 const db = new PrismaClient();
@@ -59,6 +60,22 @@ async function noFinance() {
 async function noBrowserPii(page: Page) {
   expect(page.url()).not.toContain("합성");
   expect(await page.evaluate(() => [localStorage, sessionStorage].every((storage) => Object.keys(storage).every((key) => !storage.getItem(key)?.includes("합성"))))).toBe(true);
+}
+async function operator(browser: Browser, baseURL: string) {
+  if (!process.env.UX_ADMIN_STORAGE_STATE) throw new Error("BLOCKED: synthetic ADMIN login state is required for operator actions");
+  const context = await browser.newContext({ baseURL, storageState: process.env.UX_ADMIN_STORAGE_STATE });
+  return { context, page: await context.newPage() };
+}
+async function changePrice(browser: Browser, baseURL: string, amount: number) {
+  const admin = await operator(browser, baseURL);
+  try {
+    await admin.page.goto(`/classes/${fixture.classes[0]}`);
+    const card = admin.page.getByTestId("application-link-card");
+    await card.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true }).fill(String(amount));
+    await card.getByRole("button", { name: "신청금액 저장", exact: true }).click();
+    await expect(card.getByRole("status")).toContainText("신청금액을 저장했습니다");
+    await expect(card).toContainText(`${amount.toLocaleString("ko-KR")}원`);
+  } finally { await admin.context.close(); }
 }
 
 test.describe("Phase 8 guardian three-step input", () => {
@@ -118,14 +135,14 @@ test.describe("Phase 8 guardian three-step input", () => {
     await expect(page.locator("#application-child-1-photoShareConsent")).not.toBeChecked(); expect(await applications()).toHaveLength(0);
   });
 
-  test("100000 to 105000 review, second submit-time change, input/consent preservation and explicit resubmission", async ({ page }) => {
+  test("100000 to 105000 review, second submit-time change, input/consent preservation and explicit resubmission", async ({ page, browser, baseURL }) => {
     await setup(); await page.goto(fixture.path); await details(page); await page.getByRole("button", { name: "내 자녀 추가" }).click(); await fill(page, 1);
-    await db.classSchedule.update({ where: { id: fixture.classes[0]! }, data: { applicationPrice: 65000 } });
+    await changePrice(browser, baseURL!, 65000);
     await enterConsentReview(page); await expect(page.locator("#application-reviewedPriceProof")).toContainText("60,000원 → 65,000원");
     await expect(page.locator("#application-reviewedPriceProof")).toContainText("100,000원 → 105,000원"); await required(page); await page.locator("#application-child-1-photoShareConsent").check();
     const submit = page.getByRole("button", { name: "신청서 제출", exact: true }); await expect(submit).toBeDisabled();
     await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0);
-    await db.classSchedule.update({ where: { id: fixture.classes[0]! }, data: { applicationPrice: 70000 } }); await submit.click();
+    await changePrice(browser, baseURL!, 70000); await submit.click();
     await expect(page.locator("#application-reviewedPriceProof")).toContainText("65,000원 → 70,000원"); await expect(page.locator("#application-reviewedPriceProof")).toContainText("105,000원 → 110,000원");
     expect(await applications()).toHaveLength(0); await expect(page.locator("#application-programTerms")).toBeChecked(); await expect(page.locator("#application-child-1-photoShareConsent")).toBeChecked();
     await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0); await submit.click(); await expect(page).toHaveURL(/\/apply\/complete$/);
@@ -147,9 +164,70 @@ test.describe("Phase 8 guardian three-step input", () => {
     expect(writes).toBe(1); await expect(page.getByRole("button", { name: "신청서 제출", exact: true })).toBeDisabled(); expect(await applications()).toHaveLength(0);
   });
 
-  test("revocation hides all prices and clears the active form; BFCache does not revive PII", async ({ page }) => {
+  test("expired authentic price proof preserves both drafts and consents until explicit fresh review", async ({ page }) => {
+    await setup(); await page.goto(fixture.path); await details(page);
+    await page.getByRole("button", { name: "내 자녀 추가", exact: true }).click(); await fill(page, 1);
+    // Deliver an authentically signed, expired review as the initial fixture condition.
+    // The real submit action must still authenticate and reject its age; no application response is mocked.
+    const stale = issueApplicationPriceReview({ scope: applicationReviewScope({ token: fixture.token }), prices: fixture.classes.map((classScheduleId, index) => ({ classScheduleId, amount: index ? 40000 : 60000 })), now: new Date(Date.now() - 3 * 60 * 60 * 1000) });
+    let delivered = false;
+    await page.route("**/apply/group/**", async (route) => {
+      if (!delivered && route.request().method() === "POST") {
+        const response = await route.fetch(); const body = await response.text();
+        let replacements = 0;
+        const modified = body.replace(/[A-Za-z0-9_-]{100,}\.[A-Za-z0-9_-]{43}/g, (proof) => {
+          try { const value: unknown = JSON.parse(Buffer.from(proof.split(".")[0]!, "base64url").toString()); if (typeof value === "object" && value !== null && "version" in value && "prices" in value) { replacements++; return stale.proof; } } catch { /* Non-review data remains unchanged. */ }
+          return proof;
+        });
+        expect(replacements).toBeGreaterThan(0); delivered = true;
+        await route.fulfill({ response, body: modified });
+      } else await route.continue();
+    });
+    await enterConsentReview(page); await page.unrouteAll({ behavior: "wait" }); await required(page);
+    await page.locator("#application-child-2-photoMarketingConsent").check();
+    await page.getByRole("button", { name: "신청서 제출", exact: true }).click();
+    await expect(page.locator("#application-reviewedPriceProof")).toContainText("확인 시간이 만료되었습니다");
+    expect(await applications()).toHaveLength(0);
+    await expect(page.locator("#application-programTerms")).toBeChecked();
+    await expect(page.locator("#application-child-2-photoMarketingConsent")).toBeChecked();
+    await page.getByRole("button", { name: "이전", exact: true }).click();
+    await expect(page.locator("#application-child-1-childName")).toHaveValue("합성자녀1");
+    await expect(page.locator("#application-child-2-childName")).toHaveValue("합성자녀2");
+    await enterConsentReview(page);
+    // Returning to input legitimately requires common consent review again.
+    for (const checkbox of await page.getByRole("group", { name: "필수 확인·동의", exact: true }).getByRole("checkbox").all()) await checkbox.check();
+    const review = page.getByRole("button", { name: "최신 금액 다시 확인", exact: true });
+    if (await review.isVisible()) await review.click();
+    await page.getByRole("button", { name: "신청서 제출", exact: true }).click(); await expect(page).toHaveURL(/\/apply\/complete$/);
+    expect(await applications()).toHaveLength(2); await noFinance();
+  });
+
+  test("response lost after server commit never creates a duplicate application", async ({ page }) => {
+    await setup("single"); await page.goto(fixture.path); await details(page); await enterConsentReview(page); await required(page);
+    let writes = 0;
+    await page.route("**/apply/group/**", async (route) => {
+      if (route.request().method() === "POST") { writes++; await route.fetch(); await route.abort("failed"); } else await route.continue();
+    });
+    await page.getByRole("button", { name: "신청서 제출", exact: true }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+    await expect(page.getByText("처리 결과를 확인하지 못했습니다. 신청서를 자동으로 다시 보내지 않습니다.", { exact: true })).toBeVisible();
+    expect(writes).toBe(1); expect(await applications()).toHaveLength(1);
+    await expect(page.getByRole("button", { name: "신청서 제출", exact: true })).toBeDisabled();
+    await page.unrouteAll({ behavior: "wait" }); await page.reload();
+    expect(await applications()).toHaveLength(1); await noFinance(); await noBrowserPii(page);
+  });
+
+  test("revocation hides all prices and clears the active form; BFCache does not revive PII", async ({ page, browser, baseURL }) => {
     await setup("single"); await page.goto(fixture.path); await details(page);
-    await db.reservationApplicationLink.updateMany({ where: { groupId: fixture.group }, data: { isActive: false } }); await page.getByRole("button", { name: "다음", exact: true }).click();
+    const admin = await operator(browser, baseURL!);
+    try {
+      await admin.page.goto(`/classes/${fixture.classes[0]}`);
+      const card = admin.page.getByTestId("application-link-card");
+      await card.getByText("고급 설정 펼치기", { exact: true }).click();
+      await card.getByRole("button", { name: "신청 접수 중지", exact: true }).click();
+      await admin.page.getByRole("dialog").getByRole("button", { name: "신청 접수 중지", exact: true }).click();
+      await expect(card).toContainText("링크 비활성 · 접수 중지");
+    } finally { await admin.context.close(); }
+    await page.getByRole("button", { name: "다음", exact: true }).click();
     await expect(page.locator("body")).toContainText("현재 신청을 받지 않는 링크입니다."); await expect(page.locator("body")).not.toContainText("60,000원"); await expect(page.getByLabel("보호자 이름")).toHaveCount(0);
     await page.goto("/apply/complete"); await page.goBack(); await expect(page.getByLabel("보호자 이름")).toHaveCount(0); await noBrowserPii(page); expect(await applications()).toHaveLength(0);
   });

@@ -43,7 +43,11 @@ test.describe("Phase 3 read-only family list", () => {
   test("global badge uses families and filter application/removal reset the page", async ({ page }) => {
     await page.goto(`/reservation-applications?classScheduleId=${fixtures!.classScheduleId}&page=999`);
     await expect(page.getByText(`전역 대기 ${fixtures!.globalPendingFamilies}가족`, { exact: false })).toBeVisible();
+    const openMenu = page.getByRole("button", { name: "메뉴 열기", exact: true });
+    const mobileMenu = await openMenu.isVisible();
+    if (mobileMenu) await openMenu.click();
     await expect(page.getByRole("link", { name: fixtures!.globalPendingFamilies > 0 ? `예약 신청 (대기 ${fixtures!.globalPendingFamilies}가족)` : "예약 신청", exact: true }).first()).toBeVisible();
+    if (mobileMenu) await page.keyboard.press("Escape");
     await page.getByLabel("상태", { exact: true }).selectOption("all"); await page.getByRole("button", { name: "조회", exact: true }).click();
     expect(new URL(page.url()).searchParams.has("page")).toBe(false);
     await page.getByRole("link", { name: "클래스 필터 해제", exact: true }).click();

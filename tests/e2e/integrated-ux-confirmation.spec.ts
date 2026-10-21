@@ -2,12 +2,13 @@ import { PrismaClient } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
+import { assertFamilyLedger } from "./support/integrated-ux-invariants";
 
 // Requires run-owned local synthetic fixtures. Never admits Preview or a remote database.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
-const schema = z.object({ submissionId: id, firstApplicationId: id, secondApplicationId: id, marker: z.string().startsWith("UX6_SYNTHETIC_") });
+const schema = z.object({ submissionId: id, firstApplicationId: id, secondApplicationId: id, marker: z.string().startsWith("UX6_SYNTHETIC_"), existingChildId: id.optional(), foreignChildId: id.optional() });
 const fixtures = process.env.UX_CONFIRMATION_FIXTURES ? z.record(schema).parse(JSON.parse(process.env.UX_CONFIRMATION_FIXTURES)) : {};
 const state = process.env.UX_ADMIN_STORAGE_STATE;
 async function pristine(db: PrismaClient, fixture: z.infer<typeof schema>) {
@@ -59,6 +60,89 @@ test.describe("Phase 6 explicit selected atomic confirmation", () => {
       await expect(form.getByRole("button", { name: "초과 예약을 확인하고 선택한 아이 1명 예약 확정", exact: true })).toBeVisible(); await expect(form.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toHaveCount(0); await expect(form).toContainText("현재 예약");
       await first.getByRole("checkbox").uncheck(); await expect(form.getByRole("button", { name: /초과 예약을 확인하고/ })).toHaveCount(0); await expect(form.getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
       expect(await db.reservationApplicationPaymentMapping.count({ where: { applicationId: fixture!.firstApplicationId } })).toBe(0);
+      // Discarded approval must be requested again, and only the second explicit action may commit.
+      await first.getByRole("checkbox").check();
+      await form.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
+      await expect(form.getByRole("button", { name: "초과 예약을 확인하고 선택한 아이 1명 예약 확정", exact: true })).toBeVisible();
+      expect(await db.reservationApplicationPaymentMapping.count({ where: { applicationId: fixture!.firstApplicationId } })).toBe(0);
+      await form.getByRole("button", { name: "초과 예약을 확인하고 선택한 아이 1명 예약 확정", exact: true }).click();
+      await expect(page.getByTestId("workflow-status")).toContainText("저장 결과와 최신 서버 원장을 확인했습니다");
+      const confirmed = await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.firstApplicationId }, include: { classSchedule: { include: { reservations: { where: { status: "RESERVED" } } } } } });
+      expect(confirmed.status).toBe("CONFIRMED"); expect(confirmed.classSchedule.reservations.length).toBe(confirmed.classSchedule.capacity + 1);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 60000, P: 40000, R: 0, T: 0 });
     } finally { await db.$disconnect(); }
+  });
+
+  test("explicit existing Child choice creates one reservation without creating or rewriting a Child", async ({ page }) => {
+    const fixture = fixtures.existing; test.skip(!fixture?.existingChildId || !state, "BLOCKED: dedicated matching existing-Child fixture and ADMIN state required."); const db = new PrismaClient();
+    try {
+      await pristine(db, fixture!);
+      const siblingBefore = await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.secondApplicationId } });
+      const child = await db.child.findUniqueOrThrow({ where: { id: fixture!.existingChildId } });
+      const childrenBefore = await db.child.count({ where: { guardianName: fixture!.marker } });
+      await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
+      const first = page.getByTestId(`confirmation-${fixture!.firstApplicationId}`);
+      await first.getByRole("checkbox").check();
+      await expect(page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled();
+      await first.getByRole("combobox").selectOption(fixture!.existingChildId!);
+      await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
+      await expect(page.getByTestId("workflow-status")).toContainText("저장 결과와 최신 서버 원장을 확인했습니다");
+      const after = await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.firstApplicationId }, include: { reservation: true, paymentMapping: true } });
+      expect(after).toMatchObject({ status: "CONFIRMED", childId: child.id, quotedAmount: 40000, reservation: { childId: child.id } }); expect(after.paymentMapping).not.toBeNull();
+      expect(await db.child.count({ where: { guardianName: fixture!.marker } })).toBe(childrenBefore);
+      expect(await db.child.findUniqueOrThrow({ where: { id: child.id } })).toEqual(child);
+      expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.secondApplicationId } })).toEqual(siblingBefore);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 60000, P: 40000, R: 0, T: 0 });
+      // Existing refunds remain PaymentItem operations; they never release application allocations.
+      const item = await db.paymentItem.findUniqueOrThrow({ where: { reservationId: after.reservationId! }, include: { payment: true, reservation: { include: { classSchedule: true } } } });
+      await page.goto(`/payments/${item.paymentId}`);
+      await page.getByRole("link", { name: "환불 등록", exact: true }).click();
+      await page.locator("#amount").fill("10000"); await page.locator("#reason").selectOption("PERSONAL");
+      await page.locator("#reasonDetail").fill("합성 연결 결제의 일부 환불");
+      await page.getByRole("button", { name: "환불 처리", exact: true }).click();
+      await expect(page).toHaveURL(`/payments/${item.paymentId}`);
+      const refunded = await db.paymentItem.findUniqueOrThrow({ where: { id: item.id }, include: { payment: true, refunds: true } });
+      expect(refunded).toMatchObject({ paidAmount: 40000, refundedAmount: 10000, payment: { totalAmount: 40000, status: "PARTIAL_REFUNDED" } });
+      expect(refunded.refunds).toHaveLength(1); expect(refunded.refunds[0]!.amount).toBe(10000);
+      expect(refunded.payment.paidAt).toEqual(item.payment.paidAt);
+      expect((await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.firstApplicationId } })).quotedAmount).toBe(40000);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 60000, P: 40000, R: 0, T: 0 });
+      const kstDate = (date: Date) => new Date(date.getTime() + 9 * 3600000).toISOString().slice(0, 10);
+      const refundDate = kstDate(refunded.refunds[0]!.refundedAt), paymentDate = kstDate(item.payment.paidAt), classDate = kstDate(item.reservation.classSchedule.startsAt);
+      await page.goto(`/revenue?dateFrom=${refundDate}&dateTo=${refundDate}&classScheduleId=${item.reservation.classScheduleId}`);
+      await expect(page.getByTestId("summary-환불")).toContainText("10,000원");
+      await expect(page.getByTestId("summary-결제")).toContainText(paymentDate === refundDate ? "40,000원" : "0원");
+      await expect(page.getByTestId("summary-예약")).toContainText(classDate === refundDate ? "1건" : "0건");
+      await page.goto(`/revenue?dateFrom=${classDate}&dateTo=${classDate}&classScheduleId=${item.reservation.classScheduleId}`);
+      await expect(page.getByTestId("summary-예약")).toContainText("1건");
+      await expect(page.getByTestId("summary-환불")).toContainText(classDate === refundDate ? "10,000원" : "0원");
+    } finally { await db.$disconnect(); }
+  });
+
+  test("another family's Child is absent from choices and a forged UI submission is rejected atomically", async ({ page }) => {
+    const fixture = fixtures.foreign; test.skip(!fixture?.foreignChildId || !state, "BLOCKED: dedicated foreign-family Child fixture and ADMIN state required."); const db = new PrismaClient();
+    try {
+      await pristine(db, fixture!); const foreign = await db.child.findUniqueOrThrow({ where: { id: fixture!.foreignChildId } });
+      const sibling = await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.secondApplicationId } });
+      await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
+      const first = page.getByTestId(`confirmation-${fixture!.firstApplicationId}`);
+      await first.getByRole("checkbox").check(); await first.getByRole("combobox").selectOption("NEW");
+      expect(await first.getByRole("combobox").locator("option").evaluateAll((options, deniedId) => options.some((option) => (option as HTMLOptionElement).value === deniedId), fixture!.foreignChildId!)).toBe(false);
+      let submitted = false;
+      await page.route(`**/reservation-applications/submissions/${fixture!.submissionId}`, async (route) => {
+        const body = route.request().postData();
+        if (!submitted && route.request().method() === "POST" && body?.includes('"newChild":true')) {
+          submitted = true;
+          // Adversarial input still travels through the real browser-triggered Server Action and its authorization.
+          await route.continue({ postData: body.replace('"newChild":true', `"childId":"${fixture!.foreignChildId}"`) });
+        } else await route.continue();
+      });
+      await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
+      await expect(page.getByText("아이 연결, 중복 예약, 신청·클래스 상태를 다시 확인해주세요.", { exact: true })).toBeVisible(); expect(submitted).toBe(true);
+      expect(await db.reservationApplicationPaymentMapping.count({ where: { application: { submissionId: fixture!.submissionId } } })).toBe(0);
+      expect(await db.child.findUniqueOrThrow({ where: { id: foreign.id } })).toEqual(foreign);
+      expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling.id } })).toEqual(sibling);
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
+    } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
   });
 });

@@ -2,15 +2,23 @@ import { loadEnvConfig } from "@next/env";
 import { defineConfig, devices } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./tests/e2e/support/db-safety";
 import { assertLocalE2eBaseUrl } from "./lib/e2e/local-origin-safety";
+import { applyUxManifest } from "./tests/e2e/support/ux-manifest";
 
 if (process.env.PLAYWRIGHT_PREVIEW_E2E === "1" || process.env.VERCEL_ENV) throw new Error("UX_E2E_LOCAL_ONLY");
 loadEnvConfig(process.cwd());
 if (process.env.VERCEL_ENV || process.env.PREVIEW_E2E_FOCUS) throw new Error("UX_E2E_LOCAL_ONLY");
 const baseURL = assertLocalE2eBaseUrl(process.env.PLAYWRIGHT_BASE_URL);
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
+if (process.env.UX_CI === "1") {
+  if (!process.env.UX_MANIFEST_PATH) throw new Error("UX_MANIFEST_REQUIRED");
+  applyUxManifest(process.env.UX_MANIFEST_PATH);
+}
 
 export default defineConfig({
   testDir: "./tests/e2e", testMatch: /integrated-ux-.*\.spec\.ts$/, workers: 1,
+  outputDir: "test-results/ux-output",
+  timeout: 90000, retries: 0, forbidOnly: Boolean(process.env.CI),
+  reporter: process.env.UX_CI === "1" ? [["./tests/e2e/support/ux-reporter.ts"]] : "list",
   use: { baseURL, trace: "off", screenshot: "off", video: "off" },
   expect: { timeout: 15000 },
   projects: [
@@ -19,5 +27,5 @@ export default defineConfig({
     { name: "mobile-webkit-390", use: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 } } },
     { name: "tablet-webkit-768", use: { ...devices["iPad Mini"], viewport: { width: 768, height: 1024 } } },
   ],
-  webServer: { command: "npm run dev", url: baseURL, reuseExistingServer: false },
+  webServer: process.env.UX_EXTERNAL_SERVER === "1" ? undefined : { command: "npm run dev", url: baseURL, reuseExistingServer: false },
 });
