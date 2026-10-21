@@ -107,18 +107,27 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
   });
   test("save followed by failed authoritative read hides balances and blocks stale confirmation until lookup succeeds", async ({ page }) => {
     const fixture = fixtures.refresh; test.skip(!fixture || !adminState, "Requires its own pristine local refresh-failure fixture.");
-    const db = new PrismaClient(); let posts = 0; let failReads = true;
+    const db = new PrismaClient(); let posts = 0; let failedReads = 0; let failReads = true;
     try {
       await pristine(db, fixture!); await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
       await page.route(`**/reservation-applications/submissions/${fixture!.submissionId}`, async (route) => {
-        if (route.request().method() === "POST" && route.request().headers()["next-action"] && ++posts >= 3 && failReads) await route.abort("failed");
+        if (route.request().method() === "POST" && route.request().headers()["next-action"] && ++posts >= 3 && failReads) { failedReads++; await route.abort("failed"); }
         else await route.continue();
       });
       const key = await deposit(page, 30000); await expect(page.getByTestId("workflow-status")).toContainText("갱신 실패");
       await expect(page.getByTestId("detail-ledger")).toContainText("최신 원장 금액을 표시할 수 없습니다");
       await expect(page.getByTestId("family-confirmation").getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
       const root = page.getByTestId("deposit-transaction-form"); expect(await root.locator('input[name="idempotencyKey"]').inputValue()).toBe(key);
-      failReads = false; await page.getByRole("button", { name: "최신 서버 상태 다시 조회", exact: true }).click();
+      // The first failed read shows its alert before run()'s finally can issue
+      // another read for changed RSC props. Keep that read failing too; otherwise
+      // it can recover automatically and remove the still-disabled retry button.
+      await expect(root.getByRole("status")).toContainText("저장 기록 확인됨");
+      await expect(root.getByLabel("실제 입금액", { exact: true })).toHaveAttribute("readonly", "");
+      const retry = page.getByRole("button", { name: "최신 서버 상태 다시 조회", exact: true });
+      await expect(retry).toBeEnabled();
+      expect(await root.locator('input[name="idempotencyKey"]').inputValue()).toBe(key);
+      expect(posts).toBeGreaterThanOrEqual(3); expect(failedReads).toBeGreaterThan(0);
+      failReads = false; await retry.click({ timeout: 15000 });
       await amounts(page, { D: 30000, A: 30000, R: 0, T: 0 }); expect(await db.applicationDeposit.count({ where: { submissionId: fixture!.submissionId } })).toBe(1);
     } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
   });
