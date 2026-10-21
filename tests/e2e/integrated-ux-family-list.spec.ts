@@ -57,7 +57,13 @@ test.describe("Phase 3 read-only family list", () => {
     await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
       && !url.searchParams.has("page") && url.searchParams.get("status") === "all"
       && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId);
-    await page.getByRole("link", { name: "클래스 필터 해제", exact: true }).click();
+    const removeClass = page.getByRole("link", { name: "클래스 필터 해제", exact: true });
+    // Native GET changes the URL before a streamed page has necessarily replaced
+    // its previous filter links. Require the new all-status context before acting.
+    await expect(removeClass).toHaveAttribute("href", "/reservation-applications?status=all");
+    await expect(page.getByLabel("보호자 입금 알림", { exact: true })).toHaveValue("all");
+    await expect(page.getByLabel("은행 확인 입금", { exact: true })).toHaveValue("all");
+    await removeClass.click();
     await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
       && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all");
   });

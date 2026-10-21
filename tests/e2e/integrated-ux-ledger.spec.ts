@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { assertFamilyLedger } from "./support/integrated-ux-invariants";
+import { applicationPrivateValues, assertApplicationNotFound } from "./support/application-denial";
 
 // Each writing test requires its own pristine synthetic fixture, supplied by the
 // CI fixture runner. Admission never accepts a Preview or Production database.
@@ -20,9 +21,12 @@ async function pristine(db: PrismaClient, fixture: Fixture) {
   expect(submission.applications.map((row) => [row.id, row.quotedAmount, row.status])).toEqual([[fixture.firstApplicationId, 40000, "SUBMITTED"], [fixture.secondApplicationId, 60000, "SUBMITTED"]]);
   expect(submission.applications.every((row) => row.classSchedule.program.name === fixture.marker)).toBe(true);
 }
-async function deposit(page: Page, amount: number) {
+async function deposit(page: Page, amount: number, prepareDraft?: () => Promise<void>) {
   const root = page.getByTestId("deposit-transaction-form");
   await root.getByRole("button", { name: "새 입금 거래 시작", exact: true }).click();
+  // The generated key proves the client coordinator has hydrated before editing drafts.
+  await expect(root.locator('input[name="idempotencyKey"]')).not.toHaveValue("");
+  await prepareDraft?.();
   await root.getByLabel("실제 입금액", { exact: true }).fill(String(amount));
   await root.getByLabel("실제 은행 입금자명", { exact: true }).fill("합성 실제 입금자 (신고명과 다름)");
   await root.getByLabel("실제 입금일시 (KST)", { exact: true }).fill(date);
@@ -30,12 +34,12 @@ async function deposit(page: Page, amount: number) {
   await root.getByRole("button", { name: "실제 입금 기록", exact: true }).click(); return key;
 }
 async function latest(page: Page) { await expect(page.getByTestId("workflow-status")).toContainText("저장 결과와 최신 서버 원장을 확인했습니다"); }
-async function amounts(page: Page, expected: { D: number; A: number; R: number; T: number }) {
+async function amounts(page: Page, expected: { D: number; A: number; P?: number; R: number; T: number }) {
   const ledger = page.getByTestId("detail-ledger");
   for (const [term, amount] of Object.entries({ Q: 100000, P: 0, ...expected })) {
     await expect(ledger.locator("dl > div").filter({ has: page.locator("dt", { hasText: new RegExp(`^${term} ·`) }) }).locator("dd")).toHaveText(amount.toLocaleString("ko-KR") + "원");
   }
-  expect(expected.D).toBe(expected.A + expected.R + expected.T);
+  expect(expected.D).toBe(expected.A + (expected.P ?? 0) + expected.R + expected.T);
 }
 async function noConfirmedMoney(db: PrismaClient, fixture: Fixture) {
   const where = { classSchedule: { program: { name: fixture.marker } } };
@@ -55,8 +59,10 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
         await pristine(db, fixture!); await page.setViewportSize({ width, height: 900 });
         await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
         const siblingReason = page.locator(`#${fixture!.firstApplicationId}-REJECTED-reason`);
-        await siblingReason.fill("처리하지 않은 첫째 초안");
-        const firstKey = await deposit(page, 30000); await latest(page); await amounts(page, { D: 30000, A: 30000, R: 0, T: 0 });
+        const firstKey = await deposit(page, 30000, async () => {
+          await siblingReason.fill("처리하지 않은 첫째 초안");
+          await expect(siblingReason).toHaveValue("처리하지 않은 첫째 초안");
+        }); await latest(page); await amounts(page, { D: 30000, A: 30000, R: 0, T: 0 });
         expect(await page.getByTestId("deposit-transaction-form").locator('input[name="idempotencyKey"]').inputValue()).toBe(firstKey);
         const secondKey = await deposit(page, 70000); expect(secondKey).not.toBe(firstKey); await latest(page);
         await amounts(page, { D: 100000, A: 100000, R: 0, T: 0 }); await expect(siblingReason).toHaveValue("처리하지 않은 첫째 초안");
@@ -125,8 +131,16 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
       const cancelled = page.locator(`#${fixture!.secondApplicationId}-CANCELLED-reason`);
       await cancelled.fill("합성 보호자가 둘째 신청 취소 요청"); page.once("dialog", (dialog) => dialog.accept());
       await cancelled.locator("..").getByRole("button", { name: "보호자 요청으로 취소", exact: true }).click(); await latest(page);
-      await assertFamilyLedger(db, fixture!.submissionId, { D: 60000, A: 0, P: 0, R: 60000, T: 0 });
+      // The previous deposit has the same success message. Wait for this cancellation's
+      // terminal review and receipt before reading the exact financial invariant.
+      const cancelledReview = page.locator(`#application-${fixture!.secondApplicationId}`);
+      await expect(cancelledReview.getByText("처리 사유: 합성 보호자가 둘째 신청 취소 요청", { exact: true })).toBeVisible();
+      await expect(cancelled).toHaveCount(0);
       const sibling = await db.reservationApplication.findUniqueOrThrow({ where: { id: fixture!.secondApplicationId } });
+      expect(sibling).toMatchObject({ status: "CANCELLED", quotedAmount: 60000, resolutionNote: "합성 보호자가 둘째 신청 취소 요청" });
+      const obligation = await db.returnObligation.findFirstOrThrow({ where: { applicationId: sibling.id, kind: "CANCELLED" } });
+      expect(obligation).toMatchObject({ submissionId: fixture!.submissionId, amount: 60000, returnedAmount: 0 });
+      await assertFamilyLedger(db, fixture!.submissionId, { D: 60000, A: 0, P: 0, R: 60000, T: 0 });
       expect(sibling.status).toBe("CANCELLED"); expect(sibling.quotedAmount).toBe(60000);
       const first = page.getByTestId(`confirmation-${fixture!.firstApplicationId}`);
       await first.getByRole("checkbox").check(); await first.getByRole("combobox").selectOption("NEW");
@@ -135,12 +149,15 @@ test.describe("Phase 5 same-page bank/return ledger", () => {
       await deposit(page, 40000); await latest(page);
       await page.getByRole("button", { name: "최신 선택 내용 다시 검토함", exact: true }).click();
       await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click(); await latest(page);
+      await expect(first).toHaveCount(0);
+      await amounts(page, { D: 100000, A: 0, P: 40000, R: 60000, T: 0 });
       await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 0, P: 40000, R: 60000, T: 0 });
-      const obligation = await db.returnObligation.findFirstOrThrow({ where: { applicationId: sibling.id, kind: "CANCELLED" } });
       const card = page.getByTestId(`return-obligation-${obligation.id}`);
       await card.getByRole("button", { name: "새 반환 거래 시작", exact: true }).click();
       await card.getByLabel("실제 반환 금액", { exact: true }).fill("20000"); await card.getByLabel("실제 반환일시 (KST)").fill(date); await card.getByLabel("반환 사유", { exact: true }).fill("합성 취소 일부 반환");
       await card.getByRole("button", { name: "반환 이체 기록", exact: true }).click(); await latest(page);
+      await expect(card.getByTestId("return-obligation-remaining")).toHaveText("40,000원");
+      await amounts(page, { D: 100000, A: 0, P: 40000, R: 40000, T: 20000 });
       await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 0, P: 40000, R: 40000, T: 20000 });
       expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling.id } })).toEqual(sibling);
       expect(await db.refund.count({ where: { paymentItem: { reservation: { classSchedule: { program: { name: fixture!.marker } } } } } })).toBe(0);
@@ -152,11 +169,14 @@ for (const role of ["MANAGER", "TEACHER"] as const) {
     const state = process.env[`UX_${role}_STORAGE_STATE`]; test.use({ storageState: state });
     test("family and whole-return HTML/RSC disclose no ledger or family marker", async ({ page }) => {
       const fixture = fixtures["1280"]; test.skip(!fixture || !state, "Requires synthetic fixture and role state.");
-      for (const path of [`/reservation-applications/submissions/${fixture!.submissionId}`, "/reservation-applications/returns"]) {
-        const response = await page.goto(path); expect(response?.status()).toBe(404); expect(await response!.text()).not.toContain(fixture!.marker);
-        const rsc = await page.request.get(path, { headers: { RSC: "1" } }); expect(await rsc.text()).not.toContain(fixture!.marker);
-        await expect(page.getByTestId("deposit-transaction-form")).toHaveCount(0); await expect(page.getByTestId("detail-ledger")).toHaveCount(0);
-      }
+      const db = new PrismaClient();
+      try {
+        const privateValues = await applicationPrivateValues(db, fixture!.submissionId);
+        for (const path of [`/reservation-applications/submissions/${fixture!.submissionId}`, "/reservation-applications/returns"]) {
+          await assertApplicationNotFound(page, path, [...privateValues, fixture!.marker, fixture!.firstApplicationId, fixture!.secondApplicationId]);
+          await expect(page.getByTestId("deposit-transaction-form")).toHaveCount(0); await expect(page.getByTestId("detail-ledger")).toHaveCount(0);
+        }
+      } finally { await db.$disconnect(); }
     });
   });
 }

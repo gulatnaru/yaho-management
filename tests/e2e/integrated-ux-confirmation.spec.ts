@@ -25,8 +25,13 @@ test.describe("Phase 6 explicit selected atomic confirmation", () => {
       const before = await pristine(db, fixture!); await page.setViewportSize({ width, height: 900 }); await page.goto(`/reservation-applications/submissions/${fixture!.submissionId}`);
       const form = page.getByTestId("confirmation-selection-form"); await expect(form.getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled(); await expect(form.getByText("확정할 아이를 선택해 주세요.", { exact: true })).toBeVisible();
       const first = page.getByTestId(`confirmation-${fixture!.firstApplicationId}`), second = page.getByTestId(`confirmation-${fixture!.secondApplicationId}`);
-      await second.getByRole("textbox").fill("둘째 미선택 보존 초안"); await first.getByRole("checkbox").check();
-      await expect(form.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled(); await first.getByRole("combobox").selectOption("NEW"); await first.getByRole("textbox").fill("첫째 검토 완료 메모");
+      await first.getByRole("checkbox").check();
+      // React-controlled selection proves hydration before entering either memo draft.
+      await expect(form.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled(); await first.getByRole("combobox").selectOption("NEW");
+      await expect(form.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeEnabled();
+      await expect(second.getByRole("checkbox")).not.toBeChecked();
+      await second.getByRole("textbox").fill("둘째 미선택 보존 초안"); await first.getByRole("textbox").fill("첫째 검토 완료 메모");
+      await expect(second.getByRole("textbox")).toHaveValue("둘째 미선택 보존 초안");
       await expect(page.getByTestId("confirmation-amounts")).toContainText("40,000원"); await form.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
       await expect(page.getByTestId("workflow-status")).toContainText("저장 결과와 최신 서버 원장을 확인했습니다"); await expect(first).toHaveCount(0); await expect(second.getByRole("textbox")).toHaveValue("둘째 미선택 보존 초안");
       const ledger = page.getByTestId("detail-ledger");
@@ -138,7 +143,8 @@ test.describe("Phase 6 explicit selected atomic confirmation", () => {
         } else await route.continue();
       });
       await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
-      await expect(page.getByText("아이 연결, 중복 예약, 신청·클래스 상태를 다시 확인해주세요.", { exact: true })).toBeVisible(); expect(submitted).toBe(true);
+      const rejection = page.getByTestId("confirmation-selection-form").getByRole("alert").filter({ hasText: "아이 연결, 중복 예약, 신청·클래스 상태를 다시 확인해주세요." });
+      await expect(rejection).toHaveText("아이 연결, 중복 예약, 신청·클래스 상태를 다시 확인해주세요."); await expect(rejection).toBeVisible(); expect(submitted).toBe(true);
       expect(await db.reservationApplicationPaymentMapping.count({ where: { application: { submissionId: fixture!.submissionId } } })).toBe(0);
       expect(await db.child.findUniqueOrThrow({ where: { id: foreign.id } })).toEqual(foreign);
       expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling.id } })).toEqual(sibling);

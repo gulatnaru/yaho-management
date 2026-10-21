@@ -131,7 +131,7 @@ test.describe("Phase 7 public completion presentation", () => {
   for (const clipboard of ["denied", "unsupported"] as const) test(`${clipboard} clipboard offers keyboard/mobile manual selection and never reports success`, async ({ page }) => {
     await page.addInitScript((mode) => Object.defineProperty(navigator, "clipboard", { configurable: true, value: mode === "unsupported" ? undefined : { writeText: async () => { throw new DOMException("Synthetic denial", "NotAllowedError"); } } }), clipboard);
     await open(page); await page.getByRole("button", { name: "계좌번호 복사", exact: true }).click();
-    await expect(page.getByRole("alert")).toHaveText("복사하지 못했습니다. 직접 선택해서 복사해 주세요.");
+    await expect(page.getByRole("region", { name: "무통장 입금 안내", exact: true }).getByRole("alert")).toHaveText("복사하지 못했습니다. 직접 선택해서 복사해 주세요.");
     await expect(page.getByRole("status")).toHaveCount(0);
     const value = page.getByRole("textbox", { name: "계좌번호 복사 값", exact: true });
     await value.focus(); await expect(value).toHaveAttribute("readonly", "");
@@ -160,7 +160,7 @@ test.describe("Phase 7 public completion presentation", () => {
       if (!intercepted && route.request().method() === "POST" && route.request().headers()["next-action"]) { intercepted = true; await route.fetch(); await route.abort("failed"); } else await route.continue();
     });
     await page.getByRole("button", { name: "입금했어요", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("처리 결과를 확인하지 못했습니다");
+    await expect(page.getByRole("region", { name: "무통장 입금 안내", exact: true }).getByRole("alert")).toContainText("처리 결과를 확인하지 못했습니다");
     await expect(page.getByText("입금 알림을 보냈습니다. 운영자 확인을 기다려주세요.", { exact: true })).toHaveCount(0);
     await page.unrouteAll({ behavior: "wait" }); await page.reload();
     await expect(page.getByRole("status")).toHaveText("입금 알림을 보냈습니다. 운영자 확인을 기다려주세요."); await noFinance();
@@ -173,9 +173,26 @@ test.describe("Phase 7 public completion presentation", () => {
     const cancelledAddress = await value.inputValue();
     expect(await db.companionInvite.count({ where: { issuerSubmissionId: ids.submission } })).toBe(1);
     await expect(page.getByRole("button", { name: "초대 링크 만들기", exact: true })).toHaveCount(0);
+    const inviteRegion = page.getByRole("region", { name: "친구 보호자 초대", exact: true });
+    const original = await db.reservationApplicationSubmission.findUniqueOrThrow({ where: { id: ids.submission }, select: { completionExpiresAt: true } });
+    // A known refusal and a lost response have different safety contracts. Expire
+    // only this test's capability so the real UI action definitively refuses it.
+    try {
+      await db.reservationApplicationSubmission.update({ where: { id: ids.submission }, data: { completionExpiresAt: new Date(Date.now() - 1000) } });
+      await page.getByRole("button", { name: "초대 취소", exact: true }).click();
+      await expect(inviteRegion.getByRole("alert")).toHaveText("초대 링크 취소를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      await expect(value).toBeVisible();
+      expect((await value.inputValue()) === cancelledAddress).toBe(true);
+      expect(await db.companionInvite.count({ where: { issuerSubmissionId: ids.submission, revokedAt: null } })).toBe(1);
+    } finally {
+      await db.reservationApplicationSubmission.update({ where: { id: ids.submission }, data: { completionExpiresAt: original.completionExpiresAt } });
+    }
     await page.route("**/apply/complete", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
     await page.getByRole("button", { name: "초대 취소", exact: true }).click();
-    await expect(page.getByRole("alert")).toHaveText("초대 링크 취소를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요."); await expect(value).toBeVisible();
+    await expect(inviteRegion.getByRole("alert")).toHaveText("취소 결과를 확인하기 전에는 기존 초대 주소를 다시 공유하지 마세요. 이미 취소됐을 수 있습니다.");
+    await expect(value).toHaveCount(0);
+    await expect(inviteRegion.getByRole("button", { name: "초대 링크 복사", exact: true })).toHaveCount(0);
+    await expect(inviteRegion.getByRole("button", { name: "초대 링크 만들기", exact: true })).toHaveCount(0);
     expect(await db.companionInvite.count({ where: { issuerSubmissionId: ids.submission, revokedAt: null } })).toBe(1);
     await page.unrouteAll({ behavior: "wait" });
     await page.getByRole("button", { name: "초대 취소", exact: true }).evaluate((element: HTMLButtonElement) => { element.click(); element.click(); });

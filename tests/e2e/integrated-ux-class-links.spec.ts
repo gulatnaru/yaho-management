@@ -79,7 +79,7 @@ test.describe("Phase 1 existing synthetic class inventory (read only)", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new DOMException("Denied", "NotAllowedError"); } } }));
     await card.getByRole("button", { name: "링크 복사", exact: true }).click();
-    await expect(card.getByRole("alert")).toContainText("주소를 길게 눌러 복사");
+    await expect(card.getByRole("alert")).toHaveText("복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.");
     expect((await address.inputValue()) === raw).toBe(true);
     await address.focus();
     expect(await address.evaluate((node: HTMLTextAreaElement) => node.selectionEnd - node.selectionStart === node.value.length)).toBe(true);
@@ -157,7 +157,7 @@ test.describe.serial("Phase 2 dedicated local synthetic issuance", () => {
     const before = await fingerprint();
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new DOMException("Denied", "NotAllowedError"); } } }));
     await card.getByRole("button", { name: "링크 복사", exact: true }).click();
-    await expect(card.getByRole("alert")).toContainText("주소를 길게 눌러 복사");
+    await expect(card.getByRole("alert")).toHaveText("복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.");
     await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: undefined }));
     await card.getByRole("button", { name: "공유하기", exact: true }).click();
     await expect(card).toContainText("공유 기능을 사용할 수 없습니다");

@@ -44,9 +44,10 @@ test("real ADMIN login → class creation/prices → issued link → two childre
       await page.locator("#applicationPrice").fill(String(amount));
       for (const teacher of teachers) await page.locator(`input[name="teacherIds"][value="${teacher.id}"]`).check();
       await page.getByRole("button", { name: "등록", exact: true }).click();
-      await expect(page).toHaveURL(/\/classes\/[^/]+$/);
+      // The create page itself is /classes/new: wait for the action's detail redirect.
+      await expect(page).toHaveURL((url) => /^\/classes\/[^/]+$/.test(url.pathname) && url.pathname !== "/classes/new");
       classIds.push(new URL(page.url()).pathname.split("/").at(-1)!);
-      expect((await db.classSchedule.findUniqueOrThrow({ where: { id: classIds[i] } })).applicationPrice).toBe(amount);
+      expect(await db.classSchedule.findUniqueOrThrow({ where: { id: classIds[i] } })).toMatchObject({ programId: program.id, location: `합성장소${i}`, applicationPrice: amount });
     }
     await page.goto("/reservation-applications/groups");
     const composer = page.locator("form").filter({ has: page.getByRole("heading", { name: "여러 클래스 통합 신청", exact: true }) });

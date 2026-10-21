@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
+import { applicationPrivateValues, assertApplicationNotFound } from "./support/application-denial";
 // Operator-provisioned synthetic records, read-only browser interactions. Never submits a form.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
@@ -76,25 +78,30 @@ test.describe("Phase 4 read-only family detail", () => {
   test("invalid ledger never displays a normal available value", async ({ page }) => {
     test.skip(!fixture!.invalidLedgerSubmissionId, "Requires invalid-ledger local synthetic case.");
     await page.goto(`/reservation-applications/submissions/${fixture!.invalidLedgerSubmissionId}`);
-    const ledger = page.getByTestId("detail-ledger"); await expect(ledger.getByRole("alert")).toContainText("가용액을 표시할 수 없습니다");
+    const ledger = page.getByTestId("detail-ledger");
+    await expect(ledger).toHaveRole("alert");
+    await expect(ledger).toHaveText("최신 원장 금액을 표시할 수 없습니다. 이전 잔액을 현재 잔액으로 사용하지 마세요.");
     await expect(ledger.getByText("A · 예약·후속 처리 가용액", { exact: true })).toHaveCount(0);
+    await expect(ledger.locator("dd")).toHaveCount(0);
+    await expect(page.getByTestId("family-confirmation").getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
   });
   test("missing family is a safe not-found response", async ({ page }) => {
-    const response = await page.goto("/reservation-applications/submissions/ux4-synthetic-missing");
-    expect(response?.status()).toBe(404); await expect(page.getByTestId("family-review")).toHaveCount(0);
+    await assertApplicationNotFound(page, "/reservation-applications/submissions/ux4-synthetic-missing", [fixture!.originalRequestSentinel, fixture!.submissionId]);
+    await expect(page.getByTestId("family-review")).toHaveCount(0);
   });
 });
 for (const role of ["MANAGER", "TEACHER"] as const) {
   test.describe(`Phase 4 ${role} denial`, () => {
     test.skip(!fixture || !states[role], `Requires synthetic fixture and ${role} storage state.`); test.use({ storageState: states[role] });
     test("direct family/child URLs reveal no review, consent or ledger", async ({ page }) => {
-      for (const path of [`/reservation-applications/submissions/${fixture!.submissionId}?applicationId=${fixture!.applicationId}`, `/reservation-applications/${fixture!.applicationId}`]) {
-        const response = await page.goto(path); expect(response?.status()).toBe(404);
-        expect(await response!.text()).not.toContain(fixture!.originalRequestSentinel);
-        const rsc = await page.request.get(path, { headers: { RSC: "1" } });
-        expect(await rsc.text()).not.toContain(fixture!.originalRequestSentinel);
-        await expect(page.getByTestId("application-review-card")).toHaveCount(0); await expect(page.getByTestId("detail-ledger")).toHaveCount(0); await expect(page.getByTestId("application-consents")).toHaveCount(0);
-      }
+      const db = new PrismaClient();
+      try {
+        const privateValues = await applicationPrivateValues(db, fixture!.submissionId);
+        for (const path of [`/reservation-applications/submissions/${fixture!.submissionId}?applicationId=${fixture!.applicationId}`, `/reservation-applications/${fixture!.applicationId}`]) {
+          await assertApplicationNotFound(page, path, [...privateValues, fixture!.originalRequestSentinel, fixture!.reservationMemoSentinel, fixture!.foreignApplicationId, fixture!.actualReservationId, fixture!.actualPaymentId].filter((value): value is string => Boolean(value)));
+          await expect(page.getByTestId("application-review-card")).toHaveCount(0); await expect(page.getByTestId("detail-ledger")).toHaveCount(0); await expect(page.getByTestId("application-consents")).toHaveCount(0);
+        }
+      } finally { await db.$disconnect(); }
     });
   });
 }

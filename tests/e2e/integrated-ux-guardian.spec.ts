@@ -74,7 +74,11 @@ async function changePrice(browser: Browser, baseURL: string, amount: number) {
     await card.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true }).fill(String(amount));
     await card.getByRole("button", { name: "신청금액 저장", exact: true }).click();
     await expect(card.getByRole("status")).toContainText("신청금액을 저장했습니다");
+    // A saved action notice is not a refreshed server read. Explicitly reload the
+    // card; its inline reload affordance only exists while revisions differ.
+    await admin.page.reload();
     await expect(card).toContainText(`${amount.toLocaleString("ko-KR")}원`);
+    await expect(card.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true })).toHaveValue(String(amount));
   } finally { await admin.context.close(); }
 }
 
@@ -153,14 +157,14 @@ test.describe("Phase 8 guardian three-step input", () => {
     await setup(); await page.goto(fixture.path); await details(page); await page.getByRole("button", { name: "내 자녀 추가" }).click(); await fill(page, 1);
     await page.locator("#application-child-2-childBirthDate").fill(""); await page.getByRole("group", { name: "자녀 2 · 합성자녀2", exact: true }).getByRole("button", { name: "자녀 정보 접기" }).click();
     await page.getByRole("button", { name: "다음", exact: true }).click(); await expect(page.locator("#application-child-2-childBirthDate")).toBeFocused();
-    await expect(page.getByRole("alert")).toContainText("2단계 자녀 2 (합성자녀2)"); await expect(page.locator("#application-child-1-childName")).toHaveValue("합성자녀1"); await noBrowserPii(page);
+    await expect(page.locator("form").getByRole("alert")).toContainText("2단계 자녀 2 (합성자녀2)"); await expect(page.locator("#application-child-1-childName")).toHaveValue("합성자녀1"); await noBrowserPii(page);
   });
 
   test("transport loss blocks duplicate clicks and never automatically retries the action", async ({ page }) => {
     await setup("single"); await page.goto(fixture.path); await details(page); await enterConsentReview(page); await required(page);
     let writes = 0; await page.route("**/apply/group/**", async (route) => { if (route.request().method() === "POST") { writes++; await route.abort("failed"); } else await route.continue(); });
     await page.getByRole("button", { name: "신청서 제출", exact: true }).dblclick();
-    await expect(page.getByText("처리 결과를 확인하지 못했습니다. 신청서를 자동으로 다시 보내지 않습니다.", { exact: true })).toBeVisible();
+    await expect(page.locator("form").getByText("처리 결과를 확인하지 못했습니다. 신청서를 자동으로 다시 보내지 않습니다.", { exact: true })).toBeVisible();
     expect(writes).toBe(1); await expect(page.getByRole("button", { name: "신청서 제출", exact: true })).toBeDisabled(); expect(await applications()).toHaveLength(0);
   });
 
@@ -209,7 +213,7 @@ test.describe("Phase 8 guardian three-step input", () => {
       if (route.request().method() === "POST") { writes++; await route.fetch(); await route.abort("failed"); } else await route.continue();
     });
     await page.getByRole("button", { name: "신청서 제출", exact: true }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
-    await expect(page.getByText("처리 결과를 확인하지 못했습니다. 신청서를 자동으로 다시 보내지 않습니다.", { exact: true })).toBeVisible();
+    await expect(page.locator("form").getByText("처리 결과를 확인하지 못했습니다. 신청서를 자동으로 다시 보내지 않습니다.", { exact: true })).toBeVisible();
     expect(writes).toBe(1); expect(await applications()).toHaveLength(1);
     await expect(page.getByRole("button", { name: "신청서 제출", exact: true })).toBeDisabled();
     await page.unrouteAll({ behavior: "wait" }); await page.reload();
@@ -225,6 +229,8 @@ test.describe("Phase 8 guardian three-step input", () => {
       await card.getByText("고급 설정 펼치기", { exact: true }).click();
       await card.getByRole("button", { name: "신청 접수 중지", exact: true }).click();
       await admin.page.getByRole("dialog").getByRole("button", { name: "신청 접수 중지", exact: true }).click();
+      await expect(card.getByRole("status")).toHaveText("이 링크의 신규 신청을 중지했습니다.");
+      await admin.page.reload();
       await expect(card).toContainText("링크 비활성 · 접수 중지");
     } finally { await admin.context.close(); }
     await page.getByRole("button", { name: "다음", exact: true }).click();
