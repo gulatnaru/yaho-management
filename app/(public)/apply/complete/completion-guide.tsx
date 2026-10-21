@@ -26,6 +26,7 @@ export function CompletionGuide({ bankName, accountNumber, accountHolder, payerN
   const [inviteNotice, setInviteNotice] = useState<string>();
   const [inviteError, setInviteError] = useState<string>();
   const [inviteUncertain, setInviteUncertain] = useState(false);
+  const [cancelUncertain, setCancelUncertain] = useState(false);
   const [processing, setProcessing] = useState<"notify" | "create" | "cancel">();
   // A synchronous guard also covers two activations before React renders disabled.
   const inFlight = useRef(false);
@@ -74,14 +75,17 @@ export function CompletionGuide({ bankName, accountNumber, accountHolder, payerN
     inFlight.current = true; setProcessing("cancel"); setInviteNotice(undefined); setInviteError(undefined);
     try {
       const result = await revokeCompanionInvitation(currentInvite.current);
-      if (result.revoked) {
+      if (result?.revoked === true) {
+        setCancelUncertain(false);
         currentInvite.current = undefined; setCompanionUrl(undefined);
         setInviteNotice("친구 보호자 초대 링크를 취소했습니다.");
-      } else {
+      } else if (result?.revoked === false) {
         setInviteError("초대 링크 취소를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      } else {
+        setCancelUncertain(true);
       }
     } catch {
-      setInviteError("초대 링크 취소를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      setCancelUncertain(true);
     } finally { inFlight.current = false; setProcessing(undefined); }
   }
 
@@ -93,7 +97,7 @@ export function CompletionGuide({ bankName, accountNumber, accountHolder, payerN
         <span className="min-w-0 break-all">{application.childName ?? "아이"}</span>
         <strong className="shrink-0">{application.quotedAmount.toLocaleString("ko-KR")}원</strong>
       </li>)}</ul>
-      <p className="flex flex-wrap justify-between gap-2 border-t pt-3 font-semibold"><span>총 입금액</span><strong>{total.toLocaleString("ko-KR")}원</strong></p>
+      <p className="flex flex-wrap justify-between gap-2 border-t pt-3 font-semibold"><span>송금할 총액</span><strong>{total.toLocaleString("ko-KR")}원</strong></p>
     </section>
 
     <section aria-labelledby="completion-deposit-heading" className="min-w-0 space-y-5 rounded-lg border bg-white p-4 sm:p-6">
@@ -124,10 +128,10 @@ export function CompletionGuide({ bankName, accountNumber, accountHolder, payerN
       <h2 className="text-base font-semibold" id="completion-invite-heading">친구 보호자 초대</h2>
       <p className="text-sm text-slate-600">초대받은 보호자는 본인의 정보를 직접 입력하고 필요한 동의를 진행합니다.</p>
       {companionUrl ? <div className="space-y-3">
-        <CopyControl buttonLabel="초대 링크 복사" disabled={processing === "cancel"} label="초대 링크" successMessage="초대 링크를 복사했습니다." value={`${origin}${companionUrl}`} valueLabel="초대 링크 복사 값" />
+        {!cancelUncertain && <CopyControl buttonLabel="초대 링크 복사" disabled={processing === "cancel"} label="초대 링크" successMessage="초대 링크를 복사했습니다." value={`${origin}${companionUrl}`} valueLabel="초대 링크 복사 값" />}
         <Button className="min-h-11 w-full border border-slate-300 bg-white text-slate-900 hover:bg-slate-100 sm:w-auto" disabled={!clientReady || !!processing} onClick={handleInviteCancel} type="button">{processing === "cancel" ? "초대 취소 중..." : "초대 취소"}</Button>
       </div> : <Button className="min-h-11 w-full border border-slate-300 bg-white text-slate-900 hover:bg-slate-100 sm:w-auto" disabled={!clientReady || !!processing || inviteUncertain} onClick={handleInviteCreate} type="button">{processing === "create" ? "초대 링크 만드는 중..." : "초대 링크 만들기"}</Button>}
-      <FormFeedback error={inviteError} notice={processing === "create" ? "초대 링크를 만들고 있습니다." : processing === "cancel" ? "초대 링크를 취소하고 있습니다." : inviteNotice} />
+      <FormFeedback error={cancelUncertain ? "취소 결과를 확인하기 전에는 기존 초대 주소를 다시 공유하지 마세요. 이미 취소됐을 수 있습니다." : inviteError} notice={processing === "create" ? "초대 링크를 만들고 있습니다." : processing === "cancel" ? "초대 링크를 취소하고 있습니다." : inviteNotice} />
     </section>
   </div>;
 }

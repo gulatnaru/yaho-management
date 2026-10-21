@@ -1,4 +1,5 @@
 import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Handler harness follows the existing link/workflow unit tests; browser behavior has separate E2E coverage.
@@ -143,13 +144,54 @@ describe("completion invitations", () => {
     expect(feedback(guide())).toContainEqual(expect.objectContaining({ notice: "친구 보호자 초대 링크를 취소했습니다." }));
     expect(button(guide(), "초대 링크 만들기").props.disabled).toBe(false);
   });
-  it.each([false, true])("retains the link and announces consistent failure when cancel throws=%s", async (throws) => {
+  it("retains the link and permits retry after a confirmed cancel refusal", async () => {
     await createInvite();
-    if (throws) mocks.cancel.mockRejectedValue(new Error("private cancel detail")); else mocks.cancel.mockResolvedValue({ revoked: false });
+    mocks.cancel.mockResolvedValue({ revoked: false });
     await button(guide(), "초대 취소").props.onClick!();
     expect(copyControls(guide()).at(-1)?.props.value).toContain("/apply/companion/synthetic");
     expect(feedback(guide())).toContainEqual({ error: "초대 링크 취소를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", notice: undefined });
+    expect(button(guide(), "초대 취소").props.disabled).toBe(false);
     expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+  it.each(["thrown", "missing response", "unclear response"])("hides the invitation and warns against sharing after %s cancellation", async (outcome) => {
+    await createInvite();
+    if (outcome === "thrown") mocks.cancel.mockRejectedValue(new Error("private cancel detail"));
+    else mocks.cancel.mockResolvedValue(outcome === "missing response" ? undefined : { revoked: "unknown" });
+    await button(guide(), "초대 취소").props.onClick!();
+    for (let rerender = 0; rerender < 2; rerender++) {
+      const tree = guide();
+      const html = renderToStaticMarkup(tree);
+      expect(html).toContain("취소 결과를 확인하기 전에는 기존 초대 주소를 다시 공유하지 마세요. 이미 취소됐을 수 있습니다.");
+      expect(html).not.toContain("/apply/companion/synthetic");
+      expect(html).not.toContain("초대 링크 복사");
+      expect(html).not.toContain("초대 링크를 만들었습니다");
+      expect(html).not.toContain("private cancel detail");
+      expect(copyControls(tree)).toHaveLength(3);
+      expect(button(tree, "초대 취소").props.disabled).toBe(false);
+    }
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+  it("keeps uncertainty through cancel retries until confirmed success allows creating again", async () => {
+    await createInvite();
+    mocks.cancel.mockRejectedValueOnce(new Error("lost response"));
+    await button(guide(), "초대 취소").props.onClick!();
+    let settle!: (value: { revoked: boolean }) => void;
+    mocks.cancel.mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+    const retry = button(guide(), "초대 취소").props.onClick!();
+    const pending = renderToStaticMarkup(guide());
+    expect(pending).toContain("기존 초대 주소를 다시 공유하지 마세요");
+    expect(pending).not.toContain("/apply/companion/synthetic");
+    expect(button(guide(), "초대 취소 중...").props.disabled).toBe(true);
+    settle({ revoked: false }); await retry;
+    expect(renderToStaticMarkup(guide())).toContain("기존 초대 주소를 다시 공유하지 마세요");
+    expect(copyControls(guide())).toHaveLength(3);
+    await button(guide(), "초대 취소").props.onClick!();
+    expect(mocks.cancel).toHaveBeenCalledTimes(3);
+    expect(feedback(guide())).toContainEqual({ error: undefined, notice: "친구 보호자 초대 링크를 취소했습니다." });
+    expect(button(guide(), "초대 링크 만들기").props.disabled).toBe(false);
+    await button(guide(), "초대 링크 만들기").props.onClick!();
+    expect(copyControls(guide()).at(-1)?.props.value).toContain("/apply/companion/synthetic");
+    expect(renderToStaticMarkup(guide())).not.toContain("기존 초대 주소를 다시 공유하지 마세요");
   });
   it("maps create refusal to safe shared feedback", async () => {
     mocks.create.mockResolvedValue({ error: "server detail" }); guide(); await button(guide(), "초대 링크 만들기").props.onClick!();

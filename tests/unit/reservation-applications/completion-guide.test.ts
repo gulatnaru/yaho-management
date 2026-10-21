@@ -28,6 +28,8 @@ describe("completion guide initial server render", () => {
   it("shows stored child quotes and their total before bank guidance, next actions, and secondary invitation", () => {
     const html = renderToStaticMarkup(React.createElement(CompletionGuide, props));
     for (const value of ["synthetic-child-one", "22,000원", "synthetic-child-two", "13,500원", "35,500원", "synthetic-payer"]) expect(html).toContain(value);
+    expect(html).toContain("<span>송금할 총액</span><strong>35,500원</strong>");
+    expect(html).not.toContain("총 입금액");
     expect(html.indexOf("신청 금액")).toBeLessThan(html.indexOf("무통장 입금 안내"));
     expect(html.indexOf("무통장 입금 안내")).toBeLessThan(html.indexOf("다음 순서"));
     expect(html.indexOf("다음 순서")).toBeLessThan(html.indexOf("친구 보호자 초대"));
