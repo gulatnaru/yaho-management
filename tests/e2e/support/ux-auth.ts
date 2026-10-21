@@ -23,14 +23,22 @@ export async function prepareUxAuth(path: string) {
       try {
         const page = await context.newPage();
         page.setDefaultTimeout(30000);
-        async function login(password: string) {
+        async function login(password: string, mustChangePassword = false) {
           await page.goto("/login");
           await page.getByLabel("이메일", { exact: true }).fill(account.email);
           await page.getByLabel("비밀번호", { exact: true }).fill(password);
           await page.getByRole("button", { name: "로그인", exact: true }).click();
-          await page.waitForURL((url) => url.pathname === "/dashboard" || url.pathname === "/account/password");
+          // loginAction always targets /dashboard. Forced-password accounts
+          // reach /account/password through the protected route's later redirect;
+          // accepting the intermediate dashboard would race that enforcement.
+          const expectedPath = mustChangePassword ? "/account/password" : "/dashboard";
+          try {
+            await page.waitForURL((url) => url.pathname === expectedPath, { timeout: 30000 });
+          } catch {
+            throw new Error(mustChangePassword ? "UX_PASSWORD_POLICY_NOT_ENFORCED" : "UX_REAL_LOGIN_FAILED");
+          }
         }
-        await login(account.password);
+        await login(account.password, account.role !== "ADMIN");
         if (account.role !== "ADMIN") {
           if (new URL(page.url()).pathname !== "/account/password") throw new Error("UX_PASSWORD_POLICY_NOT_ENFORCED");
           await page.getByLabel("현재 비밀번호", { exact: true }).fill(account.password);
