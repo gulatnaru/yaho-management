@@ -48,7 +48,7 @@ function child(overrides: Record<string, unknown> = {}) {
 function form(children = [child()]) {
   const data = new FormData();
   data.set("payload", JSON.stringify({
-    guardianName: "합성 보호자", guardianPhone: "010-0000-0000", guardianRelationship: "MOTHER", declaredPayerName: "합성 입금자", children,
+    reviewedPriceProof: "signed-review", consentVersion: APPLICATION_CONSENT_CONTENT.version, guardianName: "합성 보호자", guardianPhone: "010-0000-0000", guardianRelationship: "MOTHER", declaredPayerName: "합성 입금자", children,
   }));
   return data;
 }
@@ -67,7 +67,7 @@ describe("group application consent validation", () => {
   for (const [key, message] of Object.entries(requiredConsents)) {
     it.each([false, undefined])(`shows the specific error for ${key} = %s without saving`, async (value) => {
       const state = await submitApplicationGroup("test-token", {}, form([child({ [key]: value })]));
-      expect(state).toEqual({ error: "아이별 필수 확인·동의 항목을 확인해주세요.", consentErrors: { 0: { [key]: message } } });
+      expect(state).toEqual({ error: "아이별 필수 확인·동의 항목을 확인해주세요.", consentErrors: { 0: { [key]: message } }, fieldErrors: { [`children.0.${key}`]: message } });
       expect(linkLookup).not.toHaveBeenCalled();
       expect(submitCore).not.toHaveBeenCalled();
       expect(cookieSet).not.toHaveBeenCalled();
@@ -78,7 +78,7 @@ describe("group application consent validation", () => {
     const missing = { programTerms: undefined, privacyConsent: undefined, legalGuardianConfirmation: undefined, refundTerms: undefined };
     const state = await submitApplicationGroup("test-token", {}, form([child(missing), child(missing)]));
     expect(state.consentErrors).toEqual({ 0: requiredConsents, 1: requiredConsents });
-    expect(Object.keys(state).sort()).toEqual(["consentErrors", "error"]);
+    expect(Object.keys(state).sort()).toEqual(["consentErrors", "error", "fieldErrors"]);
     expect(submitCore).not.toHaveBeenCalled();
   });
 
@@ -115,7 +115,7 @@ describe("group application consent validation", () => {
     const malformed = new FormData();
     malformed.set("payload", "{");
     expect(await submitApplicationGroup("test-token", {}, malformed)).toEqual({ error: "입력 내용을 다시 확인해주세요." });
-    expect(await submitApplicationGroup("test-token", {}, form([child({ childName: "" })]))).toEqual({ error: "입력 내용을 다시 확인해주세요." });
+    expect(await submitApplicationGroup("test-token", {}, form([child({ childName: "" })]))).toMatchObject({ error: "입력 내용을 다시 확인해주세요.", fieldErrors: { "children.0.childName": "아이 이름을 입력해주세요" } });
     expect(submitCore).not.toHaveBeenCalled();
   });
 });

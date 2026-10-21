@@ -1,3 +1,4 @@
+import { enterGuardianInformation, enterConsentReview, acceptGuardianConsents } from "./support/integrated-ux-guardian";
 import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
 import { phase20SyntheticMarker } from "@/lib/e2e/phase20-cleanup";
@@ -75,21 +76,20 @@ async function createFixture(prisma: PrismaClient): Promise<Fixture> {
 
 async function submitPublicFlow(page: Page, fixture: Fixture) {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.goto("/apply/group/" + fixture.token);
+  await page.goto("/apply/group/" + fixture.token); await enterGuardianInformation(page);
   await page.getByLabel("보호자 이름").fill(fixture.marker);
   await page.getByLabel("보호자 연락처").fill("010-1234-5678");
-  await page.getByLabel("입금자명").fill(fixture.marker);
-  const firstChild = page.getByRole("group", { name: "아이 1" });
+  await page.getByLabel("입금할 때 사용할 이름").fill(fixture.marker);
+  const firstChild = page.getByRole("group", { name: /^자녀 1 ·/ });
   await firstChild.getByLabel("아이 1 클래스").selectOption(fixture.classIds[0]);
   await firstChild.getByLabel("아이 이름").fill(fixture.marker + "_one");
   await firstChild.getByLabel("생년월일").fill("2020-01-01");
-  await page.getByRole("button", { name: "아이 추가" }).click();
-  const secondChild = page.getByRole("group", { name: "아이 2" });
+  await page.getByRole("button", { name: "내 자녀 추가" }).click();
+  const secondChild = page.getByRole("group", { name: /^자녀 2 ·/ });
   await secondChild.getByLabel("아이 이름").fill(fixture.marker + "_two");
   await secondChild.getByLabel("생년월일").fill("2021-01-01");
   await secondChild.getByLabel("아이 2 클래스").selectOption(fixture.classIds[1]);
-  const consents = page.locator('input[type="checkbox"]');
-  for (let index = 0; index < await consents.count(); index += 1) await consents.nth(index).check();
+  await enterConsentReview(page); await acceptGuardianConsents(page);
   await submitAndExpectPublicCompletion(page);
 }
 

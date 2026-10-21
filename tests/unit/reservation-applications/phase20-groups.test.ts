@@ -4,7 +4,7 @@ import { ApplicationClosedError, ApplicationLinkClassClosedError } from "@/lib/r
 import { groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
 import { issueApplicationGroupLinkCore, issueCompanionInviteCore, stopApplicationGroupCore, submitApplicationGroupCore, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 
-const submission = groupSubmissionSchema.parse({ guardianName: "보호자", guardianPhone: "010-1234-5678", guardianRelationship: "MOTHER", declaredPayerName: "입금자", children: [{ classScheduleId: "class-1", childName: "아이", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED", programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true, photoShareConsent: false, photoMarketingConsent: false }] });
+const submission = groupSubmissionSchema.parse({ reviewedPriceProof: "synthetic-test-proof", consentVersion: "2026-09-30-r3", guardianName: "보호자", guardianPhone: "010-1234-5678", guardianRelationship: "MOTHER", declaredPayerName: "입금자", children: [{ classScheduleId: "class-1", childName: "아이", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED", programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true, photoShareConsent: false, photoMarketingConsent: false }] });
 
 function queryText(query: unknown): string {
   if (Array.isArray(query)) return query.join("");

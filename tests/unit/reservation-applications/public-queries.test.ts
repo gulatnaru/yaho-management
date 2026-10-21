@@ -1,13 +1,15 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationAvailabilityContext } from "@/lib/reservation-applications/availability";
 
 const findUniqueMock = vi.fn();
 const findFirstMock = vi.fn();
+const companionFindMock = vi.fn();
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
+    companionInvite: { findFirst: (...args: unknown[]) => companionFindMock(...args) },
     reservationApplicationLink: {
       findUnique: (...args: unknown[]) => findUniqueMock(...args),
       findFirst: (...args: unknown[]) => findFirstMock(...args),
@@ -17,6 +19,8 @@ vi.mock("@/lib/db/prisma", () => ({
 
 const {
   loadPublicApplicationView,
+  loadModernPublicApplicationClasses,
+  PUBLIC_MODERN_APPLICATION_CLASS_SELECT,
   PUBLIC_APPLICATION_CLASS_SELECT,
   PUBLIC_APPLICATION_LINK_AVAILABILITY_SELECT,
 } = await import("@/lib/reservation-applications/public-queries");
@@ -92,7 +96,7 @@ describe("public application link selects", () => {
       program: { select: { name: true, description: true, targetAgeMin: true, targetAgeMax: true } },
     });
     const keys = collectKeys(PUBLIC_APPLICATION_CLASS_SELECT);
-    for (const forbidden of [...ALWAYS_FORBIDDEN, "status", "isActive"]) {
+    for (const forbidden of [...ALWAYS_FORBIDDEN, "applicationPrice", "status", "isActive"]) {
       expect(keys).not.toContain(forbidden);
     }
   });
@@ -180,13 +184,50 @@ describe("public application page", () => {
 
   it("uses the legacy loader before a scoped upgraded-link lookup and returns the closed notice before legacy class data", () => {
     expect(page).toContain("loadPublicApplicationView(");
-    expect(page).toContain("hashApplicationCapabilityToken(token)");
-    expect(page).toContain("group: { is: { isActive: true");
+    expect(page).toContain("loadModernPublicApplicationClasses({ token, now })");
+    expect(page).toContain("context.configReady && context.consentReady && context.environmentAllowed");
     const openCheck = page.indexOf("if (!view.open)");
     const closedReturn = page.indexOf("return <ApplicationClosedNotice />");
     const classAccess = page.indexOf("const { classSchedule } = view;");
     expect(openCheck).toBeGreaterThan(0);
     expect(closedReturn).toBeGreaterThan(openCheck);
     expect(classAccess).toBeGreaterThan(closedReturn);
+  });
+});
+
+
+describe("Policy A modern scoped public classes", () => {
+  beforeEach(() => { findFirstMock.mockReset(); companionFindMock.mockReset(); });
+  afterEach(() => vi.unstubAllEnvs());
+  it("selects only positive current applicationPrice within the supplied active group capability", async () => {
+    const row = { id: "own-class", ...displayClass, applicationPrice: 60000 };
+    findFirstMock.mockResolvedValue({ group: { classes: [{ classSchedule: row }] } });
+    expect(await loadModernPublicApplicationClasses({ token: TOKEN, now: NOW })).toEqual([row]);
+    const query = findFirstMock.mock.calls[0]![0];
+    expect(query.where).toMatchObject({ isActive: true, group: { is: { isActive: true } } });
+    expect(query.where.tokenHash).toMatch(/^[a-f0-9]{64}$/); expect(query.where).not.toHaveProperty("token");
+    expect(query.select.group.select.classes.where).toEqual({ classSchedule: { status: "SCHEDULED", startsAt: { gt: NOW }, applicationPrice: { gt: 0 } } });
+    const selected = collectKeys(PUBLIC_MODERN_APPLICATION_CLASS_SELECT);
+    for (const key of [...ALWAYS_FORBIDDEN.filter((key) => key !== "id"), "guardianName", "guardianPhone", "submissions", "deposits", "payments", "refunds"]) expect(selected).not.toContain(key);
+    expect(selected).toContain("applicationPrice"); expect(companionFindMock).not.toHaveBeenCalled();
+  });
+  it("invalid, stopped, revoked and inaccessible capabilities return no price data", async () => {
+    findFirstMock.mockResolvedValue(null); companionFindMock.mockResolvedValue(null);
+    expect(await loadModernPublicApplicationClasses({ token: "unknown", now: NOW })).toEqual([]);
+    expect(await loadModernPublicApplicationClasses({ companionToken: "revoked", now: NOW })).toEqual([]);
+    expect(await loadModernPublicApplicationClasses({ now: NOW })).toEqual([]);
+  });
+  it("companion lookup restricts the invite expiry/revocation/group without selecting issuer PII", async () => {
+    companionFindMock.mockResolvedValue({ group: { classes: [{ classSchedule: { ...displayClass, id: "invited-class", applicationPrice: 40000 } }] } });
+    const result = await loadModernPublicApplicationClasses({ companionToken: TOKEN, now: NOW });
+    expect(result.map((row) => row.applicationPrice)).toEqual([40000]); expect(findFirstMock).not.toHaveBeenCalled();
+    const query = companionFindMock.mock.calls[0]![0];
+    expect(query.where).toMatchObject({ revokedAt: null, expiresAt: { gt: NOW }, group: { is: { isActive: true } } });
+    expect(JSON.stringify(query.select)).not.toMatch(/issuer|guardian|children|submissions/);
+  });
+  it("production excludes synthetic group prices", async () => {
+    vi.stubEnv("VERCEL_ENV", "production"); findFirstMock.mockResolvedValue(null);
+    await loadModernPublicApplicationClasses({ token: TOKEN, now: NOW });
+    expect(findFirstMock.mock.calls[0]![0].where.group.is).toEqual({ isActive: true, syntheticRunId: null });
   });
 });

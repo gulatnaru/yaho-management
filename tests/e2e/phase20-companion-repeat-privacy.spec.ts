@@ -1,3 +1,4 @@
+import { enterGuardianInformation, enterConsentReview, acceptGuardianConsents } from "./support/integrated-ux-guardian";
 import { expect, test, type Browser, type Cookie, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { phase20SyntheticMarker, registerPhase20OwnedChildren } from "@/lib/e2e/phase20-cleanup";
@@ -50,18 +51,15 @@ async function createFixture(prisma: PrismaClient, input: { adminId: string; run
   return { groupId: group.groupId, token: link.token, scheduleId: schedule.id };
 }
 
-async function acceptConsents(page: Page, ordinal = 1) {
-  const child = page.getByRole("group", { name: `아이 ${ordinal}` });
-  for (const checkbox of await child.getByTestId("application-consents").getByRole("checkbox").all()) await checkbox.check();
-}
+async function acceptConsents(page: Page) { await acceptGuardianConsents(page); }
 
 async function submitNewGuardian(page: Page, input: { path: string; guardian: string; payer: string; child: string; classId: string; requestNote?: string }) {
-  await page.goto(input.path);
-  await page.getByLabel("보호자 이름").fill(input.guardian); await page.getByLabel("보호자 연락처").fill("010-1234-5678"); await page.getByLabel("입금자명").fill(input.payer); await page.getByLabel("아이와의 관계").selectOption("MOTHER");
-  const child = page.getByRole("group", { name: "아이 1" });
+  await page.goto(input.path); await enterGuardianInformation(page);
+  await page.getByLabel("보호자 이름").fill(input.guardian); await page.getByLabel("보호자 연락처").fill("010-1234-5678"); await page.getByLabel("입금할 때 사용할 이름").fill(input.payer); await page.getByLabel("아이와의 관계").selectOption("MOTHER");
+  const child = page.getByRole("group", { name: /^자녀 1 ·/ });
   await child.getByLabel("아이 1 클래스").selectOption(input.classId); await child.getByLabel("아이 이름").fill(input.child); await child.getByLabel("생년월일").fill("2020-01-01");
   if (input.requestNote) await child.getByLabel("요청사항").fill(input.requestNote);
-  await acceptConsents(page); await submitAndExpectPublicCompletion(page);
+  await enterConsentReview(page); await acceptConsents(page); await submitAndExpectPublicCompletion(page);
 }
 
 async function issueCompanionUrl(page: Page) {
@@ -183,10 +181,10 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
     const expiredDeviceContext = await isolatedPublicContext(browser, friendCookie); contexts.push(expiredDeviceContext); expect(await repeatProfileIsEmpty(expiredDeviceContext)).toBe(true);
 
     const repeatFixture = await createFixture(prisma, { adminId: admin.id, runId, marker, suffix: "pvr", offsetDays: 16 });
-    await page.goto(`/apply/group/${repeatFixture.token}`); await expect(page.getByLabel("아이 1 기존 아이")).toBeVisible();
-    await page.getByLabel("아이 1 기존 아이").selectOption(confirmedInitial.childId); await page.getByLabel("입금자명").fill(payer); await page.getByRole("button", { name: "신청하기" }).click(); await expect(page.getByRole("alert")).toBeVisible();
+    await page.goto(`/apply/group/${repeatFixture.token}`); await enterGuardianInformation(page); await expect(page.getByLabel("아이 1 기존 아이")).toBeVisible();
+    await page.getByLabel("아이 1 기존 아이").selectOption(confirmedInitial.childId); await page.getByLabel("입금할 때 사용할 이름").fill(payer); await enterConsentReview(page); await page.getByRole("button", { name: "신청서 제출" }).click(); await expect(page.getByRole("alert")).toBeVisible();
     expect(await prisma.reservationApplication.count({ where: { submission: { groupId: repeatFixture.groupId } } })).toBe(0);
-    await acceptConsents(page); await submitAndExpectPublicCompletion(page);
+    await enterConsentReview(page); await acceptConsents(page); await submitAndExpectPublicCompletion(page);
     recordPhase20Stage("REPEAT_COMPLETION", testStartedAt);
     const rotatedCookie = (await page.context().cookies()).find((cookie) => cookie.name === "yaho_application_device");
     if (!rotatedCookie) throw new Error("Phase20 rotated device cookie was not issued");
@@ -210,7 +208,7 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
     recordPhase20Stage("REPEAT_CONFIRMATION", testStartedAt);
 
     const staleFixture = await createFixture(prisma, { adminId: admin.id, runId, marker, suffix: "pvs", offsetDays: 18 });
-    await page.goto(`/apply/group/${staleFixture.token}`); await expect(page.getByLabel("아이 1 기존 아이")).toBeVisible(); await page.getByLabel("아이 1 기존 아이").selectOption(confirmedInitial.childId); await page.getByLabel("입금자명").fill(payer); await acceptConsents(page);
+    await page.goto(`/apply/group/${staleFixture.token}`); await enterGuardianInformation(page); await expect(page.getByLabel("아이 1 기존 아이")).toBeVisible(); await page.getByLabel("아이 1 기존 아이").selectOption(confirmedInitial.childId); await page.getByLabel("입금할 때 사용할 이름").fill(payer); await enterConsentReview(page); await acceptConsents(page);
     const guardEnvironment = { ...process.env, VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: process.env.PREVIEW_E2E_DEPLOYMENT_SHA };
     const signed = parseAndVerifySignedPreviewRun(process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN ?? null, guardEnvironment);
     if (!signed) throw new Error("Phase20 signed Preview run is unavailable");
@@ -221,7 +219,7 @@ test("E/F/G/H. owned device rotation, companion consent, and scoped purge stay c
     await prisma.classSchedule.updateMany({ where: { id: { in: aged.map((application) => application.classScheduleId) } }, data: { startsAt: agedAt, endsAt: new Date(agedAt.getTime() + 3_600_000) } });
     await prisma.reservation.updateMany({ where: { id: { in: aged.flatMap((application) => application.reservationId ? [application.reservationId] : []) } }, data: { status: "COMPLETED" } });
     await purgeExpiredPersonalDataCore(prisma, { actorUserId: admin.id, now: new Date(), scope: { childIds: [confirmedInitial.childId], applicationIds: [] } });
-    await page.getByRole("button", { name: "신청하기" }).click(); await expect(page.getByRole("alert")).toBeVisible();
+    await page.getByRole("button", { name: "신청서 제출" }).click(); await expect(page.getByRole("alert")).toBeVisible();
     const [purgedChild, staleApplications, staleReservations, staleMappings] = await Promise.all([
       prisma.child.findUniqueOrThrow({ where: { id: confirmedInitial.childId }, select: { isActive: true, personalDataPurgedAt: true } }),
       prisma.reservationApplication.count({ where: { submission: { groupId: staleFixture.groupId } } }),

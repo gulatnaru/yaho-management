@@ -1,54 +1,32 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GroupSubmissionState } from "@/app/(public)/apply/group/[token]/actions";
-
-const actionState = vi.hoisted(() => vi.fn());
-vi.mock("react", async (original) => ({
-  ...await original<typeof import("react")>(),
-  useActionState: actionState,
-}));
-
 import { GroupApplicationForm } from "@/app/(public)/apply/group/[token]/group-application-form";
-
-function render(state: GroupSubmissionState = {}) {
-  actionState.mockReturnValue([state, vi.fn(), false]);
-  return renderToStaticMarkup(React.createElement(GroupApplicationForm, {
-    action: async () => ({}), classes: [{ id: "synthetic-class", label: "합성 클래스" }],
-  }));
+import { ConsentReviewStep } from "@/app/(public)/apply/_components/consent-review-step";
+import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
+import { createChildDraft, emptyConfirmations } from "@/lib/reservation-applications/application-draft";
+const classes = [{ id: "synthetic-class", label: "합성 클래스", applicationPrice: 40000 }];
+function renderConsents(errors: Record<string, string> = {}) {
+  return renderToStaticMarkup(React.createElement(ConsentReviewStep, { drafts: [createChildDraft("stable", "synthetic-class")], classes, items: APPLICATION_CONSENT_CONTENT.items, version: APPLICATION_CONSENT_CONTENT.version, required: emptyConfirmations(), errors, updateRequired: vi.fn(), updateOptional: vi.fn() }));
 }
-
-describe("group application required-consent feedback", () => {
-  beforeEach(() => vi.stubGlobal("React", React));
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("requires the four mandatory consents and keeps photo choices optional", () => {
-    const html = render();
+describe("group application shared wizard and required-consent feedback", () => {
+  beforeEach(() => vi.stubGlobal("React", React)); afterEach(() => vi.unstubAllGlobals());
+  it("starts at class selection with exactly three input stages and no intermediate submit button", () => {
+    const html = renderToStaticMarkup(React.createElement(GroupApplicationForm, { action: async () => ({}), classes }));
+    expect(html).toContain("3단계 중 1단계"); expect(html).toContain("보호자·자녀 정보"); expect(html).toContain("동의·최종 확인");
+    expect(html).toContain("40,000원"); expect(html).not.toContain('type="submit"'); expect(html).not.toContain('name="guardianName"');
+  });
+  it("requires four separate unchecked confirmations and keeps two photo choices optional", () => {
+    const html = renderConsents();
     const inputs = [...html.matchAll(/<input\b[^>]*type="checkbox"[^>]*>/g)].map(([input]) => input);
-    expect(inputs).toHaveLength(6);
-    expect(inputs.map((input) => input.includes('required=""'))).toEqual([true, true, true, false, false, true]);
-    expect(html).not.toContain('aria-invalid="true"');
+    expect(inputs).toHaveLength(6); expect(inputs.map((input) => input.includes('required=""'))).toEqual([true, true, true, true, false, false]);
+    expect(inputs.every((input) => !input.includes('checked=""'))).toBe(true);
+    expect(html).not.toContain("전체 동의"); expect(html).toContain("적용 대상:");
+    for (const item of APPLICATION_CONSENT_CONTENT.items) for (const line of item.body) expect(html).toContain(line.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("'", "&#x27;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
   });
-
-  it("renders each server consent message beside its associated invalid checkbox", () => {
-    const errors = {
-      programTerms: "프로그램 안전 및 이용사항을 확인해주세요",
-      privacyConsent: "개인정보 수집·이용에 동의해주세요",
-      legalGuardianConfirmation: "법정대리인 확인에 동의해주세요",
-      refundTerms: "취소 및 환불규정을 확인해주세요",
-    };
-    const html = render({ error: "아이별 필수 확인·동의 항목을 확인해주세요.", consentErrors: { 0: errors } });
-    for (const [key, message] of Object.entries(errors)) {
-      const id = `application-child-0-${key}-error`;
-      expect(html).toContain(`aria-describedby="${id}" aria-invalid="true"`);
-      expect(html).toContain(`id="${id}">${message}</p>`);
-    }
-    expect(html).toContain('role="alert">아이별 필수 확인·동의 항목을 확인해주세요.');
-  });
-
-  it("does not attach a second child's errors to the first child's controls", () => {
-    const html = render({ consentErrors: { 1: { privacyConsent: "개인정보 수집·이용에 동의해주세요" } } });
-    expect(html).not.toContain('aria-invalid="true"');
-    expect(html).not.toContain("application-child-0-privacyConsent-error");
+  it("attaches allowlisted required errors to each shared checkbox and ignores out-of-current-scope child errors", () => {
+    const html = renderConsents({ "children.0.privacyConsent": "필수 항목을 확인해 주세요.", "children.1.refundTerms": "다른 아이 오류" });
+    expect(html).toContain('aria-describedby="application-privacyConsent-error"'); expect(html).toContain('id="application-privacyConsent-error">필수 항목을 확인해 주세요.');
+    expect(html).not.toContain("다른 아이 오류"); expect(html).not.toContain("application-refundTerms-error");
   });
 });

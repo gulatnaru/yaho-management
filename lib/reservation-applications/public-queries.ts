@@ -91,3 +91,25 @@ export async function loadPublicApplicationView(
   const classSchedule = await findOpenPublicApplicationClass(token, context.now);
   return classSchedule ? { open: true, classSchedule } : CLOSED_VIEW;
 }
+
+/** Policy A display DTO. Called only after environment/settings admission; rechecks the raw
+ * capability and current class eligibility in this query, and never reads the catalogue. */
+export const PUBLIC_MODERN_APPLICATION_CLASS_SELECT = {
+  id: true, startsAt: true, endsAt: true, location: true, applicationPrice: true,
+  program: { select: { name: true, description: true, targetAgeMin: true, targetAgeMax: true } },
+} as const satisfies Prisma.ClassScheduleSelect;
+
+export async function loadModernPublicApplicationClasses(scope: { token?: string; companionToken?: string; now: Date }) {
+  const group = { isActive: true, ...(process.env.VERCEL_ENV === "production" ? { syntheticRunId: null } : {}) };
+  const select = { group: { select: { classes: {
+    where: { classSchedule: { status: "SCHEDULED" as const, startsAt: { gt: scope.now }, applicationPrice: { gt: 0 } } },
+    select: { classSchedule: { select: PUBLIC_MODERN_APPLICATION_CLASS_SELECT } },
+  } } } } as const;
+  const { hashApplicationCapabilityToken } = await import("./token");
+  const result = scope.token ? await prisma.reservationApplicationLink.findFirst({
+    where: { tokenHash: hashApplicationCapabilityToken(scope.token), isActive: true, group: { is: group } }, select,
+  }) : scope.companionToken ? await prisma.companionInvite.findFirst({
+    where: { tokenHash: hashApplicationCapabilityToken(scope.companionToken), revokedAt: null, expiresAt: { gt: scope.now }, group: { is: group } }, select,
+  }) : null;
+  return result?.group?.classes.map((row) => row.classSchedule) ?? [];
+}

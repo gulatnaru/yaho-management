@@ -1,3 +1,4 @@
+import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -259,14 +260,14 @@ describe("public application route gate regressions", () => {
     userLookupMock.mockResolvedValue(userRow("MANAGER"));
     const formData = new FormData();
     formData.set("payload", JSON.stringify({
-      guardianName: "Synthetic guardian", guardianPhone: "010-0000-0000", guardianRelationship: "MOTHER", declaredPayerName: "Synthetic payer",
+      reviewedPriceProof: "synthetic-proof-never-reaches-core", consentVersion: APPLICATION_CONSENT_CONTENT.version, guardianName: "Synthetic guardian", guardianPhone: "010-0000-0000", guardianRelationship: "MOTHER", declaredPayerName: "Synthetic payer",
       children: [{
         classScheduleId: "class-1", childName: "Synthetic child", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED",
         programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true,
       }],
     }));
 
-    await expect(submitApplicationGroupWithCompanion(undefined, "invite-token", {}, formData)).resolves.toEqual({ error: "현재 신청을 받을 수 없습니다." });
+    await expect(submitApplicationGroupWithCompanion(undefined, "invite-token", {}, formData)).resolves.toEqual({ closed: true, error: "현재 신청을 받을 수 없습니다." });
     expect(companionInviteLookupMock).toHaveBeenCalledOnce();
     expect(userLookupMock).toHaveBeenCalledOnce();
     expect(submitGroupMock).not.toHaveBeenCalled();
@@ -276,14 +277,14 @@ describe("public application route gate regressions", () => {
     userLookupMock.mockResolvedValue(userRow("MANAGER"));
     const formData = new FormData();
     formData.set("payload", JSON.stringify({
-      guardianName: "Synthetic guardian", guardianPhone: "010-0000-0000", guardianRelationship: "MOTHER", declaredPayerName: "Synthetic payer",
+      reviewedPriceProof: "synthetic-proof-never-reaches-core", consentVersion: APPLICATION_CONSENT_CONTENT.version, guardianName: "Synthetic guardian", guardianPhone: "010-0000-0000", guardianRelationship: "MOTHER", declaredPayerName: "Synthetic payer",
       children: [{
         classScheduleId: "class-1", childName: "Synthetic child", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED",
         programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true,
       }],
     }));
 
-    await expect(submitApplicationGroupWithCompanion("", "invite-token", {}, formData)).resolves.toEqual({ error: "현재 신청을 받을 수 없습니다." });
+    await expect(submitApplicationGroupWithCompanion("", "invite-token", {}, formData)).resolves.toEqual({ closed: true, error: "현재 신청을 받을 수 없습니다." });
     expect(companionInviteLookupMock).toHaveBeenCalledOnce();
     expect(linkLookupMock).not.toHaveBeenCalled();
     expect(leaseMock).toHaveBeenCalledOnce();

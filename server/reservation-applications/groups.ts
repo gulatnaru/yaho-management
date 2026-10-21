@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { isConsentContentReady } from "@/lib/reservation-applications/consent-content";
+import { APPLICATION_CONSENT_CONTENT, isConsentContentReady } from "@/lib/reservation-applications/consent-content";
 import { isReservationApplicationSettingsReady } from "./settings";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { canIssueApplicationLink } from "@/lib/reservation-applications/availability";
 import { ApplicationClosedError, ApplicationLinkClassClosedError, ApplicationLinkNotFoundError } from "@/lib/reservation-applications/errors";
-import { hashApplicationCapabilityToken, generateApplicationCapabilityToken } from "@/lib/reservation-applications/token";
-import { reservationApplicationSettingsSchema, type groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
+import { hashApplicationCapabilityToken, generateApplicationCapabilityToken, isWellFormedApplicationLinkToken } from "@/lib/reservation-applications/token";
+import { reservationApplicationSettingsSchema, groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
+
+import { applicationReviewScope, issueApplicationPriceReview, verifyApplicationPriceReview, ApplicationPriceChangedError, ApplicationAlreadySubmittedError } from "./price-review";
 
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
@@ -152,70 +154,109 @@ export async function issueApplicationGroupLinkCore(
 
 type GroupSubmitClient = Pick<PrismaClient, "reservationApplicationLink" | "$transaction">;
 
+/** Read-only review and final save use exactly the same authorization and lock hierarchy. */
+async function lockPublicApplicationScope(tx: Prisma.TransactionClient, input: { token?: string; companionToken?: string; now: Date; classScheduleIds: string[] }) {
+  if ((!input.token && !input.companionToken) || (input.token && !isWellFormedApplicationLinkToken(input.token)) || (input.companionToken && !isWellFormedApplicationLinkToken(input.companionToken))) throw new ApplicationClosedError();
+  const tokenHash = input.token ? hashApplicationCapabilityToken(input.token) : undefined;
+  const link = tokenHash ? await tx.reservationApplicationLink.findUnique({
+    where: { tokenHash },
+    select: {
+      id: true,
+      isActive: true,
+      group: {
+        select: {
+          id: true, isActive: true, syntheticRunId: true,
+          classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } },
+        },
+      },
+    },
+  }) : null;
+  // An invite proves only companionship in this group. It never provides a child,
+  // guardian, or consent record from the issuer.
+  const invite = input.companionToken
+    ? await tx.companionInvite.findFirst({
+        where: {
+          tokenHash: hashApplicationCapabilityToken(input.companionToken),
+          revokedAt: null,
+          expiresAt: { gt: input.now },
+        },
+        select: { id: true, companionGroupId: true, group: { select: { id: true, isActive: true, syntheticRunId: true, classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } } } } },
+      })
+    : null;
+  if (input.companionToken && !invite) throw new ApplicationClosedError();
+  let group = link?.group ?? invite?.group;
+  if (!group?.isActive || (tokenHash && !link?.isActive) || (link && invite && link.group?.id !== invite.group.id)) throw new ApplicationClosedError();
+  // All writers that affect a public submission use this lock hierarchy:
+  // Group -> Link/invite -> Class -> Device -> Child. The scoped re-reads below
+  // make a concurrent stop, membership edit, revocation, price edit, or purge fail closed.
+  await lockGroup(tx, group.id);
+  if (link) await tx.$queryRaw`SELECT "id" FROM "ReservationApplicationLink" WHERE "id" = ${link.id} FOR UPDATE`;
+  if (invite) await tx.$queryRaw`SELECT "id" FROM "CompanionInvite" WHERE "id" = ${invite.id} FOR UPDATE`;
+  const lockedLink = tokenHash ? await tx.reservationApplicationLink.findUnique({ where: { tokenHash }, select: { isActive: true, group: { select: { id: true, isActive: true, syntheticRunId: true } } } }) : null;
+  const lockedInvite = input.companionToken ? await tx.companionInvite.findFirst({ where: { tokenHash: hashApplicationCapabilityToken(input.companionToken), revokedAt: null, expiresAt: { gt: input.now } }, select: { companionGroupId: true, group: { select: { id: true, isActive: true, syntheticRunId: true } } } }) : null;
+  if ((tokenHash && !lockedLink?.isActive) || (input.companionToken && !lockedInvite) || !lockedLink?.group?.isActive && !lockedInvite?.group?.isActive || (lockedLink?.group && lockedInvite?.group && lockedLink.group.id !== lockedInvite.group.id)) throw new ApplicationClosedError();
+  if (process.env.VERCEL_ENV === "production" && (lockedLink?.group?.syntheticRunId || lockedInvite?.group?.syntheticRunId)) throw new ApplicationClosedError();
+  const groupId = lockedLink?.group?.id ?? lockedInvite?.group?.id;
+  if (!groupId || groupId !== group.id) throw new ApplicationClosedError();
+  const membership = await tx.reservationApplicationGroupClass.findMany({ where: { groupId }, select: { classScheduleId: true } });
+  const memberIds = membership.map((row) => row.classScheduleId).sort();
+  await lockClassSchedules(tx, memberIds);
+  const currentSchedules = await tx.classSchedule.findMany({ where: { id: { in: memberIds } }, select: { id: true, status: true, startsAt: true, applicationPrice: true } });
+  if (currentSchedules.length !== memberIds.length) throw new ApplicationClosedError();
+  group = { ...group, id: groupId, isActive: true, classes: currentSchedules.map((classSchedule) => ({ classSchedule })) };
+  const schedules = new Map(group.classes.map(({ classSchedule }) => [classSchedule.id, classSchedule]));
+  if (input.classScheduleIds.some((classScheduleId) => {
+    const schedule = schedules.get(classScheduleId);
+    return !schedule || !canIssueApplicationLink(schedule, input.now) || !schedule.applicationPrice || schedule.applicationPrice <= 0;
+  })) throw new ApplicationClosedError();
+
+  return { group, schedules, invite };
+}
+
+/** No family writes, seat holds or reservations happen during review. */
+export async function recheckApplicationGroupPricesCore(client: GroupSubmitClient, input: { token?: string; companionToken?: string; classScheduleIds: string[]; reviewedPriceProof?: string; now: Date }) {
+  const ids = z.array(z.string().min(1).max(200)).min(1).max(10).parse(input.classScheduleIds);
+  const scope = applicationReviewScope(input);
+  const previous = input.reviewedPriceProof ? verifyApplicationPriceReview(input.reviewedPriceProof, scope, input.now) : undefined;
+  return client.$transaction(async (tx) => {
+    const { schedules } = await lockPublicApplicationScope(tx, { ...input, classScheduleIds: ids });
+    const prices = [...new Set(ids)].sort().map((classScheduleId) => ({ classScheduleId, amount: schedules.get(classScheduleId)!.applicationPrice! }));
+    return issueApplicationPriceReview({ scope, prices, now: input.now, operation: previous?.operation });
+  }, TX_OPTIONS);
+}
+
 /**
  * Atomically writes one guardian submission and its independent applications. The class id is
  * verified against the group membership while the submitted quote is snapshotted from the locked schedule.
  */
 export async function submitApplicationGroupCore(
   client: GroupSubmitClient,
-  input: { token?: string; companionToken?: string; previousDeviceTokenHash?: string; data: GroupSubmission; consentVersion: string; now: Date; configReady: boolean; completionTokenHash: string; completionExpiresAt: Date; deviceTokenHash: string; deviceExpiresAt: Date },
-): Promise<{ submissionId: string; applicationIds: string[] }> {
+  input: { token?: string; companionToken?: string; previousDeviceTokenHash?: string; previousCompletionTokenHash?: string; data: GroupSubmission; consentVersion: string; now: Date; configReady: boolean; completionTokenHash: string; completionExpiresAt: Date; deviceTokenHash: string; deviceExpiresAt: Date },
+): Promise<{ submissionId: string; applicationIds: string[]; replayed?: boolean }> {
   if (!input.configReady) throw new ApplicationClosedError();
   if (!input.token && !input.companionToken) throw new ApplicationClosedError();
-  const tokenHash = input.token ? hashApplicationCapabilityToken(input.token) : undefined;
+  const data = groupSubmissionSchema.parse(input.data);
+  if (input.consentVersion !== APPLICATION_CONSENT_CONTENT.version || data.consentVersion !== APPLICATION_CONSENT_CONTENT.version) throw new ApplicationClosedError();
+  const scope = applicationReviewScope(input);
+  const review = verifyApplicationPriceReview(data.reviewedPriceProof, scope, input.now);
+  const assignedIds = [...new Set(data.children.map((child) => child.classScheduleId))].sort();
+  if (review.prices.length !== assignedIds.length || assignedIds.some((id) => !review.prices.some((row) => row.classScheduleId === id))) throw new ApplicationClosedError();
   return client.$transaction(async (tx) => {
-    const link = tokenHash ? await tx.reservationApplicationLink.findUnique({
-      where: { tokenHash },
-      select: {
-        id: true,
-        isActive: true,
-        group: {
-          select: {
-            id: true, isActive: true,
-            classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } },
-          },
-        },
-      },
-    }) : null;
-    // An invite proves only companionship in this group. It never provides a child,
-    // guardian, or consent record from the issuer.
-    const invite = input.companionToken
-      ? await tx.companionInvite.findFirst({
-          where: {
-            tokenHash: hashApplicationCapabilityToken(input.companionToken),
-            revokedAt: null,
-            expiresAt: { gt: input.now },
-          },
-          select: { id: true, companionGroupId: true, group: { select: { id: true, isActive: true, classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } } } } },
-        })
-      : null;
-    if (input.companionToken && !invite) throw new ApplicationClosedError();
-    let group = link?.group ?? invite?.group;
-    if (!group?.isActive || (tokenHash && !link?.isActive) || (link && invite && link.group?.id !== invite.group.id)) throw new ApplicationClosedError();
-    // All writers that affect a public submission use this lock hierarchy:
-    // Group -> Link/invite -> Class -> Device -> Child. The scoped re-reads below
-    // make a concurrent stop, membership edit, revocation, price edit, or purge fail closed.
-    await lockGroup(tx, group.id);
-    if (link) await tx.$queryRaw`SELECT "id" FROM "ReservationApplicationLink" WHERE "id" = ${link.id} FOR UPDATE`;
-    if (invite) await tx.$queryRaw`SELECT "id" FROM "CompanionInvite" WHERE "id" = ${invite.id} FOR UPDATE`;
-    const lockedLink = tokenHash ? await tx.reservationApplicationLink.findUnique({ where: { tokenHash }, select: { isActive: true, group: { select: { id: true, isActive: true } } } }) : null;
-    const lockedInvite = input.companionToken ? await tx.companionInvite.findFirst({ where: { tokenHash: hashApplicationCapabilityToken(input.companionToken), revokedAt: null, expiresAt: { gt: input.now } }, select: { companionGroupId: true, group: { select: { id: true, isActive: true } } } }) : null;
-    if ((tokenHash && !lockedLink?.isActive) || (input.companionToken && !lockedInvite) || !lockedLink?.group?.isActive && !lockedInvite?.group?.isActive || (lockedLink?.group && lockedInvite?.group && lockedLink.group.id !== lockedInvite.group.id)) throw new ApplicationClosedError();
-    const groupId = lockedLink?.group?.id ?? lockedInvite?.group?.id;
-    if (!groupId || groupId !== group.id) throw new ApplicationClosedError();
-    const membership = await tx.reservationApplicationGroupClass.findMany({ where: { groupId }, select: { classScheduleId: true } });
-    const memberIds = membership.map((row) => row.classScheduleId).sort();
-    await lockClassSchedules(tx, memberIds);
-    const currentSchedules = await tx.classSchedule.findMany({ where: { id: { in: memberIds } }, select: { id: true, status: true, startsAt: true, applicationPrice: true } });
-    if (currentSchedules.length !== memberIds.length) throw new ApplicationClosedError();
-    group = { ...group, id: groupId, isActive: true, classes: currentSchedules.map((classSchedule) => ({ classSchedule })) };
-    const schedules = new Map(group.classes.map(({ classSchedule }) => [classSchedule.id, classSchedule]));
-    if (input.data.children.some((child) => {
-      const schedule = schedules.get(child.classScheduleId);
-      return !schedule || !canIssueApplicationLink(schedule, input.now) || !schedule.applicationPrice;
-    })) throw new ApplicationClosedError();
+    const { group, schedules, invite } = await lockPublicApplicationScope(tx, { ...input, classScheduleIds: assignedIds });
+    // A signed operation gets one durable parent ID. Group serialization makes concurrent
+    // retries observe the committed parent; the primary key is an additional DB backstop.
+    const submissionId = `phase8_${review.operation}`;
+    const prior = await tx.reservationApplicationSubmission.findUnique({ where: { id: submissionId }, select: { id: true, completionTokenHash: true, completionExpiresAt: true, personalDataPurgedAt: true } });
+    if (prior) {
+      if (input.previousCompletionTokenHash && prior.completionTokenHash === input.previousCompletionTokenHash && !prior.personalDataPurgedAt && prior.completionExpiresAt && prior.completionExpiresAt > input.now) return { submissionId: prior.id, applicationIds: [], replayed: true };
+      throw new ApplicationAlreadySubmittedError();
+    }
+    const prices = assignedIds.map((classScheduleId) => ({ classScheduleId, amount: schedules.get(classScheduleId)!.applicationPrice! }));
+    if (prices.some((current) => review.prices.find((row) => row.classScheduleId === current.classScheduleId)?.amount !== current.amount)) {
+      throw new ApplicationPriceChangedError(issueApplicationPriceReview({ scope, prices, now: input.now, operation: review.operation }));
+    }
 
-    const requestedIds = input.data.children.flatMap((child) => child.requestedChildId ? [child.requestedChildId] : []);
+    const requestedIds = data.children.flatMap((child) => child.requestedChildId ? [child.requestedChildId] : []);
     let priorDevice: { id: string; children: Array<{ childId: string; child: { name: string; birthDate: Date | null; gender: string; guardianName: string | null; guardianPhone: string | null } }> } | null = null;
     let currentGrantedChildren: Array<{ id: string; name: string; birthDate: Date | null; gender: string; guardianName: string | null; guardianPhone: string | null }> = [];
     let sameGuardianDevice = false;
@@ -230,14 +271,14 @@ export async function submitApplicationGroupCore(
         },
       });
       const owner = (priorDevice as typeof priorDevice & { submissions?: Array<{ submission: { guardianName: string | null; guardianPhone: string | null; guardianRelationship: string | null } }> } | null)?.submissions?.[0]?.submission;
-      sameGuardianDevice = Boolean(owner && owner.guardianName === input.data.guardianName && owner.guardianPhone === input.data.guardianPhone && owner.guardianRelationship === input.data.guardianRelationship);
+      sameGuardianDevice = Boolean(owner && owner.guardianName === data.guardianName && owner.guardianPhone === data.guardianPhone && owner.guardianRelationship === data.guardianRelationship);
       const grantedIds = priorDevice?.children.map((row) => row.childId).sort() ?? [];
       if (grantedIds.length > 0) {
         await tx.$queryRaw`SELECT "id" FROM "Child" WHERE "id" IN (${Prisma.join(grantedIds)}) ORDER BY "id" FOR SHARE`;
         currentGrantedChildren = await tx.child.findMany({ where: { id: { in: grantedIds }, isActive: true, personalDataPurgedAt: null }, select: { id: true, name: true, birthDate: true, gender: true, guardianName: true, guardianPhone: true } });
       }
       if (requestedIds.length > 0) {
-        const requested = new Map(input.data.children.filter((child) => child.requestedChildId).map((child) => [child.requestedChildId!, child]));
+        const requested = new Map(data.children.filter((child) => child.requestedChildId).map((child) => [child.requestedChildId!, child]));
         const granted = currentGrantedChildren.filter((child) => requested.has(child.id));
         const exactIdentity = granted.every((row) => {
           const submitted = requested.get(row.id);
@@ -251,11 +292,12 @@ export async function submitApplicationGroupCore(
 
     const submission = await tx.reservationApplicationSubmission.create({
       data: {
+        id: submissionId,
         groupId: group.id,
-        guardianName: input.data.guardianName,
-        guardianPhone: input.data.guardianPhone,
-        guardianRelationship: input.data.guardianRelationship,
-        declaredPayerName: input.data.declaredPayerName,
+        guardianName: data.guardianName,
+        guardianPhone: data.guardianPhone,
+        guardianRelationship: data.guardianRelationship,
+        declaredPayerName: data.declaredPayerName,
         submittedAt: input.now,
         completionTokenHash: input.completionTokenHash,
         completionExpiresAt: input.completionExpiresAt,
@@ -273,7 +315,7 @@ export async function submitApplicationGroupCore(
       await tx.companionGroupMember.create({ data: { companionGroupId: invite.companionGroupId, submissionId: submission.id } });
     }
     const applicationIds: string[] = [];
-    for (const child of input.data.children) {
+    for (const child of data.children) {
       const quote = schedules.get(child.classScheduleId)!.applicationPrice!;
       const application = await tx.reservationApplication.create({
         data: {
