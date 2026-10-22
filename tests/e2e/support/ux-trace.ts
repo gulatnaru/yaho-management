@@ -10,6 +10,7 @@ export const uxTraceSchema = z.object({
     diagnosticReadFailed: z.boolean().optional(), issuedGroups: z.number().int().nonnegative().optional(), activeLinks: z.number().int().nonnegative().optional(),
     requests: z.number().int().nonnegative().optional(), responses: z.number().int().nonnegative().optional(),
     finished: z.number().int().nonnegative().optional(), failed: z.number().int().nonnegative().optional(),
+    abortedAfterResponse: z.number().int().nonnegative().optional(), lostResponses: z.number().int().nonnegative().optional(),
     reads: z.number().int().nonnegative().optional(), readResponses: z.number().int().nonnegative().optional(), readFinished: z.number().int().nonnegative().optional(), readFailed: z.number().int().nonnegative().optional(), readHttpStatus: z.number().int().optional(),
     httpOk: z.boolean().optional(),
     requestOrdinal: z.number().int().nonnegative().optional(), responseOrdinal: z.number().int().nonnegative().optional(), finishedOrdinal: z.number().int().nonnegative().optional(), httpStatus: z.number().int().optional(),

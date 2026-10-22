@@ -27,15 +27,18 @@ export async function waitForReactHandler(locator: Locator, handler: "onClick" |
  * Callers must separately assert their authoritative UI (and DB, where relevant).
  * React can consume the action value and update that UI while the response stream
  * remains open: requestfinished is diagnostic, never the application-ready signal.
+ * Likewise, requestfailed after this request's HTTP 200 is stream bookkeeping,
+ * recorded as abortedAfterResponse; it cannot establish receipt/read-back success.
  * No action is invoked or retried by this observer. */
 export function observeActions(page: Page, event: "deposit" | "confirmation" | "class-price" | "guardian-review" | "class-link-fixture") {
   const started = Date.now();
   const pathname = new URL(page.url()).pathname;
-  const requests = new Set<Request>(); const responses = new Set<Request>(); const finished = new Set<Request>();
-  const failed = new Set<Request>();
+  const requests = new Set<Request>(); const responses = new Map<Request, number>(); const finished = new Set<Request>();
+  const failed = new Set<Request>(); const abortedAfterResponse = new Set<Request>();
   const reads = new Set<Request>(); const readResponses = new Set<Request>(); const readFinished = new Set<Request>(); const readFailed = new Set<Request>();
   let httpOk = true;
-  const mark = (facts: UxTrace["facts"] = {}) => traceUx(event, started, { requests: requests.size, responses: responses.size, finished: finished.size, failed: failed.size, reads: reads.size, readResponses: readResponses.size, readFinished: readFinished.size, readFailed: readFailed.size, httpOk, ...facts });
+  const lostResponses = () => [...requests].filter((item) => responses.get(item) !== 200 || (failed.has(item) && !abortedAfterResponse.has(item))).length;
+  const mark = (facts: UxTrace["facts"] = {}) => traceUx(event, started, { requests: requests.size, responses: responses.size, finished: finished.size, failed: failed.size, abortedAfterResponse: abortedAfterResponse.size, lostResponses: lostResponses(), reads: reads.size, readResponses: readResponses.size, readFinished: readFinished.size, readFailed: readFailed.size, httpOk, ...facts });
   const request = (item: Request) => {
     if (item.method() === "POST" && new URL(item.url()).pathname === pathname && item.headers()["next-action"]) {
       requests.add(item); mark({ requestOrdinal: requests.size });
@@ -46,7 +49,7 @@ export function observeActions(page: Page, event: "deposit" | "confirmation" | "
   const response = (item: import("@playwright/test").Response) => {
     if (reads.has(item.request())) { readResponses.add(item.request()); mark({ readHttpStatus: item.status() }); }
     if (!requests.has(item.request())) return;
-    responses.add(item.request()); httpOk &&= item.ok();
+    responses.set(item.request(), item.status()); httpOk &&= item.status() === 200;
     mark({ responseOrdinal: [...requests].indexOf(item.request()) + 1, httpStatus: item.status() });
   };
   const complete = (item: Request) => {
@@ -55,7 +58,12 @@ export function observeActions(page: Page, event: "deposit" | "confirmation" | "
   };
   const fail = (item: Request) => {
     if (reads.has(item)) { readFailed.add(item); mark(); }
-    if (requests.has(item)) { failed.add(item); mark(); }
+    if (requests.has(item)) {
+      // Capture event order as well as request identity: a later response must not
+      // retroactively turn a pre-response failure into a post-response abort.
+      if (!failed.has(item) && responses.get(item) === 200) abortedAfterResponse.add(item);
+      failed.add(item); mark();
+    }
   };
   page.on("request", request); page.on("response", response); page.on("requestfinished", complete); page.on("requestfailed", fail);
   return {
@@ -64,7 +72,7 @@ export function observeActions(page: Page, event: "deposit" | "confirmation" | "
     async settled(minimum = 1) {
       await expect.poll(() => requests.size >= minimum && responses.size === requests.size,
         { message: `${event}: every observed action received response headers (UI receipt asserted separately)`, timeout: 15000 }).toBe(true);
-      expect(failed.size, `${event}: no observed action transport failure`).toBe(0);
+      expect(lostResponses(), `${event}: no observed action transport failure`).toBe(0);
       expect(httpOk, `${event}: action HTTP responses succeeded`).toBe(true);
     },
     stop() { page.off("request", request); page.off("response", response); page.off("requestfinished", complete); page.off("requestfailed", fail); },

@@ -137,3 +137,52 @@ The repair reuses Round 2's read and projection guards without adding another re
 - Parent sequential QA and code review: **PASS**; review findings **Critical 0 / Major 0 / Minor 0**. The original disabled gates/CAS inputs/conflict branch remain intact, success clears the attempt before the awaited read, and no write retry, storage or logging was added.
 
 Browser/DB E2E and remote CI are not rerun in this environment; the supplied focused CI evidence above predates this fix.
+
+## Round 4 — Classify delivered-response stream aborts separately from lost responses (TEST-ONLY)
+
+Baseline: HEAD `dd74293` (Rounds 1–3 included), branch `feature/phase21-ai-service`. This round changes only the shared test observer, its numeric trace schema, observer unit tests and this appended report. No product code, E2E spec/step/expectation, amount, fixture, workflow, timeout or retry changes. No stage, commit, push, remote CI dispatch, browser/DB E2E or database access.
+
+### Accepted focused CI evidence
+
+Supplied run **39868158884** establishes:
+
+- **mobile-webkit-360: SUCCESS**, all selected specs. **tablet-webkit-768:** class-links **5/5 PASS** (Round 3 verified), guardian **13/13 PASS**, full-journey **BLOCKED** as admitted. **mobile-webkit-390:** browser-install infrastructure failure; no product result.
+- **desktop-chromium:** family-list **PASS**. The remaining Chromium failures share the observer's `no observed action transport failure` diagnostic assertion; the product assertions reached in those traces pass. Class-links price records `storedPrice=25000`, `serverPriceMatches=true`, `displayedPrice=true`, `savePending=false`, but fails the raw-failed assertion with **Expected 0 / Received 2**. Four guardian scenarios have HTTP **200** action responses and complete their flows, but fail that assertion with **Received 1**.
+- Full-journey verifies issuance with `receiptVisible=true`, `addressCount=1`, `issuedGroups=1`, `activeLinks=1`, `serverScopePresent=true`, then the same observer assertion (**Received 1**) blocks the fixture step before the money flow. This is no evidence that the later money flow passed.
+- The failing requests and responses are paired, with `httpStatus=200` and `httpOk=true`; `requestfailed` increments **after** the successful response. WebKit records `failed=0` for the passing scenarios. As Iteration 4 R1 established for `requestfinished`, stream closure/abort bookkeeping after delivered action data is separate from application readiness. The originating stream interruption remains unresolved.
+
+### Classification and unchanged verification contract
+
+The observer now retains HTTP status **per Request**. A `requestfailed` event is classified as numeric **`abortedAfterResponse`** only when that same request already produced HTTP **200**. The original numeric **`failed`** counter still records it. Numeric **`lostResponses`** counts requests lacking observed HTTP 200, plus failures that occurred before a successful response. A later response cannot retroactively reclassify an earlier failure. A successful response for one request cannot mask another request's missing/non-200 response. No browser, viewport or project-name branch is involved.
+
+The unchanged response-header poll rejects missing responses. The transport assertion now requires `lostResponses=0`, and the HTTP assertion still requires success; every non-200 status remains a failure, including 201/204/302/400/500. No event is discarded, synthetic `requestfinished` is created, action is invoked, retry added or timeout increased. `abortedAfterResponse` describes the transport event order, **not** a verified application outcome.
+
+Receipt/UI/authoritative read-back verification remains with the existing callers: the observer has no result callback, and some authoritative assertions occur after `settled()` or `stop()`. It therefore cannot independently classify missing caller verification as transport loss. A delivered HTTP 200 may have `lostResponses=0` even when a receipt/read-back assertion rejects the flow; the flow still fails through that existing assertion. This preserves the Iteration 4 R1 contract and avoids inferring product success from HTTP alone. Unit regressions exercise the real `saveClassApplicationPrice` receipt and live-price assertion paths plus a caller-owned authoritative stored-price assertion; all still reject incomplete/incorrect verification after HTTP 200 + `requestfailed`.
+
+This is a harness-bookkeeping correction: passing the transport observation cannot make a product assertion pass. All existing requirements remain asserted in their original order, including:
+
+- Saved receipt, live displayed price/input value, authoritative stored price and three-state price diagnostics; no reload substitutes for live reconciliation.
+- Issuance receipt/address count, issued group and active link counts, current authoritative server scope/membership, copy/share/open/reload, replace-cancel, STOP → resume and revision/conflict/lost-response behavior.
+- Guardian scenarios and their existing receipt, input/consent, identity/mapping and authoritative read-back checks; no personal data or capability values are added to traces.
+- Full-journey steps and amounts, **D=A+P+R+T**, duplicate-deposit prevention, return-obligation funds excluded from reservations, selected-child-only confirmation, unchanged sibling, immutable `quotedAmount` and no automatic retry after loss. Ledger **8/8**, Confirmation **7/7**, all **18 BLOCKED** admissions, auth/cookie policy and Preview/Production database boundaries remain protected. Supplied full-journey evidence still stops before the money flow.
+
+### Files changed and boundary
+
+| File | Change |
+| --- | --- |
+| `tests/e2e/support/integrated-ux-sync.ts` | Per-request HTTP status and failure-order correlation; retain raw `failed`, record numeric post-response abort/loss facts, assert actual transport loss instead of all stream aborts. Existing caller assertions stay in place. |
+| `tests/e2e/support/ux-trace.ts` | Necessary extra shared test-support file: minimally allow the two nonnegative integer facts, `abortedAfterResponse` and `lostResponses`. Its strict schema would otherwise silently discard each observer annotation containing the new fields. Other fields, privacy restrictions and 50-trace budget remain unchanged. |
+| `tests/unit/e2e/integrated-ux-sync.test.ts` | HTTP 200 + later failure with verified outcome, no response + failure, non-200 statuses, incomplete receipt/live UI/read-back, multiple-request identity, pre-response failure/late events, listener cleanup, privacy and strict numeric trace projection regressions. |
+| `docs/E2E_CI_ITERATION_5_REPORT.md` | Append this evidence, classification, boundary and verification record; preserve earlier rounds verbatim. |
+
+### Verification
+
+- Focused observer/receipt suite: **25/25 PASS in 1 file**, `npx vitest run tests/unit/e2e/integrated-ux-sync.test.ts --maxWorkers=2 --minWorkers=1`, exit 0, **815 ms**; log `/tmp/yaho-round4-focused.log`.
+- Typecheck: **PASS**, `npx tsc --noEmit`, exit 0; log `/tmp/yaho-round4-typecheck.log`.
+- Lint: **PASS**, `npm run lint`, exit 0; the existing unrelated `_body` unused-variable warning at `tests/unit/ai-service/selection-safety.test.ts:40` remains; log `/tmp/yaho-round4-lint.log`.
+- Full unit suite: **2557/2557 PASS in 206 files**, `npm test -- --maxWorkers=2 --minWorkers=1`, exit 0, **111.70 seconds**, without file filters; log `/tmp/yaho-round4-unit.log`.
+- Production build: **PASS**, `npm run build`, exit 0, optimized compilation/type validation, all **19** static pages and final route output. The immediate port-independent `pgrep -af '[n]ext dev'` preflight returned status 1 with no matching process; logs `/tmp/yaho-round4-dev-preflight.log` and `/tmp/yaho-round4-build.log`.
+- Scope audit: exactly the four listed test/report files changed; all product files, E2E specs, workflows and prior report content remain unchanged. HEAD `dd74293` unchanged, index empty, `git diff --check` passes. No stage, commit or push.
+- Parent read-only QA followed by sequential code review: **PASS**, **Critical 0 / Major 0 / Minor 0**. Inspected the final diff, all four requested regression cases and actual focused/full-unit/lint/build logs without duplicating the full suite. Confirmed exact four-file scope, unchanged product/spec/workflow content, byte-identical `saveClassApplicationPrice`/`recordPriceStates`, prior report as an exact HEAD prefix, unchanged HEAD `dd742934394b40d16fc9160abb81fc30ea99df0a`, no staged/untracked files and clean `git diff --check`.
+
+These synthetic observer/locator unit regressions verify transport classification and existing assertion rejection paths, not an actual browser/network reproduction. Browser/DB E2E and remote CI are not rerun; the accepted run above predates this harness correction. CI must still verify the newly unblocked Chromium flows, including the full-journey money flow. The observer cannot establish application success or the originating stream interruption's cause.
