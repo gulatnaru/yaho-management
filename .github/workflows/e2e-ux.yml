@@ -51,7 +51,6 @@ jobs:
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
       UX_PROJECT: ${{ matrix.project }}
       UX_MANIFEST_PATH: test-results/ux-runtime/manifest.json
-      UX_SPECS: integrated-ux-family-list,integrated-ux-class-links,integrated-ux-guardian,integrated-ux-full-journey
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
