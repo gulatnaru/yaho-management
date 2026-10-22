@@ -1,11 +1,12 @@
 import * as React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ClassApplicationLinksView, LinkCompositionOption } from "@/lib/reservation-applications/link-queries";
-import type { ClassLinkReceipt } from "@/server/reservation-applications/groups";
+import type { ClassLinkOperation, ClassLinkReceipt } from "@/server/reservation-applications/groups";
 
 // Handler/state harness deliberately holds server props fixed. This reproduces
 // the success/receipt projection gap without pretending to reproduce a browser's Flight abort.
-const hooks = vi.hoisted(() => ({ frames: {} as Record<string, unknown[]>, frame: [] as unknown[], cursor: 0, effects: [] as (() => unknown)[], work: [] as Promise<unknown>[] }));
+type TransitionState = { active: boolean; routePending: boolean };
+const hooks = vi.hoisted(() => ({ frames: {} as Record<string, unknown[]>, frame: [] as unknown[], cursor: 0, effects: [] as (() => unknown)[], work: [] as Promise<unknown>[], transitions: [] as TransitionState[] }));
 const mocks = vi.hoisted(() => ({ save: vi.fn(), issue: vi.fn(), classRead: vi.fn(), groupRead: vi.fn(), refresh: vi.fn() }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
@@ -24,7 +25,18 @@ vi.mock("react", async (original) => ({
     const index = hooks.cursor++, previous = hooks.frame[index] as unknown[] | undefined;
     if (!previous || dependencies.some((value, position) => value !== previous[position])) { hooks.effects.push(effect); hooks.frame[index] = dependencies; }
   },
-  useTransition: () => [false, (callback: () => unknown) => { hooks.work.push(Promise.resolve(callback())); }],
+  useTransition: () => {
+    const index = hooks.cursor++;
+    if (!(index in hooks.frame)) {
+      const state = { active: false, routePending: false };
+      hooks.frame[index] = state; hooks.transitions.push(state);
+    }
+    const state = hooks.frame[index] as TransitionState;
+    return [state.active || state.routePending, (callback: () => unknown) => {
+      state.active = true;
+      hooks.work.push(Promise.resolve(callback()).finally(() => { state.active = false; }));
+    }];
+  },
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh }) }));
 vi.mock("@/app/(admin)/classes/actions", () => ({ saveApplicationPrice: mocks.save }));
@@ -37,9 +49,11 @@ const { GroupCreateForm } = await import("@/app/(admin)/reservation-applications
 const { FormFeedback } = await import("@/components/application-ux/form-feedback");
 const { Input } = await import("@/components/ui/input");
 const { ApplicationStatusFilter } = await import("@/app/(admin)/reservation-applications/_components/application-status-filter");
+const { GroupLinkButton } = await import("@/app/(admin)/reservation-applications/groups/group-link-button");
+const { LinkImpactConfirmation } = await import("@/app/(admin)/classes/_components/link-impact-confirmation");
 const { parseFamilyFilters, familyListHref } = await import("@/lib/reservation-applications/navigation");
 
-type Props = { children?: React.ReactNode; onClick?: () => unknown; onChange?: (event: { target: { value: string } }) => void; onSubmit?: (event: { preventDefault: () => void }) => void; onSaved?: () => Promise<void>; onIssued?: (receipt: ClassLinkReceipt) => Promise<void>; price?: number | null; revision?: string; options?: LinkCompositionOption[]; error?: string; notice?: string; url?: string; href?: string };
+type Props = { children?: React.ReactNode; disabled?: boolean; onConfirm?: () => void; onClick?: () => unknown; onChange?: (event: { target: { value: string } }) => void; onSubmit?: (event: { preventDefault: () => void }) => void; onSaved?: () => Promise<void>; onIssued?: (receipt: ClassLinkReceipt) => Promise<void>; price?: number | null; revision?: string; options?: LinkCompositionOption[]; error?: string; notice?: string; url?: string; href?: string };
 function elements(node: React.ReactNode): React.ReactElement<Props>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!React.isValidElement<Props>(node)) return [];
@@ -79,9 +93,11 @@ async function submit(tree: React.ReactNode) {
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => {
-  vi.resetAllMocks(); hooks.frames = {}; hooks.work = [];
+  vi.resetAllMocks(); hooks.frames = {}; hooks.work = []; hooks.transitions = [];
   vi.stubGlobal("React", React); vi.stubGlobal("window", { location: { origin: "http://localhost:3000" }, addEventListener: vi.fn(), removeEventListener: vi.fn() });
-  mocks.refresh.mockImplementation(() => new Promise(() => undefined));
+  // Next router.refresh returns void. Model its route work separately from the
+  // action promise: a controlled noncommitting refresh keeps its transition pending.
+  mocks.refresh.mockImplementation(() => { hooks.transitions.filter((state) => state.active).forEach((state) => { state.routePending = true; }); });
   mocks.save.mockResolvedValue({ revision: "2026-10-20T00:00:00.001Z" });
   mocks.issue.mockResolvedValue(receipt);
 });
@@ -154,6 +170,126 @@ it("awaits composer reconciliation and does not add a competing success route re
   const onIssued = vi.fn(async () => undefined);
   await submit(render("composer", () => MultiClassLinkComposer({ currentClassId: "class", options, onIssued })));
   expect(onIssued).toHaveBeenCalledWith(receipt); expect(mocks.issue).toHaveBeenCalledOnce(); expect(mocks.refresh).not.toHaveBeenCalled();
+});
+function projectedGroup(active: boolean, version: string, linkId = "link"): ClassApplicationLinksView {
+  const current = issuedView(active);
+  return { ...current, revision: `class-${version}`, scopes: current.scopes.map((scope) => ({
+    ...scope, revision: `group-${version}`,
+    members: [{ id: "class", label: "합성 클래스", revision: `class-${version}` }, { id: "second", label: "다른 합성 클래스", revision: `second-${version}` }],
+    links: [{ ...scope.links[0]!, id: linkId }],
+    readiness: { ...readiness, issuance: active ? "ACTIVE" : "STOPPED" },
+  })) };
+}
+function groupProps(tree: React.ReactNode) {
+  return elements(tree).find((node) => node.type === GroupLinkButton)!.props as React.ComponentProps<typeof GroupLinkButton>;
+}
+function groupButton(props: React.ComponentProps<typeof GroupLinkButton>) { return render("group-button", () => GroupLinkButton(props)); }
+function click(tree: React.ReactNode, label: string) { elements(tree).find((node) => node.props.onClick && text(node.props.children) === label)!.props.onClick!(); }
+function confirm(tree: React.ReactNode) { elements(tree).find((node) => node.type === LinkImpactConfirmation)!.props.onConfirm!(); }
+
+it.each([false, true])("keeps post-stop resume operable after issuance/projection with route commit=%s", async (commitRoute) => {
+  const original = view();
+  mocks.classRead.mockResolvedValueOnce({ view: projectedGroup(true, "issued"), options }).mockResolvedValueOnce({ view: projectedGroup(false, "stopped"), options });
+  click(card(original), "신청 링크 발급"); await Promise.all(hooks.work.splice(0));
+  expect(elements(card(original)).some((node) => node.type === IssuedLinkControls)).toBe(true);
+  const activeProps = groupProps(card(original));
+  click(groupButton(activeProps), "신청 접수 중지");
+  mocks.issue.mockResolvedValueOnce({ groupId: "group", active: false, replayed: false });
+  confirm(groupButton(activeProps)); await Promise.all(hooks.work.splice(0));
+  const stopped = card(original), stoppedProps = groupProps(stopped);
+  expect(text(stopped)).toContain("링크 비활성 · 접수 중지");
+  expect(elements(stopped).some((node) => node.type === IssuedLinkControls)).toBe(false);
+  expect(stoppedProps).toMatchObject({ revision: "group-stopped", revisions: { class: "class-stopped", second: "second-stopped" } });
+  if (commitRoute) hooks.transitions.forEach((state) => { state.routePending = false; });
+  const resume = elements(groupButton(stoppedProps)).find((node) => text(node.props.children) === "접수 재개 및 새 링크 발급")!;
+  const transition = hooks.frames["group-button"]![0] as TransitionState;
+  const operation = hooks.frames["group-button"]![5] as { current: unknown };
+  const canOperate = Boolean(stoppedProps.revision && stoppedProps.members?.length && stoppedProps.members.every((member) => stoppedProps.revisions?.[member.id]));
+  expect({ pending: transition.active || transition.routePending, canOperate, attempt: operation.current, disabled: resume.props.disabled }).toEqual({ pending: false, canOperate: true, attempt: undefined, disabled: false });
+
+  mocks.classRead.mockResolvedValueOnce({ view: projectedGroup(true, "resumed", "resumed-link"), options });
+  mocks.issue.mockResolvedValueOnce({ ...receipt, linkId: "resumed-link" });
+  click(groupButton(stoppedProps), "접수 재개 및 새 링크 발급"); confirm(groupButton(stoppedProps));
+  await Promise.all(hooks.work.splice(0));
+  expect(mocks.issue.mock.calls[2]![0]).toMatchObject({ kind: "resume", groupRevision: "group-stopped", revisions: { class: "class-stopped", second: "second-stopped" }, classScheduleIds: ["class", "second"] });
+  const resumedProps = groupProps(card(original));
+  expect(elements(groupButton(resumedProps)).find((node) => text(node.props.children) === "링크 교체")?.props.disabled).toBe(false);
+  expect(elements(card(original)).find((node) => node.type === IssuedLinkControls)?.props.url).toContain(receipt.token);
+
+  mocks.classRead.mockResolvedValueOnce({ view: projectedGroup(true, "replaced", "replaced-link"), options });
+  mocks.issue.mockResolvedValueOnce({ ...receipt, linkId: "replaced-link" });
+  click(groupButton(resumedProps), "링크 교체"); confirm(groupButton(resumedProps));
+  await Promise.all(hooks.work.splice(0));
+  expect(mocks.issue.mock.calls[3]![0]).toMatchObject({ kind: "replace", groupRevision: "group-resumed", revisions: { class: "class-resumed", second: "second-resumed" } });
+  expect(groupProps(card(original))).toMatchObject({ revision: "group-replaced", revisions: { class: "class-replaced", second: "second-replaced" } });
+  const operations = mocks.issue.mock.calls.map(([operation]) => operation as ClassLinkOperation);
+  expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(4);
+  expect(mocks.classRead).toHaveBeenCalledTimes(4); expect(mocks.refresh).not.toHaveBeenCalled();
+});
+it("holds group controls pending until the authoritative post-stop revisions arrive", async () => {
+  const original = projectedGroup(true, "issued"), slow = deferred<{ view: ClassApplicationLinksView; options: LinkCompositionOption[] }>();
+  mocks.classRead.mockReturnValueOnce(slow.promise);
+  mocks.issue.mockResolvedValueOnce({ groupId: "group", active: false, replayed: false });
+  const activeProps = groupProps(card(original));
+  click(groupButton(activeProps), "신청 접수 중지"); confirm(groupButton(activeProps));
+  await Promise.resolve();
+  expect(mocks.classRead).toHaveBeenCalledWith("class");
+  expect(elements(groupButton(groupProps(card(original)))).find((node) => text(node.props.children) === "링크 교체")?.props.disabled).toBe(true);
+  expect((hooks.frames["group-button"]![5] as { current: unknown }).current).toBeUndefined();
+  expect(mocks.refresh).not.toHaveBeenCalled();
+  slow.resolve({ view: projectedGroup(false, "stopped"), options });
+  await Promise.all(hooks.work.splice(0));
+  const stoppedProps = groupProps(card(original));
+  expect(stoppedProps).toMatchObject({ revision: "group-stopped", revisions: { class: "class-stopped", second: "second-stopped" } });
+  expect(elements(groupButton(stoppedProps)).find((node) => text(node.props.children) === "접수 재개 및 새 링크 발급")?.props.disabled).toBe(false);
+});
+it("reports a post-stop projection failure without retrying the completed mutation", async () => {
+  const original = projectedGroup(true, "issued"), props = groupProps(card(original));
+  mocks.classRead.mockRejectedValueOnce(new Error("SYNTHETIC_READ_FAILED"));
+  mocks.issue.mockResolvedValueOnce({ groupId: "group", active: false, replayed: false });
+  click(groupButton(props), "신청 접수 중지"); confirm(groupButton(props));
+  await Promise.all(hooks.work.splice(0));
+  expect(elements(card(original)).find((node) => node.type === FormFeedback)?.props.error).toContain("현재 표시를 갱신하지 못했습니다");
+  const finished = groupButton(groupProps(card(original)));
+  expect(elements(finished).find((node) => node.type === FormFeedback)?.props.notice).toContain("신규 신청을 중지했습니다");
+  expect(text(finished)).not.toContain("같은 작업 다시 시도");
+  expect((hooks.frames["group-button"]![5] as { current: unknown }).current).toBeUndefined();
+  expect(mocks.issue).toHaveBeenCalledOnce(); expect(mocks.refresh).not.toHaveBeenCalled();
+});
+it.each(["lost-response", "action-error"])("keeps %s retry frozen across newer props without automatic reissue", async (failure) => {
+  const props = groupProps(card(projectedGroup(true, "issued")));
+  if (failure === "lost-response") mocks.issue.mockRejectedValueOnce(new Error("SYNTHETIC_LOST_RESPONSE"));
+  else mocks.issue.mockResolvedValueOnce({ error: "SYNTHETIC_ACTION_ERROR" });
+  click(groupButton(props), "신청 접수 중지"); confirm(groupButton(props));
+  await Promise.all(hooks.work.splice(0));
+  const firstRequest = mocks.issue.mock.calls[0]![0] as ClassLinkOperation;
+  const newerProps = groupProps(card(projectedGroup(true, "newer")));
+  const unresolved = groupButton(newerProps);
+  expect(mocks.issue).toHaveBeenCalledOnce();
+  expect(elements(unresolved).find((node) => text(node.props.children) === "링크 교체")?.props.disabled).toBe(true);
+  expect((hooks.frames["group-button"]![5] as { current: unknown }).current).toBe(firstRequest);
+  mocks.issue.mockResolvedValueOnce({ groupId: "group", active: false, replayed: true });
+  mocks.classRead.mockResolvedValueOnce({ view: projectedGroup(false, "stopped"), options });
+  click(unresolved, "같은 작업 다시 시도"); await Promise.all(hooks.work.splice(0));
+  expect(mocks.issue.mock.calls[1]![0]).toBe(firstRequest);
+  expect(firstRequest).toMatchObject({ kind: "stop", groupRevision: "group-issued", revisions: { class: "class-issued", second: "second-issued" } });
+  expect(mocks.classRead).toHaveBeenCalledOnce(); expect(mocks.refresh).not.toHaveBeenCalled();
+});
+it("retains conflict refresh and clears the conflicted attempt without reconciling a success", async () => {
+  const props = groupProps(card(projectedGroup(true, "issued")));
+  mocks.issue.mockResolvedValueOnce({ error: "SYNTHETIC_CONFLICT", conflict: true });
+  click(groupButton(props), "신청 접수 중지"); confirm(groupButton(props)); await Promise.all(hooks.work.splice(0));
+  expect(mocks.refresh).toHaveBeenCalledOnce(); expect(mocks.classRead).not.toHaveBeenCalled();
+  expect((hooks.frames["group-button"]![5] as { current: unknown }).current).toBeUndefined();
+  expect(elements(groupButton(props)).some((node) => node.type === LinkImpactConfirmation)).toBe(false);
+  expect(elements(groupButton(props)).find((node) => node.type === FormFeedback)?.props.error).toBe("SYNTHETIC_CONFLICT");
+});
+it("retains the standalone success refresh when no authoritative callback is supplied", async () => {
+  const props = { ...groupProps(card(projectedGroup(true, "issued"))), onIssued: undefined };
+  mocks.issue.mockResolvedValueOnce({ groupId: "group", active: false, replayed: false });
+  click(groupButton(props), "신청 접수 중지"); confirm(groupButton(props)); await Promise.all(hooks.work.splice(0));
+  expect(mocks.refresh).toHaveBeenCalledOnce(); expect(mocks.classRead).not.toHaveBeenCalled();
+  expect((hooks.frames["group-button"]![5] as { current: unknown }).current).toBeUndefined();
 });
 it.each([["group", ["link"], true], ["group", [], false], ["other-group", ["link"], false]])("checks exact group %s active IDs %s before exposing group receipt", async (groupId, ids, shown) => {
   const original: string[] = []; mocks.groupRead.mockResolvedValue({ groupId, activeLinkIds: ids, members: { class: { revision: "fresh-group-revision", applicationPrice: 25000, eligible: true } } });
