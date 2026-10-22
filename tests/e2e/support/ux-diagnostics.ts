@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { loadUxManifest } from "./ux-manifest";
+import type { UxSelection } from "./ux-selection";
 import type { UxTrace } from "./ux-trace";
 
 // The workflow uploads ONLY these two files, never the runtime or browser output.
@@ -60,6 +61,8 @@ export interface DiagnosticTest {
 }
 export interface DiagnosticRun {
   project: string; spec: string; status: string;
+  selection?: UxSelection;
+  skipReason?: "not-selected-focused-run";
   counts: { discovered: number; completed: number; passed: number; blocked: number };
   tests: DiagnosticTest[]; errors: DiagnosticError[];
 }
@@ -67,6 +70,7 @@ export interface DiagnosticRun {
 // Preserve previous spec results across separate Playwright invocations. No config,
 // stdio, attachments, source snippets, environment or arbitrary TestResult fields.
 export function publishUxDiagnostics(run: DiagnosticRun, paths: { results: string; statuses: string } = uxDiagnosticPaths) {
+  if (!run.selection && process.env.UX_MANIFEST_PATH) run = { ...run, selection: loadUxManifest(process.env.UX_MANIFEST_PATH).selection };
   mkdirSync(dirname(resolve(paths.results)), { recursive: true });
   let previous: DiagnosticRun[] = [];
   try { previous = JSON.parse(readFileSync(paths.statuses, "utf8")).runs as DiagnosticRun[]; }
@@ -76,6 +80,7 @@ export function publishUxDiagnostics(run: DiagnosticRun, paths: { results: strin
   // Playwright-shaped projection: tools can inspect suites/specs/tests/results/errors.
   writeFileSync(paths.results, JSON.stringify({ suites: runs.map((item) => ({
     title: item.spec, file: item.spec, project: item.project,
+    ...(item.selection ? { selection: item.selection } : {}), ...(item.skipReason ? { skipReason: item.skipReason } : {}),
     specs: item.tests.map((test) => ({ title: test.title, file: test.file, line: test.line,
       tests: [{ projectName: item.project, expectedStatus: test.expectedStatus, results: [{ status: test.status, errors: test.errors, ...(test.traces?.length ? { traces: test.traces } : {}) }] }],
     })), errors: item.errors, status: item.status,
@@ -92,4 +97,10 @@ export function publishUxInfrastructureFailure(project: string, spec: string, fa
     project, spec, status: "failed", counts: previous?.counts ?? { discovered: 0, completed: 0, passed: 0, blocked: 0 },
     tests: previous?.tests ?? [], errors: [...previous?.errors ?? [], ...failures.map((message) => ({ message }))],
   });
+}
+
+/** Omission is explicit at the spec level; it never enters BLOCKED admission. */
+export function publishUxNotSelected(project: string, spec: string, selection: UxSelection) {
+  publishUxDiagnostics({ project, spec, selection, status: "SKIPPED", skipReason: "not-selected-focused-run",
+    counts: { discovered: 0, completed: 0, passed: 0, blocked: 0 }, tests: [], errors: [] });
 }

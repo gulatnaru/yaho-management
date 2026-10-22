@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { observeActions, traceUx, waitForReactHandler } from "./integrated-ux-sync";
+import { recordPriceStates, observeActions, traceUx, waitForReactHandler } from "./integrated-ux-sync";
 /** Navigate the real three input steps. This helper never submits or changes test admission. */
 export async function enterGuardianInformation(page: Page, selectAllCandidates = true) {
   await expect(page.getByText("3단계 중 1단계", { exact: false })).toBeVisible();
@@ -29,4 +29,26 @@ export async function enterConsentReview(page: Page) {
 }
 export async function acceptGuardianConsents(page: Page) {
   for (const checkbox of await page.getByTestId("application-consents").getByRole("checkbox").all()) await checkbox.check();
+}
+
+/** Capture all three independent price states at each exact guardian assertion. */
+export async function recordGuardianPriceStates(page: Page, options: {
+  amount: number; total: number; previous?: { amount: number; total: number };
+  summaryAmount: number; summaryTotal: number; serverPath: string; readStored: () => Promise<number | null>;
+}) {
+  const won = (amount: number) => `${amount.toLocaleString("ko-KR")}원`;
+  await recordPriceStates(page, { event: "guardian-review", amount: options.amount, readStored: options.readStored,
+    serverPath: options.serverPath, serverPriceText: won(options.amount),
+    facts: { summaryExpectedPrice: options.summaryAmount, summaryExpectedTotal: options.summaryTotal, expectedTotal: options.total, previousPrice: options.previous?.amount, previousTotal: options.previous?.total },
+    liveFacts: async () => {
+      const summary = page.getByRole("complementary", { name: "신청 요약", exact: true });
+      const review = page.locator("#application-reviewedPriceProof");
+      const reviewText = await review.count() ? await review.innerText() : "";
+      const summaryText = await summary.count() ? await summary.innerText() : "";
+      return { displayedPrice: (await page.locator("body").innerText()).includes(won(options.amount)),
+        summaryPriceMatches: summaryText.includes(won(options.summaryAmount)),
+        summaryTotalMatches: summaryText.includes(`예상 총 참가비 ${won(options.summaryTotal)}`),
+        priceChangeVisible: options.previous ? reviewText.includes(`${won(options.previous.amount)} → ${won(options.amount)}`) : false,
+        totalVisible: options.previous ? reviewText.includes(`${won(options.previous.total)} → ${won(options.total)}`) : summaryText.includes(`예상 총 참가비 ${won(options.total)}`) };
+    } });
 }

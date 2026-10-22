@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FullConfig, FullResult, Suite, TestCase, TestResult } from "@playwright/test/reporter";
 import { diagnosticSecrets, scrubDiagnosticText, type DiagnosticRun } from "../../e2e/support/ux-diagnostics";
+import { selectUxSpecs } from "../../e2e/support/ux-selection";
 import UxReporter from "../../e2e/support/ux-reporter";
 
 const publish = vi.hoisted(() => vi.fn());
@@ -60,6 +61,29 @@ describe("synthetic assertion diagnostics privacy", () => {
   });
   it("requires a readable credential manifest before publishing when a manifest was configured", () => {
     expect(() => diagnosticSecrets({ UX_MANIFEST_PATH: "test-results/ux-runtime/missing-unit-manifest.json" })).toThrow("UX_MANIFEST_INVALID_OR_MISSING");
+  });
+  it("serializes focused selection and explicit omitted-spec SKIPPED reasons in both artifacts", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ux-focused-")); directories.push(directory);
+    const paths = { results: join(directory, "results.json"), statuses: join(directory, "statuses.json") };
+    const { publishUxDiagnostics: realPublish } = await vi.importActual<typeof import("../../e2e/support/ux-diagnostics")>("../../e2e/support/ux-diagnostics");
+    const selection = selectUxSpecs("integrated-ux-guardian");
+    realPublish({ project: "desktop-chromium", spec: "integrated-ux-ledger.spec.ts", status: "SKIPPED", skipReason: "not-selected-focused-run", selection,
+      counts: { discovered: 0, completed: 0, passed: 0, blocked: 0 }, tests: [], errors: [] }, paths);
+    const statuses = JSON.parse(readFileSync(paths.statuses, "utf8"));
+    const results = JSON.parse(readFileSync(paths.results, "utf8"));
+    for (const item of [statuses.runs[0], results.suites[0]]) {
+      expect(item).toMatchObject({ status: "SKIPPED", skipReason: "not-selected-focused-run", selection });
+      expect(JSON.stringify(item)).not.toContain("272");
+    }
+    expect(statuses.runs[0].counts.blocked).toBe(0);
+  });
+  it("installs only the matrix browser with a bounded step timeout", () => {
+    const workflow = readFileSync(".github/workflows/e2e-ux.yml", "utf8");
+    expect(workflow).toContain('if [ "${{ matrix.project }}" = "desktop-chromium" ]; then');
+    expect(workflow).toContain("timeout-minutes: 10");
+    expect(workflow).toContain("install --with-deps chromium\n");
+    expect(workflow).toContain("install --with-deps webkit\n");
+    expect(workflow).not.toContain("install --with-deps chromium webkit");
   });
   it("writes allowlisted results/status fields outside browser output and retains earlier specs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "ux-diagnostics-")); directories.push(directory);

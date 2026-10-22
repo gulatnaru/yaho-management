@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PrismaClient } from "@prisma/client";
@@ -8,12 +8,11 @@ import { assertSafeE2eDatabaseUrls } from "./db-safety";
 import { applyUxManifest, runtimePath, uxProjectSchema } from "./ux-manifest";
 import { seedUxFixtures } from "./ux-seed";
 import { prepareUxAuth } from "./ux-auth";
-import { publishUxInfrastructureFailure } from "./ux-diagnostics";
+import { publishUxInfrastructureFailure, publishUxNotSelected } from "./ux-diagnostics";
 import type { UxManifest } from "./ux-manifest";
 
-// Read-only list must precede mutation suites: its global pending badge is a
-// snapshot of the fixture DB. Separate processes also isolate import-time env.
-export const uxSpecOrder = ["family-list", "class-links", "family-detail", "ledger", "confirmation", "completion", "guardian", "full-journey"] as const;
+import { selectUxSpecs, uxSpecOrder, type UxSelection } from "./ux-selection";
+export { uxSpecOrder } from "./ux-selection";
 
 type Spec = typeof uxSpecOrder[number];
 export interface UxSpecOutcome { spec: Spec; failures: string[] }
@@ -21,6 +20,7 @@ export interface UxExecutionDependencies {
   db: Pick<PrismaClient, "reservationApplicationSettings">;
   exists: (path: string) => boolean;
   execute: (spec: Spec, project: UxManifest["project"], manifestPath: string) => Promise<number | null>;
+  recordSkipped: (project: string, spec: string, selection: UxSelection) => void;
   recordFailure: (project: string, spec: string, failures: string[]) => void;
 }
 
@@ -39,9 +39,16 @@ function executeSpec(spec: Spec, project: UxManifest["project"], path: string): 
 export async function executeUxSpecs(manifest: UxManifest, path: string, dependencies: UxExecutionDependencies): Promise<UxSpecOutcome[]> {
   const outcomes: UxSpecOutcome[] = [];
   const { db } = dependencies;
+  const selection = manifest.selection ?? selectUxSpecs();
   for (const spec of uxSpecOrder) {
     const failures: string[] = [];
     const file = `integrated-ux-${spec}.spec.ts`;
+    if (!selection.selectedSpecs.includes(`integrated-ux-${spec}`)) {
+      try { dependencies.recordSkipped(manifest.project, file, selection); }
+      catch { failures.push("UX_DIAGNOSTIC_PUBLICATION_FAILED"); }
+      outcomes.push({ spec, failures });
+      continue;
+    }
     let settingsOwned = false;
     let stage = "UX_SPEC_SETUP_FAILED";
     try {
@@ -74,11 +81,12 @@ export async function executeUxSpecs(manifest: UxManifest, path: string, depende
     }
     outcomes.push({ spec, failures });
   }
-  console.log(`[UX SUITE TOTAL] specs=${outcomes.length} failedSpecs=${outcomes.filter((outcome) => outcome.failures.length).length}`);
+  console.log(`[UX SUITE TOTAL] specs=${outcomes.length} selectedSpecs=${selection.selectedSpecs.length} focused=${selection.focused} failedSpecs=${outcomes.filter((outcome) => outcome.failures.length).length}`);
   return outcomes;
 }
 
 export async function runSuite(path: string) {
+  const selection = selectUxSpecs(process.env.UX_SPECS);
   assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
   const manifest = applyUxManifest(path);
   z.enum(["true", "false"]).parse(manifest.environment.UX_SECURE_LOOPBACK_COOKIE_SUPPORTED);
@@ -88,9 +96,11 @@ export async function runSuite(path: string) {
   for (const key of ["UX_READ_ONLY_CLASS_FIXTURES", "UX_PHASE2_CLASS_FIXTURES", "UX_FAMILY_LIST_FIXTURES", "UX_FAMILY_DETAIL_FIXTURES", "UX_LEDGER_FIXTURES", "UX_CONFIRMATION_FIXTURES"]) {
     if (!manifest.environment[key]) throw new Error("UX_FIXTURE_ENV_MISSING");
   }
+  manifest.selection = selection;
+  writeFileSync(runtimePath(path), JSON.stringify(manifest), { mode: 0o600 });
   const db = new PrismaClient();
   try {
-    const outcomes = await executeUxSpecs(manifest, path, { db, exists: existsSync, execute: executeSpec, recordFailure: publishUxInfrastructureFailure });
+    const outcomes = await executeUxSpecs(manifest, path, { db, exists: existsSync, execute: executeSpec, recordFailure: publishUxInfrastructureFailure, recordSkipped: publishUxNotSelected });
     if (outcomes.some((outcome) => outcome.failures.length)) throw new Error("UX_SUITE_FAILED");
   } finally { await db.$disconnect(); }
 }
@@ -105,6 +115,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch((error: unknown) => {
   // Never emit Prisma/Playwright errors which may include credential input or capabilities.
   const code = error instanceof Error && /^UX_[A-Z_]+$/.test(error.message) ? error.message : "UX_SETUP_OR_EXECUTION_ERROR";
-  console.error(`[${code}] Require fresh disposable DB, runtime fixture manifest, real authenticated states and passing scenarios. Sensitive diagnostics withheld.`);
+  if (code === "UX_SPECS_UNKNOWN_NAME") console.error("[UX_SPECS_UNKNOWN_NAME] UX_SPECS must contain only known integrated spec basenames; input withheld.");
+  else console.error(`[${code}] Require fresh disposable DB, runtime fixture manifest, real authenticated states and passing scenarios. Sensitive diagnostics withheld.`);
   process.exitCode = 1;
 });

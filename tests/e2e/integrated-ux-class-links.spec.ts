@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
-import { observeActions, saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
+import { observeActions, recordPriceStates, saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
 
 // Local-only admission: operators supply synthetic fixtures and authenticated states.
 // Phase 1 remains read-only; Phase 2 mutations are restricted to explicitly supplied run-owned classes.
@@ -159,14 +159,16 @@ test.describe.serial("Phase 2 dedicated local synthetic issuance", () => {
     const card = page.getByTestId("application-link-card");
     const priceBefore = await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } });
     traceUx("class-price", Date.now(), { priceBefore: priceBefore.applicationPrice, requestedPrice: 25000 });
-    expect(priceBefore.applicationPrice, "Fresh browser/run fixture starts without an application price").toBeNull();
-    await expect(card.getByText("참가비: 미설정", { exact: true })).toBeVisible();
-    try { await saveClassApplicationPrice(page, 25000); }
-    finally {
-      const stored = await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } });
-      traceUx("class-price", Date.now(), { requestedPrice: 25000, storedPrice: stored.applicationPrice,
-        displayedPrice: await card.getByText("참가비: 25,000원", { exact: true }).isVisible() });
+    try {
+      expect(priceBefore.applicationPrice, "Fresh browser/run fixture starts without an application price").toBeNull();
+      await expect(card.getByText("참가비: 미설정", { exact: true })).toBeVisible();
+    } finally {
+      await recordPriceStates(page, { event: "class-price", amount: null,
+        readStored: async () => (await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } })).applicationPrice,
+        liveFacts: async () => ({ displayedPrice: await card.getByText("참가비: 미설정", { exact: true }).isVisible() }) });
     }
+    await saveClassApplicationPrice(page, 25000, async () =>
+      (await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } })).applicationPrice);
     expect((await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } })).applicationPrice).toBe(25000);
     const address = card.getByRole("textbox", { name: "신청 링크 주소", exact: true });
     const issue = observeActions(page, "class-link-fixture");

@@ -71,7 +71,37 @@ export function observeActions(page: Page, event: "deposit" | "confirmation" | "
   };
 }
 
-export async function saveClassApplicationPrice(page: Page, amount: number) {
+/** Fresh HTTP is separate from the live DOM; no bodies or capability paths escape.
+ * Each read fails independently, so an unavailable state cannot look stale. */
+export async function recordPriceStates(page: Page, options: {
+  event: "class-price" | "guardian-review";
+  amount: number | null;
+  readStored?: () => Promise<number | null>;
+  liveFacts: () => Promise<UxTrace["facts"]>;
+  serverPath?: string;
+  serverPriceText?: string;
+  facts?: UxTrace["facts"];
+}) {
+  const started = Date.now();
+  const facts: UxTrace["facts"] = { ...options.facts, priceSnapshot: true, ...(options.amount === null ? { priceUnsetExpected: true } : { requestedPrice: options.amount }) };
+  try { Object.assign(facts, await options.liveFacts()); }
+  catch { facts.livePriceReadFailed = true; }
+  if (options.readStored) {
+    try { facts.storedPrice = await options.readStored(); }
+    catch { facts.storedPriceReadFailed = true; }
+  }
+  try {
+    const response = await page.request.get(options.serverPath ?? new URL(page.url()).pathname, { timeout: 5000 });
+    if (!response.ok()) facts.serverPriceReadFailed = true;
+    else {
+      const html = (await response.text()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+      facts.serverPriceMatches = html.includes(options.serverPriceText ?? (options.amount === null ? "참가비: 미설정" : `참가비: ${options.amount.toLocaleString("ko-KR")}원`));
+    }
+  } catch { facts.serverPriceReadFailed = true; }
+  traceUx(options.event, started, facts);
+}
+
+export async function saveClassApplicationPrice(page: Page, amount: number, readStored?: () => Promise<number | null>) {
   const card = page.getByTestId("application-link-card");
   const input = card.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true });
   await waitForReactHandler(input, "onChange");
@@ -82,7 +112,7 @@ export async function saveClassApplicationPrice(page: Page, amount: number) {
     action.mark({ hydrated: true, requestedPrice: amount });
     await input.fill(String(amount)); await expect(input).toHaveValue(String(amount));
     await card.getByRole("button", { name: "신청금액 저장", exact: true }).click();
-    action.mark({ clicked: true });
+    action.mark({ clicked: true, requestedPrice: amount });
     await expect(card.getByRole("status").filter({ hasText: /^신청금액을 저장했습니다\.$/ })).toHaveText("신청금액을 저장했습니다.");
     await action.settled();
     // The success notice precedes router.refresh(). Require the server projection,
@@ -91,16 +121,11 @@ export async function saveClassApplicationPrice(page: Page, amount: number) {
     await expect(input).toHaveValue(String(amount));
     action.mark({ displayedPrice: true });
   } finally {
-    action.mark({ savePending: await input.isDisabled().catch(() => false),
-      displayedPrice: await card.getByText(`참가비: ${amount.toLocaleString("ko-KR")}원`, { exact: true }).isVisible(),
-      alertCount: await card.getByRole("alert").count() });
     action.stop();
-    // Read-only diagnostic: do not remount/reload the live browser to hide stale
-    // props. Consume no action body and emit only the projection comparison.
-    await (async () => {
-      const response = await page.request.get(new URL(page.url()).pathname, { timeout: 5000 });
-      const html = (await response.text()).replace(/<!--[\s\S]*?-->/g, "");
-      action.mark({ serverPriceMatches: response.ok() && html.includes(`참가비: ${amount.toLocaleString("ko-KR")}원`) });
-    })().catch(() => action.mark({ diagnosticReadFailed: true }));
+    await recordPriceStates(page, { event: "class-price", amount, readStored, liveFacts: async () => ({
+      savePending: await input.isDisabled(),
+      displayedPrice: await card.getByText(`참가비: ${amount.toLocaleString("ko-KR")}원`, { exact: true }).isVisible(),
+      alertCount: await card.getByRole("alert").count(),
+    }) });
   }
 }

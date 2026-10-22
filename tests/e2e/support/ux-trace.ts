@@ -21,7 +21,11 @@ export const uxTraceSchema = z.object({
     reservation: z.boolean().optional(), payment: z.boolean().optional(), mapping: z.boolean().optional(),
     mappingMatches: z.boolean().optional(), siblingUnchanged: z.boolean().optional(),
     D: z.number().int().optional(), A: z.number().int().optional(), P: z.number().int().optional(), R: z.number().int().optional(), T: z.number().int().optional(),
-    activePlaintextLinks: z.number().int().nonnegative().optional(), addressCount: z.number().int().nonnegative().optional(),
+    activePlaintextLinks: z.number().int().nonnegative().optional(), addressCount: z.number().int().nonnegative().optional(), addressPresent: z.boolean().optional(),
+    priceSnapshot: z.boolean().optional(), priceUnsetExpected: z.boolean().optional(), storedPriceReadFailed: z.boolean().optional(), serverPriceReadFailed: z.boolean().optional(), livePriceReadFailed: z.boolean().optional(),
+    summaryExpectedPrice: z.number().int().optional(), summaryExpectedTotal: z.number().int().optional(),
+    expectedTotal: z.number().int().optional(), previousPrice: z.number().int().optional(), previousTotal: z.number().int().optional(),
+    summaryPriceMatches: z.boolean().optional(), summaryTotalMatches: z.boolean().optional(),
     priceBefore: z.number().int().nullable().optional(), requestedPrice: z.number().int().optional(), storedPrice: z.number().int().nullable().optional(), displayedPrice: z.boolean().optional(),
     hrefMatches: z.boolean().optional(), defaultPrevented: z.boolean().optional(), hitTarget: z.boolean().optional(),
     menuClosed: z.boolean().optional(), navigationRequests: z.number().int().nonnegative().optional(), finalUrlMatches: z.boolean().optional(),
@@ -36,8 +40,16 @@ export const uxTraceSchema = z.object({
 export type UxTrace = z.infer<typeof uxTraceSchema>;
 
 export function safeUxTraces(annotations: readonly { type: string; description?: string }[]): UxTrace[] {
-  return annotations.filter((item) => item.type === "ux-trace").slice(0, 50).flatMap((item) => {
+  const valid = annotations.filter((item) => item.type === "ux-trace").flatMap((item) => {
     try { const result = uxTraceSchema.safeParse(JSON.parse(item.description ?? "")); return result.success ? [result.data] : []; }
     catch { return []; }
   });
+  // Retain assertion-time snapshots even when transport events fill the budget.
+  const snapshots = valid.filter((item) => item.facts.priceSnapshot).slice(-50);
+  const retained = new Set(snapshots);
+  for (const item of valid) {
+    if (retained.size >= 50) break;
+    retained.add(item);
+  }
+  return valid.filter((item) => retained.has(item));
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeUxSpecs, uxSpecOrder, type UxExecutionDependencies } from "../../e2e/support/ux-cli";
+import { selectUxSpecs } from "../../e2e/support/ux-selection";
 import UxReporter from "../../e2e/support/ux-reporter";
 import type { FullResult, Suite, TestCase, TestResult } from "@playwright/test/reporter";
 import type { UxManifest } from "../../e2e/support/ux-manifest";
@@ -9,7 +10,7 @@ function setup() {
   const settings = { count: vi.fn(async () => 0), create: vi.fn(async () => ({})), deleteMany: vi.fn(async () => ({ count: 1 })) };
   const dependencies: UxExecutionDependencies = {
     db: { reservationApplicationSettings: settings } as unknown as UxExecutionDependencies["db"],
-    exists: vi.fn(() => true), execute: vi.fn(async () => 0), recordFailure: vi.fn(),
+    exists: vi.fn(() => true), execute: vi.fn(async () => 0), recordFailure: vi.fn(), recordSkipped: vi.fn(),
   };
   return { settings, dependencies };
 }
@@ -73,5 +74,31 @@ describe("UX all-spec strict aggregation", () => {
     const outcomes = await executeUxSpecs(manifest, "synthetic-manifest", dependencies);
     expect(outcomes[1].failures).toEqual(["UX_SPEC_SETUP_FAILED", "UX_DIAGNOSTIC_PUBLICATION_FAILED"]);
     expect(vi.mocked(dependencies.execute).mock.calls.at(-1)?.[0]).toBe("full-journey");
+  });
+});
+
+describe("focused UX selection and accounting", () => {
+  it.each([undefined, "", "  "])("defaults %s to all eight specs", (value) => {
+    expect(selectUxSpecs(value)).toEqual({ selectedSpecs: uxSpecOrder.map((spec) => `integrated-ux-${spec}`), focused: false });
+  });
+  it.each(["unknown", "integrated-ux-ledger,", "integrated-ux-ledger.spec.ts", "PRIVATE_CANARY"])("rejects unknown names without reflecting input", (value) => {
+    expect(() => selectUxSpecs(value)).toThrow(/^UX_SPECS_UNKNOWN_NAME$/);
+  });
+  it("uses original order, deduplicates, skips unselected specs and never provisions their settings", async () => {
+    const { settings, dependencies } = setup();
+    const selection = selectUxSpecs("integrated-ux-full-journey, integrated-ux-guardian,integrated-ux-guardian");
+    const outcomes = await executeUxSpecs({ ...manifest, selection }, "synthetic-manifest", dependencies);
+    expect(vi.mocked(dependencies.execute).mock.calls.map(([spec]) => spec)).toEqual(["guardian", "full-journey"]);
+    expect(dependencies.recordSkipped).toHaveBeenCalledTimes(6);
+    expect(dependencies.recordSkipped).toHaveBeenCalledWith(manifest.project, "integrated-ux-class-links.spec.ts", selection);
+    expect(settings.count).not.toHaveBeenCalled(); expect(settings.create).not.toHaveBeenCalled();
+    expect(outcomes).toHaveLength(8); expect(outcomes.every((outcome) => !outcome.failures.length)).toBe(true);
+  });
+  it("fails closed if omitted-spec accounting cannot be published", async () => {
+    const { dependencies } = setup();
+    vi.mocked(dependencies.recordSkipped).mockImplementationOnce(() => { throw new Error("PRIVATE_CANARY"); });
+    const outcomes = await executeUxSpecs({ ...manifest, selection: selectUxSpecs("integrated-ux-ledger") }, "synthetic-manifest", dependencies);
+    expect(outcomes[0].failures).toEqual(["UX_DIAGNOSTIC_PUBLICATION_FAILED"]);
+    expect(dependencies.execute).toHaveBeenCalledTimes(1);
   });
 });

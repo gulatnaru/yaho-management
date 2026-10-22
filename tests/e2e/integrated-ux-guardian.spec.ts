@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page, type Browser } from "@playwright/test";
 import { generateApplicationCapabilityToken, generateApplicationLinkToken, hashApplicationCapabilityToken } from "@/lib/reservation-applications/token";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
-import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
+import { enterGuardianInformation, enterConsentReview, recordGuardianPriceStates } from "./support/integrated-ux-guardian";
 import { applicationReviewScope, issueApplicationPriceReview } from "@/server/reservation-applications/price-review";
 import { saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
 
@@ -76,17 +76,18 @@ async function operator(browser: Browser, baseURL: string) {
   const context = await browser.newContext({ baseURL, storageState: process.env.UX_ADMIN_STORAGE_STATE });
   return { context, page: await context.newPage() };
 }
+async function readGuardianPrice() {
+  return (await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } })).applicationPrice;
+}
+async function priceCheckpoint(page: Page, amount: number, total: number, assertion: () => Promise<void>, previous?: { amount: number; total: number }, summaryAmount = amount, summaryTotal = total) {
+  try { await assertion(); }
+  finally { await recordGuardianPriceStates(page, { amount, total, previous, summaryAmount, summaryTotal, serverPath: fixture.path, readStored: readGuardianPrice }); }
+}
 async function changePrice(browser: Browser, baseURL: string, amount: number) {
   const admin = await operator(browser, baseURL);
   try {
     await admin.page.goto(`/classes/${fixture.classes[0]}`);
-    const before = await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } });
-    try { await saveClassApplicationPrice(admin.page, amount); }
-    finally {
-      const stored = await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } });
-      traceUx("class-price", Date.now(), { priceBefore: before.applicationPrice, requestedPrice: amount, storedPrice: stored.applicationPrice,
-        displayedPrice: await admin.page.getByTestId("application-link-card").getByText(`참가비: ${amount.toLocaleString("ko-KR")}원`, { exact: true }).isVisible() });
-    }
+    await saveClassApplicationPrice(admin.page, amount, readGuardianPrice);
     expect((await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } })).applicationPrice).toBe(amount);
   } finally { await admin.context.close(); }
 }
@@ -123,7 +124,7 @@ test.describe("Phase 8 guardian three-step input", () => {
     await expect(page.getByText("3단계 중 1단계", { exact: false })).toBeVisible();
     await expect(page.locator("body")).not.toContainText(/999,999원|비공개 운영 메모|초대자비공개가족|잔여석|정원 8/);
     if (fixture.legacy) await expect(page.locator("body")).not.toContainText(/참가비|0원/);
-    else await expect(page.locator("body")).toContainText("60,000원");
+    else await priceCheckpoint(page, 60000, 60000, async () => { await expect(page.locator("body")).toContainText("60,000원"); });
     await details(page); await page.getByLabel("보호자 이름").press("Enter"); expect(await applications()).toHaveLength(0);
     await enterConsentReview(page); await required(page);
     await expect(page.getByRole("group", { name: "선택 동의", exact: true }).getByRole("checkbox")).toHaveCount(2);
@@ -149,15 +150,23 @@ test.describe("Phase 8 guardian three-step input", () => {
   });
 
   test("100000 to 105000 review, second submit-time change, input/consent preservation and explicit resubmission", async ({ page, browser, baseURL }) => {
-    await setup(); await page.goto(fixture.path); await details(page); await page.getByRole("button", { name: "내 자녀 추가" }).click(); await fill(page, 1);
+    await setup(); await page.goto(fixture.path);
+    await priceCheckpoint(page, 60000, 60000, async () => { await expect(page.locator("body")).toContainText("60,000원"); });
+    await details(page); await page.getByRole("button", { name: "내 자녀 추가" }).click(); await fill(page, 1);
     await changePrice(browser, baseURL!, 65000);
-    await enterConsentReview(page); await expect(page.locator("#application-reviewedPriceProof")).toContainText("60,000원 → 65,000원");
-    await expect(page.locator("#application-reviewedPriceProof")).toContainText("100,000원 → 105,000원"); await required(page); await page.locator("#application-child-1-photoShareConsent").check();
+    await priceCheckpoint(page, 65000, 105000, async () => {
+      await enterConsentReview(page); await expect(page.locator("#application-reviewedPriceProof")).toContainText("60,000원 → 65,000원");
+      await expect(page.locator("#application-reviewedPriceProof")).toContainText("100,000원 → 105,000원");
+    }, { amount: 60000, total: 100000 }, 60000, 100000); await required(page); await page.locator("#application-child-1-photoShareConsent").check();
     const submit = page.getByRole("button", { name: "신청서 제출", exact: true }); await expect(submit).toBeDisabled();
-    await expect(page.getByRole("complementary", { name: "신청 요약", exact: true })).toContainText("예상 총 참가비 100,000원");
+    await priceCheckpoint(page, 65000, 105000, async () => {
+      await expect(page.getByRole("complementary", { name: "신청 요약", exact: true })).toContainText("예상 총 참가비 100,000원");
+    }, { amount: 60000, total: 100000 }, 60000, 100000);
     await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0);
     const summary = page.getByRole("complementary", { name: "신청 요약", exact: true });
-    await expect(summary).toContainText("65,000원"); await expect(summary).toContainText("예상 총 참가비 105,000원");
+    await priceCheckpoint(page, 65000, 105000, async () => {
+      await expect(summary).toContainText("65,000원"); await expect(summary).toContainText("예상 총 참가비 105,000원");
+    });
     // Inspect the preserved controlled drafts as well as the review's text.
     await page.getByRole("button", { name: "보호자·자녀 정보 수정", exact: true }).click();
     await expect(page.locator("#application-child-1-childName")).toHaveValue("합성자녀1");
@@ -168,11 +177,16 @@ test.describe("Phase 8 guardian three-step input", () => {
     await expect(page.locator("#application-programTerms")).toBeChecked();
     await expect(page.locator("#application-child-1-photoShareConsent")).toBeChecked();
     traceUx("guardian-review", Date.now(), { priceChangeVisible: true, totalVisible: true, inputsPreserved: true, consentsPreserved: true });
-    await changePrice(browser, baseURL!, 70000); await submit.click();
-    await expect(page.locator("#application-reviewedPriceProof")).toContainText("65,000원 → 70,000원"); await expect(page.locator("#application-reviewedPriceProof")).toContainText("105,000원 → 110,000원");
+    await changePrice(browser, baseURL!, 70000);
+    await priceCheckpoint(page, 70000, 110000, async () => {
+      await submit.click();
+      await expect(page.locator("#application-reviewedPriceProof")).toContainText("65,000원 → 70,000원"); await expect(page.locator("#application-reviewedPriceProof")).toContainText("105,000원 → 110,000원");
+    }, { amount: 65000, total: 105000 }, 65000, 105000);
     expect(await applications()).toHaveLength(0); await expect(page.locator("#application-programTerms")).toBeChecked(); await expect(page.locator("#application-child-1-photoShareConsent")).toBeChecked();
     await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0);
-    await expect(summary).toContainText("70,000원"); await expect(summary).toContainText("예상 총 참가비 110,000원");
+    await priceCheckpoint(page, 70000, 110000, async () => {
+      await expect(summary).toContainText("70,000원"); await expect(summary).toContainText("예상 총 참가비 110,000원");
+    });
     await submit.click(); await expect(page).toHaveURL(/\/apply\/complete$/);
     expect((await applications()).map((row) => row.quotedAmount)).toEqual([70000, 40000]); await noFinance();
   });

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { Page, Request, Response } from "@playwright/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { hasReactHandler, observeActions, recordTag } from "../../e2e/support/integrated-ux-sync";
+import { hasReactHandler, observeActions, recordTag, recordPriceStates } from "../../e2e/support/integrated-ux-sync";
 import { safeUxTraces } from "../../e2e/support/ux-trace";
 
 // Use one immediate poll evaluation for negative event sequences: the test
@@ -116,5 +116,44 @@ describe("Server Action response observation is separate from application receip
     const action = request(); page.emit("request", action); respond(action); await observation.settled();
     expect(safeUxTraces(annotations).at(-1)!.facts).toMatchObject({ requests: 1, responses: 1, finished: 0, reads: 1, readResponses: 1, readFinished: 1 });
     observation.stop();
+  });
+});
+
+describe("three-state assertion-time price diagnostics", () => {
+  it("separates persisted, fresh HTML and stale live state without reloading or exposing response data", async () => {
+    const get = vi.fn(async () => ({ ok: () => true, text: async () => '<p>참가비: <!-- -->25,000<!-- -->원</p><script>PRIVATE_CANARY</script>' }));
+    const page = { url: () => "http://127.0.0.1:3000/classes/run-owned", request: { get } } as unknown as Page;
+    await recordPriceStates(page, { event: "class-price", amount: 25000, readStored: async () => 25000, liveFacts: async () => ({ displayedPrice: false }) });
+    expect(get).toHaveBeenCalledWith("/classes/run-owned", { timeout: 5000 });
+    expect(safeUxTraces(annotations)[0].facts).toEqual({ priceSnapshot: true, requestedPrice: 25000, storedPrice: 25000, displayedPrice: false, serverPriceMatches: true });
+    expect(JSON.stringify(annotations)).not.toContain("PRIVATE_CANARY");
+  });
+  it("identifies the expected initial null price independently of the later requested amount", async () => {
+    const page = { request: { get: async () => ({ ok: () => true, text: async () => "<p>참가비: 미설정</p>" }) } } as unknown as Page;
+    await recordPriceStates(page, { event: "class-price", amount: null, serverPath: "/classes/run-owned", readStored: async () => null, liveFacts: async () => ({ displayedPrice: true }) });
+    expect(safeUxTraces(annotations)[0].facts).toEqual({ priceSnapshot: true, priceUnsetExpected: true, storedPrice: null, serverPriceMatches: true, displayedPrice: true });
+    expect(safeUxTraces(annotations)[0].facts.requestedPrice).toBeUndefined();
+  });
+  it("does not mistake RSC script content or HTTP errors for a fresh rendered price", async () => {
+    for (const ok of [true, false]) {
+      const page = { request: { get: async () => ({ ok: () => ok, text: async () => '<script>참가비: 25,000원</script><p>참가비: 미설정</p>' }) } } as unknown as Page;
+      await recordPriceStates(page, { event: "class-price", amount: 25000, serverPath: "/classes/run-owned", readStored: async () => null, liveFacts: async () => ({ displayedPrice: false }) });
+      const facts = safeUxTraces(annotations).at(-1)!.facts;
+      expect(facts.storedPrice).toBeNull();
+      if (ok) expect(facts.serverPriceMatches).toBe(false);
+      else { expect(facts.serverPriceReadFailed).toBe(true); expect(facts.serverPriceMatches).toBeUndefined(); }
+    }
+  });
+  it("keeps failed states unknown independently and still preserves available states", async () => {
+    const page = { request: { get: async () => { throw new Error("PRIVATE_CANARY"); } } } as unknown as Page;
+    await recordPriceStates(page, { event: "guardian-review", amount: 70000, serverPath: "/apply/group/PRIVATE_CANARY", readStored: async () => { throw new Error("DB_CANARY"); }, liveFacts: async () => ({ displayedPrice: true }) });
+    expect(safeUxTraces(annotations)[0].facts).toEqual({ priceSnapshot: true, requestedPrice: 70000, storedPriceReadFailed: true, serverPriceReadFailed: true, displayedPrice: true });
+    expect(JSON.stringify(annotations)).not.toMatch(/PRIVATE_CANARY|DB_CANARY/);
+  });
+  it("retains final price snapshots after noisy transport exceeds the annotation budget", () => {
+    const transport = { type: "ux-trace", description: JSON.stringify({ event: "class-price", elapsedMs: 0, facts: { requests: 1 } }) };
+    const snapshot = { event: "guardian-review", elapsedMs: 1, facts: { priceSnapshot: true, requestedPrice: 70000, storedPrice: 70000, serverPriceMatches: true, displayedPrice: false } };
+    const projected = safeUxTraces([...Array.from({ length: 70 }, () => transport), { type: "ux-trace", description: JSON.stringify(snapshot) }]);
+    expect(projected).toHaveLength(50); expect(projected.at(-1)).toEqual(snapshot);
   });
 });

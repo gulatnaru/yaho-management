@@ -75,7 +75,7 @@ test("real ADMIN login → class creation/prices → issued link → two childre
       await expect(address).toHaveCount(1);
       await expect(address).not.toHaveValue("");
     } finally {
-      issuance.mark({ addressCount: await address.count(),
+      issuance.mark({ addressCount: await address.count(), addressPresent: await address.count() > 0,
         receiptVisible: await composer.getByRole("status").filter({ hasText: /^그룹과 신청 링크를 함께 발급했습니다\./ }).isVisible(),
         alertCount: await composer.getByRole("alert").count() });
       issuance.stop();
@@ -83,11 +83,11 @@ test("real ADMIN login → class creation/prices → issued link → two childre
         const groups = await db.reservationApplicationGroup.findMany({ where: { classes: { some: { classScheduleId: { in: classIds } } } },
           select: { id: true, links: { select: { id: true, isActive: true } }, classes: { select: { classScheduleId: true } } } });
         const issued = groups.filter((group) => group.classes.length === classIds.length && group.classes.every((row) => classIds.includes(row.classScheduleId)));
+        traceUx("class-link-fixture", Date.now(), { issuedGroups: issued.length,
+          activeLinks: issued.flatMap((group) => group.links).filter((link) => link.isActive).length });
         const projection = await page.request.get("/reservation-applications/groups", { timeout: 5000 });
         const html = await projection.text();
-        traceUx("class-link-fixture", Date.now(), { issuedGroups: issued.length,
-          activeLinks: issued.flatMap((group) => group.links).filter((link) => link.isActive).length,
-          serverScopePresent: projection.ok() && issued.length === 1 && html.includes(`/reservation-applications/groups/${issued[0]!.id}`) });
+        traceUx("class-link-fixture", Date.now(), { serverScopePresent: projection.ok() && issued.length === 1 && html.includes(`/reservation-applications/groups/${issued[0]!.id}`) });
       })().catch(() => traceUx("class-link-fixture", Date.now(), { diagnosticReadFailed: true }));
     }
     const link = await address.inputValue();
