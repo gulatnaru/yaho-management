@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
 import { assertFamilyLedger } from "./support/integrated-ux-invariants";
-import { observeActions, recordTag, saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
+import { observeActions, recordTag, saveClassApplicationPrice, traceUx, waitForReactHandler } from "./support/integrated-ux-sync";
 
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
@@ -56,16 +56,40 @@ test("real ADMIN login → class creation/prices → issued link → two childre
     // all() snapshots immediately; a streamed form can still have no options.
     // Require both newly created classes before performing either UI selection.
     await expect(classCheckboxes).toHaveCount(2);
+    await waitForReactHandler(composer, "onSubmit");
     for (let index = 0; index < classIds.length; index++) {
+      await waitForReactHandler(classCheckboxes.nth(index), "onChange");
       await classCheckboxes.nth(index).check();
       await expect(classCheckboxes.nth(index)).toBeChecked();
     }
     await expect(composer.getByRole("checkbox", { checked: true })).toHaveCount(2);
     const issueLink = composer.getByRole("button", { name: "선택한 클래스로 새 링크 발급", exact: true });
     await expect(issueLink).toBeEnabled();
-    await issueLink.click();
     const address = page.getByRole("textbox", { name: "신청 링크 주소", exact: true });
-    await expect(address).not.toHaveValue("");
+    const issuance = observeActions(page, "class-link-fixture");
+    try {
+      issuance.mark({ hydrated: true, selectedCandidates: await composer.getByRole("checkbox", { checked: true }).count() });
+      await issueLink.click(); issuance.mark({ clicked: true });
+      await expect(composer.getByRole("status")).toHaveText("그룹과 신청 링크를 함께 발급했습니다. 원문은 발급 직후 현재 화면에서만 확인할 수 있습니다.");
+      await issuance.settled();
+      await expect(address).toHaveCount(1);
+      await expect(address).not.toHaveValue("");
+    } finally {
+      issuance.mark({ addressCount: await address.count(),
+        receiptVisible: await composer.getByRole("status").filter({ hasText: /^그룹과 신청 링크를 함께 발급했습니다\./ }).isVisible(),
+        alertCount: await composer.getByRole("alert").count() });
+      issuance.stop();
+      await (async () => {
+        const groups = await db.reservationApplicationGroup.findMany({ where: { classes: { some: { classScheduleId: { in: classIds } } } },
+          select: { id: true, links: { select: { id: true, isActive: true } }, classes: { select: { classScheduleId: true } } } });
+        const issued = groups.filter((group) => group.classes.length === classIds.length && group.classes.every((row) => classIds.includes(row.classScheduleId)));
+        const projection = await page.request.get("/reservation-applications/groups", { timeout: 5000 });
+        const html = await projection.text();
+        traceUx("class-link-fixture", Date.now(), { issuedGroups: issued.length,
+          activeLinks: issued.flatMap((group) => group.links).filter((link) => link.isActive).length,
+          serverScopePresent: projection.ok() && issued.length === 1 && html.includes(`/reservation-applications/groups/${issued[0]!.id}`) });
+      })().catch(() => traceUx("class-link-fixture", Date.now(), { diagnosticReadFailed: true }));
+    }
     const link = await address.inputValue();
     expect(new URL(link).origin).toBe(baseURL);
     const guardian = await guardianContext.newPage(); await guardian.goto(link);

@@ -55,12 +55,12 @@ test.describe("Phase 3 read-only family list", () => {
       await expect(openMenu).toHaveAttribute("aria-expanded", "false");
     }
     await page.getByLabel("상태", { exact: true }).selectOption("all");
-    // This is a native GET document navigation. Matching the URL alone only
-    // observes its commit; finish loading it before clicking a Next Link in it.
+    // Observe the native GET commit, then the rendered filter state and hydrated
+    // Link below. Document load is not the client-navigation readiness signal.
     await Promise.all([
       page.waitForURL((url) => url.pathname === "/reservation-applications"
         && !url.searchParams.has("page") && url.searchParams.get("status") === "all"
-        && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId, { waitUntil: "load", timeout: 15000 }),
+        && url.searchParams.get("classScheduleId") === fixtures!.classScheduleId, { waitUntil: "commit", timeout: 15000 }),
       page.getByRole("button", { name: "조회", exact: true }).click(),
     ]);
     await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
@@ -75,11 +75,29 @@ test.describe("Phase 3 read-only family list", () => {
     const started = Date.now();
     const matches = (url: URL) => url.pathname === "/reservation-applications"
       && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all";
-    let navigationRequests = 0;
+    const navigationRequests = new Set<import("@playwright/test").Request>();
+    let navigationResponses = 0; let navigationFinished = 0; let navigationFailed = 0; let pageErrors = 0;
+    let clickRequested = false;
     const observe = (request: import("@playwright/test").Request) => {
-      if (request.method() === "GET" && matches(new URL(request.url()))) navigationRequests++;
+      if (request.method() === "GET" && matches(new URL(request.url()))) {
+        navigationRequests.add(request);
+        traceUx("filter-clear", started, { navigationRequests: navigationRequests.size, requestAfterClick: clickRequested });
+      }
     };
-    page.on("request", observe);
+    const response = (item: import("@playwright/test").Response) => {
+      if (navigationRequests.has(item.request())) {
+        navigationResponses++;
+        traceUx("filter-clear", started, { navigationResponses, navigationHttpStatus: item.status(), responseAfterClick: clickRequested });
+      }
+    };
+    const finished = (request: import("@playwright/test").Request) => {
+      if (navigationRequests.has(request)) { navigationFinished++; traceUx("filter-clear", started, { navigationFinished }); }
+    };
+    const failed = (request: import("@playwright/test").Request) => {
+      if (navigationRequests.has(request)) { navigationFailed++; traceUx("filter-clear", started, { navigationFailed }); }
+    };
+    const pageError = () => { pageErrors++; };
+    page.on("request", observe); page.on("response", response); page.on("requestfinished", finished); page.on("requestfailed", failed); page.on("pageerror", pageError);
     await page.exposeFunction("uxFilterClearClick", (prevented: boolean) => {
       traceUx("filter-clear", started, { clicked: true, defaultPrevented: prevented });
     });
@@ -98,14 +116,19 @@ test.describe("Phase 3 read-only family list", () => {
         // Link handler has had the opportunity to prevent native navigation.
         if (element.contains(event.target as Node)) void (window as unknown as { uxFilterClearClick: (prevented: boolean) => Promise<void> }).uxFilterClearClick(event.defaultPrevented);
       }, { once: true }));
-      await Promise.all([
-        page.waitForURL(matches, { timeout: 15000 }),
-        removeClass.click(),
-      ]);
+      clickRequested = true;
+      await removeClass.click();
+      // A Next Link may use the prefetched RSC. Require the actual URL and the
+      // resulting UI, independently of document load or a new network request.
+      await expect(page).toHaveURL(matches, { timeout: 15000 });
+      await expect(removeClass).toHaveCount(0);
     } finally {
-      page.off("request", observe);
+      page.off("request", observe); page.off("response", response); page.off("requestfinished", finished); page.off("requestfailed", failed); page.off("pageerror", pageError);
       const final = new URL(page.url());
-      traceUx("filter-clear", started, { navigationRequests, finalUrlMatches: matches(final), pageReset: !final.searchParams.has("page"),
+      traceUx("filter-clear", started, { navigationRequests: navigationRequests.size, navigationResponses, navigationFinished, navigationFailed, pageErrors,
+        documentReady: await page.evaluate(() => document.readyState !== "loading").catch(() => false),
+        classFilterPresent: final.searchParams.has("classScheduleId"),
+        finalUrlMatches: matches(final), pageReset: !final.searchParams.has("page"),
         statusAll: await page.getByLabel("상태", { exact: true }).inputValue({ timeout: 1000 }).catch(() => undefined) === "all",
         notificationAll: await page.getByLabel("보호자 입금 알림", { exact: true }).inputValue({ timeout: 1000 }).catch(() => undefined) === "all",
         bankRecordAll: await page.getByLabel("은행 확인 입금", { exact: true }).inputValue({ timeout: 1000 }).catch(() => undefined) === "all" });

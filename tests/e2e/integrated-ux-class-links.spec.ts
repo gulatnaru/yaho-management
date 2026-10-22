@@ -98,15 +98,17 @@ test.describe("Phase 1 existing synthetic class inventory (read only)", () => {
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
       await page.reload();
       await card.getByRole("button", { name: "링크 복사", exact: true }).click();
-      await expect(card.getByRole("status")).toContainText("신청 링크를 복사했습니다");
+      await expect(card.getByRole("status").filter({ hasText: /^신청 링크를 복사했습니다\.$/ })).toHaveText("신청 링크를 복사했습니다.");
       expect((await page.evaluate(() => navigator.clipboard.readText())) === raw).toBe(true);
     }
     await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: undefined }));
     await card.getByRole("button", { name: "공유하기", exact: true }).click();
-    await expect(card.getByRole("status")).toContainText("공유 기능을 사용할 수 없습니다");
+    await expect(card.getByRole("status").filter({ hasText: /^공유 기능을 사용할 수 없습니다\. 링크를 복사해 전달해 주세요\.$/ })).toHaveText("공유 기능을 사용할 수 없습니다. 링크를 복사해 전달해 주세요.");
     await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: async () => { throw new DOMException("Cancelled", "AbortError"); } }));
     await card.getByRole("button", { name: "공유하기", exact: true }).click();
-    await expect(card.getByRole("alert")).toHaveCount(0);
+    // CopyControl owns its independent denied-clipboard alert. Cancelling
+    // sharing must add no share failure; it need not clear the copy fallback.
+    await expect(card.getByRole("alert").filter({ hasText: /^공유하지 못했습니다\. 링크를 복사해 전달해 주세요\.$/ })).toHaveCount(0);
     expect((await address.inputValue()) === raw).toBe(true);
     const popupPromise = page.waitForEvent("popup");
     await card.getByRole("link", { name: "신청 화면 확인" }).click();
@@ -152,15 +154,18 @@ test.describe.serial("Phase 2 dedicated local synthetic issuance", () => {
     const id = phase2!.priceClass;
     // Fixtures must be dedicated to this browser project/run and start without links.
     const existing = await db.reservationApplicationGroup.count({ where: { classes: { some: { classScheduleId: id } } } });
-    test.skip(existing > 0, "Provide fresh synthetic classes for each browser project; never rotate a fixture implicitly.");
+    expect(existing, "Run-owned issuance class must be fresh; never rotate or skip a reused fixture").toBe(0);
     await page.goto(`/classes/${id}`);
     const card = page.getByTestId("application-link-card");
     const priceBefore = await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } });
     traceUx("class-price", Date.now(), { priceBefore: priceBefore.applicationPrice, requestedPrice: 25000 });
+    expect(priceBefore.applicationPrice, "Fresh browser/run fixture starts without an application price").toBeNull();
+    await expect(card.getByText("참가비: 미설정", { exact: true })).toBeVisible();
     try { await saveClassApplicationPrice(page, 25000); }
     finally {
       const stored = await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } });
-      traceUx("class-price", Date.now(), { requestedPrice: 25000, storedPrice: stored.applicationPrice, displayedPrice: await card.getByText("참가비: 25,000원", { exact: true }).isVisible() });
+      traceUx("class-price", Date.now(), { requestedPrice: 25000, storedPrice: stored.applicationPrice,
+        displayedPrice: await card.getByText("참가비: 25,000원", { exact: true }).isVisible() });
     }
     expect((await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } })).applicationPrice).toBe(25000);
     const address = card.getByRole("textbox", { name: "신청 링크 주소", exact: true });
