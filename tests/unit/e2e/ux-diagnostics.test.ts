@@ -77,13 +77,13 @@ describe("synthetic assertion diagnostics privacy", () => {
     }
     expect(statuses.runs[0].counts.blocked).toBe(0);
   });
-  it("installs only the matrix browser with a bounded step timeout", () => {
+  it("installs the Chromium auth harness plus each matrix test engine with a bounded timeout", () => {
     const workflow = readFileSync(".github/workflows/e2e-ux.yml", "utf8");
     expect(workflow).toContain('if [ "${{ matrix.project }}" = "desktop-chromium" ]; then');
     expect(workflow).toContain("timeout-minutes: 10");
     expect(workflow).toContain("install --with-deps chromium\n");
-    expect(workflow).toContain("install --with-deps webkit\n");
-    expect(workflow).not.toContain("install --with-deps chromium webkit");
+    expect(workflow).toContain("else\n            npx playwright install --with-deps chromium webkit\n");
+    expect(readFileSync("tests/e2e/support/ux-auth.ts", "utf8")).toContain("chromium.launch(");
   });
   it("writes allowlisted results/status fields outside browser output and retains earlier specs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "ux-diagnostics-")); directories.push(directory);

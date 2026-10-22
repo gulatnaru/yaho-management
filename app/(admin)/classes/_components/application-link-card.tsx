@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { issueApplicationLink, issueClassApplicationLink, stopApplicationLink, upgradeLegacyApplicationLink } from "@/app/(admin)/reservation-applications/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,10 +18,18 @@ import type { LinkCompositionOption } from "@/lib/reservation-applications/link-
 import type { ClassApplicationLinksView } from "@/lib/reservation-applications/link-queries";
 import { LinkScopeList } from "./link-scope-list";
 import { LinkReadiness, LinkReadinessIssues } from "./link-readiness";
+import { readClassLinkProjection } from "../link-projection-actions";
 
 const COPY_FAILURE_MESSAGE = "복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.";
 
-export function ApplicationLinkCard({ view, classScheduleId, options }: { view: ClassApplicationLinksView | null; classScheduleId: string; options?: LinkCompositionOption[] | null }) {
+export function ApplicationLinkCard({ view: serverView, classScheduleId, options: serverOptions }: { view: ClassApplicationLinksView | null; classScheduleId: string; options?: LinkCompositionOption[] | null }) {
+  const source = useRef({ view: serverView, options: serverOptions, classScheduleId });
+  useLayoutEffect(() => { source.current = { view: serverView, options: serverOptions, classScheduleId }; }, [serverView, serverOptions, classScheduleId]);
+  const projectionRequest = useRef(0);
+  const [projection, setProjection] = useState<{ source: typeof source.current; data: Awaited<ReturnType<typeof readClassLinkProjection>> }>();
+  const currentProjection = projection?.source.view === serverView && projection.source.options === serverOptions && projection.source.classScheduleId === classScheduleId ? projection.data : undefined;
+  const view = currentProjection ? currentProjection.view : serverView;
+  const options = currentProjection ? currentProjection.options : serverOptions;
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -40,6 +48,19 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
     return () => window.removeEventListener("focus", refresh);
   }, [router]);
   useEffect(() => { setOrigin(window.location.origin); }, []);
+
+  async function reconcileProjection(nextReceipt?: ClassLinkReceipt) {
+    setError(undefined);
+    if (nextReceipt) setReceipt(nextReceipt);
+    const requestedSource = source.current;
+    const request = ++projectionRequest.current;
+    try {
+      const data = await readClassLinkProjection(classScheduleId);
+      if (requestedSource === source.current && request === projectionRequest.current) setProjection({ source: requestedSource, data });
+    } catch {
+      if (requestedSource === source.current && request === projectionRequest.current) setError("처리는 완료했지만 현재 표시를 갱신하지 못했습니다. 다시 불러와 현재 상태를 확인해 주세요.");
+    }
+  }
 
   if (!view) return <Card data-testid="application-link-card"><CardHeader><CardTitle>이 클래스 신청 링크</CardTitle></CardHeader><CardContent>
     <p role="alert">링크 정보를 불러오지 못했습니다.</p>
@@ -66,7 +87,7 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
         const result = await issueClassApplicationLink(request);
         if (result.error) { setError(result.error); if (result.conflict) { attempt.current = undefined; setUnresolved(false); router.refresh(); } return; }
         setReceipt(result as ClassLinkReceipt); setNotice(result.replayed ? "발급된 링크를 확인했습니다. 원문 주소는 복원되지 않습니다." : "신청 링크를 발급했습니다.");
-        attempt.current = undefined; setUnresolved(false); router.refresh();
+        attempt.current = undefined; setUnresolved(false); await reconcileProjection();
       } catch { setError("결과를 확인하지 못했습니다. 같은 작업으로 다시 시도해 주세요. 기존 유효 링크는 유지됩니다."); }
     });
   }
@@ -98,7 +119,7 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
     <CardContent className="min-w-0 space-y-3">
       <p className="break-words font-medium">{view.className} · {view.timeLabel}</p>
       <p>참가비: {view.applicationPrice === null ? "미설정" : `${view.applicationPrice.toLocaleString("ko-KR")}원`}</p>
-      {view.priceRevision ? <ApplicationPriceForm key={classScheduleId} classScheduleId={classScheduleId} disabled={!view.canIssue || pending} price={view.applicationPrice} revision={view.priceRevision} /> : null}
+      {view.priceRevision ? <ApplicationPriceForm key={classScheduleId} classScheduleId={classScheduleId} disabled={!view.canIssue || pending} onSaved={reconcileProjection} price={view.applicationPrice} revision={view.priceRevision} /> : null}
       <p>링크 상태: {active ? "링크 활성" : issued ? "링크 비활성 · 접수 중지" : view.scopes.length > 0 ? "이 클래스에 해당하는 링크 없음" : "미발급"} <span className="rounded bg-slate-100 px-2 py-1 text-xs">{view.environment}</span></p>
       {!view.publicAccessAllowed ? <p className="text-sm">{view.environment === "Preview" ? "변경한 화면을 미리 확인하는 테스트 환경입니다. 여기서는 일반 보호자 신청을 받지 않습니다. 실제 보호자에게 보낼 링크는 운영 환경에서 확인해 주세요." : "현재 환경에서는 일반 보호자 신청을 받지 않습니다."} 링크 중지와는 별개이며 운영 환경의 접수 상태는 여기서 확인할 수 없습니다.</p> : null}
       {!view.canIssue ? <p className="text-sm">클래스 상태로 신규 접수 불가 · 기존 신청과 예약은 유지됩니다.</p> : null}
@@ -136,8 +157,8 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
             <Button disabled={pending || legacyUnresolved || legacyRefreshPending || !view.revision || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={() => setLegacyIntent({ kind: "upgrade", revision: view.revision! })} type="button">기존 주소를 유지하고 새 방식으로 전환</Button>
             <p className="text-sm">기존 금액 없는 주소는 명시 전환 전까지 유지됩니다. 가격을 저장해도 기존 신청의 금액은 바뀌지 않습니다.</p>
           </div> : null}
-          {currentScopes.filter((scope) => scope.groupId).map((scope) => <div className="space-y-2 rounded border p-3" key={scope.id}><p>{scope.label}</p><GroupLinkButton activeLinkIds={scope.links.filter((link) => link.isActive).map((link) => link.id)} groupId={scope.groupId!} hasLinks={scope.links.length > 0} isActive={scope.scopeActive && scope.links.some((link) => link.isActive)} members={scope.members} onIssued={setReceipt} revision={scope.revision} revisions={Object.fromEntries(scope.members.map((member) => [member.id, member.revision ?? (member.id === classScheduleId ? view.revision ?? "" : options?.find((row) => row.id === member.id)?.revision ?? "")]))} /></div>)}
-          {options ? <MultiClassLinkComposer currentClassId={classScheduleId} onIssued={setReceipt} options={options} /> : <p role="alert">선택 가능한 클래스 정보를 불러오지 못했습니다. 다시 불러와 주세요.</p>}
+          {currentScopes.filter((scope) => scope.groupId).map((scope) => <div className="space-y-2 rounded border p-3" key={scope.id}><p>{scope.label}</p><GroupLinkButton activeLinkIds={scope.links.filter((link) => link.isActive).map((link) => link.id)} groupId={scope.groupId!} hasLinks={scope.links.length > 0} isActive={scope.scopeActive && scope.links.some((link) => link.isActive)} members={scope.members} onIssued={reconcileProjection} revision={scope.revision} revisions={Object.fromEntries(scope.members.map((member) => [member.id, member.revision ?? (member.id === classScheduleId ? view.revision ?? "" : options?.find((row) => row.id === member.id)?.revision ?? "")]))} /></div>)}
+          {options ? <MultiClassLinkComposer currentClassId={classScheduleId} onIssued={reconcileProjection} options={options} /> : <p role="alert">선택 가능한 클래스 정보를 불러오지 못했습니다. 다시 불러와 주세요.</p>}
           <Link className="inline-block min-h-11 py-2 text-sm underline" href="/reservation-applications/groups">여러 클래스 통합 신청 관리</Link>
           <p className="text-sm text-slate-600">새 방식 주소는 해시만 저장하므로 원문을 복원할 수 없습니다. 기존 방식 주소는 호환 범위에서 표시합니다. 링크 열어보기는 현재 환경의 일반 공개 화면을 새 탭에서 확인하며 신청을 제출하지 않습니다.</p>
         </div>

@@ -80,7 +80,7 @@ jobs:
           if [ "${{ matrix.project }}" = "desktop-chromium" ]; then
             npx playwright install --with-deps chromium
           else
-            npx playwright install --with-deps webkit
+            npx playwright install --with-deps chromium webkit
           fi
       - name: Verify PostgreSQL
         run: npx tsx scripts/ci/verify-e2e-db.ts

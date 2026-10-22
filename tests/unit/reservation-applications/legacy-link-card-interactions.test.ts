@@ -18,10 +18,12 @@ vi.mock("react", async (original) => ({
     return hooks.values[index];
   },
   useEffect: (effect: () => unknown) => { hooks.effects.push(effect); },
+  useLayoutEffect: (effect: () => unknown) => { hooks.effects.push(effect); },
   useTransition: () => [false, (callback: () => unknown) => { hooks.work.push(Promise.resolve(callback())); }],
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh }) }));
 vi.mock("@/app/(admin)/classes/actions", () => ({ saveApplicationPrice: vi.fn() }));
+vi.mock("@/app/(admin)/classes/link-projection-actions", () => ({ readClassLinkProjection: vi.fn() }));
 vi.mock("@/app/(admin)/reservation-applications/actions", () => ({ issueApplicationLink: mocks.issue, stopApplicationLink: mocks.stop, upgradeLegacyApplicationLink: mocks.upgrade, issueClassApplicationLink: vi.fn() }));
 const { ApplicationLinkCard } = await import("@/app/(admin)/classes/_components/application-link-card");
 const { CopyControl } = await import("@/components/application-ux/copy-control");

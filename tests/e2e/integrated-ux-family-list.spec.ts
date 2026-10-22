@@ -102,7 +102,8 @@ test.describe("Phase 3 read-only family list", () => {
       traceUx("filter-clear", started, { clicked: true, defaultPrevented: prevented });
     });
     try {
-      await waitForReactHandler(removeClass, "onClick");
+      // The clear control is a native anchor; verify page hydration on the drawer.
+      await waitForReactHandler(page.getByRole("button", { name: "메뉴 열기", includeHidden: true }), "onClick");
       await expect(page.getByRole("dialog", { name: "사이드 메뉴" })).toBeHidden();
       await removeClass.scrollIntoViewIfNeeded();
       const hitTarget = await removeClass.evaluate((element) => {
