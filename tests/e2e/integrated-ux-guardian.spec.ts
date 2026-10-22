@@ -5,6 +5,7 @@ import { generateApplicationCapabilityToken, generateApplicationLinkToken, hashA
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
 import { applicationReviewScope, issueApplicationPriceReview } from "@/server/reservation-applications/price-review";
+import { saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
 
 // CI admission remains loopback-only, with isolated synthetic fixtures and
 // no screenshots, videos or traces (UX config).
@@ -79,15 +80,14 @@ async function changePrice(browser: Browser, baseURL: string, amount: number) {
   const admin = await operator(browser, baseURL);
   try {
     await admin.page.goto(`/classes/${fixture.classes[0]}`);
-    const card = admin.page.getByTestId("application-link-card");
-    await card.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true }).fill(String(amount));
-    await card.getByRole("button", { name: "신청금액 저장", exact: true }).click();
-    await expect(card.getByRole("status")).toContainText("신청금액을 저장했습니다");
-    // A saved action notice is not a refreshed server read. Explicitly reload the
-    // card; its inline reload affordance only exists while revisions differ.
-    await admin.page.reload();
-    await expect(card).toContainText(`${amount.toLocaleString("ko-KR")}원`);
-    await expect(card.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true })).toHaveValue(String(amount));
+    const before = await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } });
+    try { await saveClassApplicationPrice(admin.page, amount); }
+    finally {
+      const stored = await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } });
+      traceUx("class-price", Date.now(), { priceBefore: before.applicationPrice, requestedPrice: amount, storedPrice: stored.applicationPrice,
+        displayedPrice: await admin.page.getByTestId("application-link-card").getByText(`참가비: ${amount.toLocaleString("ko-KR")}원`, { exact: true }).isVisible() });
+    }
+    expect((await db.classSchedule.findUniqueOrThrow({ where: { id: fixture.classes[0] }, select: { applicationPrice: true } })).applicationPrice).toBe(amount);
   } finally { await admin.context.close(); }
 }
 
@@ -154,11 +154,26 @@ test.describe("Phase 8 guardian three-step input", () => {
     await enterConsentReview(page); await expect(page.locator("#application-reviewedPriceProof")).toContainText("60,000원 → 65,000원");
     await expect(page.locator("#application-reviewedPriceProof")).toContainText("100,000원 → 105,000원"); await required(page); await page.locator("#application-child-1-photoShareConsent").check();
     const submit = page.getByRole("button", { name: "신청서 제출", exact: true }); await expect(submit).toBeDisabled();
+    await expect(page.getByRole("complementary", { name: "신청 요약", exact: true })).toContainText("예상 총 참가비 100,000원");
     await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0);
+    const summary = page.getByRole("complementary", { name: "신청 요약", exact: true });
+    await expect(summary).toContainText("65,000원"); await expect(summary).toContainText("예상 총 참가비 105,000원");
+    // Inspect the preserved controlled drafts as well as the review's text.
+    await page.getByRole("button", { name: "보호자·자녀 정보 수정", exact: true }).click();
+    await expect(page.locator("#application-child-1-childName")).toHaveValue("합성자녀1");
+    await expect(page.locator("#application-child-2-childName")).toHaveValue("합성자녀2");
+    await expect(page.locator("#application-child-1-childBirthDate")).toHaveValue("2020-01-01");
+    await expect(page.locator("#application-child-2-childBirthDate")).toHaveValue("2020-01-01");
+    await enterConsentReview(page);
+    await expect(page.locator("#application-programTerms")).toBeChecked();
+    await expect(page.locator("#application-child-1-photoShareConsent")).toBeChecked();
+    traceUx("guardian-review", Date.now(), { priceChangeVisible: true, totalVisible: true, inputsPreserved: true, consentsPreserved: true });
     await changePrice(browser, baseURL!, 70000); await submit.click();
     await expect(page.locator("#application-reviewedPriceProof")).toContainText("65,000원 → 70,000원"); await expect(page.locator("#application-reviewedPriceProof")).toContainText("105,000원 → 110,000원");
     expect(await applications()).toHaveLength(0); await expect(page.locator("#application-programTerms")).toBeChecked(); await expect(page.locator("#application-child-1-photoShareConsent")).toBeChecked();
-    await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0); await submit.click(); await expect(page).toHaveURL(/\/apply\/complete$/);
+    await page.getByRole("button", { name: "변경 금액 확인", exact: true }).click(); expect(await applications()).toHaveLength(0);
+    await expect(summary).toContainText("70,000원"); await expect(summary).toContainText("예상 총 참가비 110,000원");
+    await submit.click(); await expect(page).toHaveURL(/\/apply\/complete$/);
     expect((await applications()).map((row) => row.quotedAmount)).toEqual([70000, 40000]); await noFinance();
   });
 

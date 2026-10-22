@@ -99,6 +99,26 @@ describe("same-page authoritative workflow", () => {
     expect(workflowReceiptPresent(initial, success, "deposit")).toBe(false);
     expect(workflowReceiptPresent({ ...initial, deposits: [{ id: "deposit-1" }] } as ApplicationWorkflowDetail, { ...success, submissionId: "foreign" }, "deposit")).toBe(false);
   });
+  it("retains a previous success message during the next save and read, so that message alone is not completion", async () => {
+    await coordinator().run(async () => success, "deposit", "key-1");
+    let finishSave!: (value: WorkflowActionResult) => void;
+    let finishRead!: (value: ApplicationWorkflowDetail) => void;
+    mocks.refresh.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    const pending = coordinator().run(() => new Promise((resolve) => { finishSave = resolve; }), "confirmation", "key-2", { submissionId: "s1", applicationIds: ["a1"] });
+    const status = () => elements(controller()).find((node) => node.props["data-testid"] === "workflow-status")!;
+    expect(text(status())).toContain("저장 결과와 최신 서버 원장을 확인했습니다");
+    expect(text(status().props.children && elements(status())[1])).toBe("저장·서버 원장 확인 중…");
+    expect(coordinator().busy).toBe(true); expect(coordinator().blocked).toBe(true);
+    const receipt = { id: "r1", paymentItem: { id: "pi1", paymentId: "p1" } };
+    const row = { id: "a1", status: "CONFIRMED", quotedAmount: 40000, reservation: receipt, paymentMapping: { paymentItem: { id: "pi1", paymentId: "p1", paidAmount: 40000 } } };
+    finishSave({ status: "success", submissionId: "s1", applicationIds: ["a1"], reservationIds: ["r1"], paymentId: "p1" });
+    await flush();
+    expect(text(status())).toContain("저장·서버 원장 확인 중…"); expect(coordinator().busy).toBe(true);
+    finishRead({ ...initial, applications: [row] } as unknown as ApplicationWorkflowDetail);
+    await pending;
+    expect(text(elements(status())[1])).toBe("서버 원장 확인됨");
+    expect(coordinator().busy).toBe(false); expect(coordinator().blocked).toBe(false);
+  });
   it.each([null, { ...detail(), ledger: { state: "unavailable" } }, detail()])("blocks stale confirmation and all writes after absent/invalid/unobserved refresh: %s", async (next) => {
     initial.applications = [{ id: "a1", status: "SUBMITTED", childName: "합성 아이", childBirthDate: new Date(), quotedAmount: 40000, classSchedule: { id: "c1", program: { name: "합성 클래스" }, capacity: 8, _count: { reservations: 0 } }, confirmationCandidates: [] }] as unknown as ApplicationWorkflowDetail["applications"];
     mocks.refresh.mockResolvedValue(next);

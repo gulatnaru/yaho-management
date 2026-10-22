@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { FormFeedback } from "./form-feedback";
 
 /** Copy only the supplied value; this component never issues or restores a link. */
-export function CopyControl({ value, label = "신청 링크", buttonLabel = "링크 복사", valueLabel = `${label} 주소`, successMessage = `${label}를 복사했습니다.`, rows = 3, disabled = false }: {
+export function CopyControl({ value, label = "신청 링크", buttonLabel = "링크 복사", valueLabel = `${label} 주소`, successMessage = `${label}를 복사했습니다.`, failureMessage = "복사하지 못했습니다. 직접 선택해서 복사해 주세요.", rows = 3, disabled = false }: {
   value: string;
   label?: string;
   buttonLabel?: string;
   valueLabel?: string;
   successMessage?: string;
+  failureMessage?: string;
   rows?: number;
   disabled?: boolean;
 }) {
@@ -23,7 +24,7 @@ export function CopyControl({ value, label = "신청 링크", buttonLabel = "링
     <Button className="min-h-11 w-full md:w-auto" disabled={!hydrated || disabled || !value} onClick={async () => {
       setNotice(undefined); setError(undefined);
       try { await navigator.clipboard.writeText(value); setNotice(successMessage); }
-      catch { setError("복사하지 못했습니다. 직접 선택해서 복사해 주세요."); }
+      catch { setError(failureMessage); }
     }} type="button">{buttonLabel}</Button>
     <FormFeedback error={error} notice={notice} />
   </div>;

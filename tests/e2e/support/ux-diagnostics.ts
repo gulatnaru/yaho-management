@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { loadUxManifest } from "./ux-manifest";
+import type { UxTrace } from "./ux-trace";
 
 // The workflow uploads ONLY these two files, never the runtime or browser output.
 export const uxDiagnosticPaths = {
@@ -55,7 +56,7 @@ export function scrubDiagnosticText(input: string, secrets: readonly string[]): 
 export interface DiagnosticError { message?: string; stack?: string }
 export interface DiagnosticTest {
   title: string; file: string; line: number; status: string; expectedStatus: string;
-  classification: "passed" | "BLOCKED" | "failed"; blockedReason?: string; errors: DiagnosticError[];
+  classification: "passed" | "BLOCKED" | "failed"; blockedReason?: string; errors: DiagnosticError[]; traces?: UxTrace[];
 }
 export interface DiagnosticRun {
   project: string; spec: string; status: string;
@@ -76,7 +77,7 @@ export function publishUxDiagnostics(run: DiagnosticRun, paths: { results: strin
   writeFileSync(paths.results, JSON.stringify({ suites: runs.map((item) => ({
     title: item.spec, file: item.spec, project: item.project,
     specs: item.tests.map((test) => ({ title: test.title, file: test.file, line: test.line,
-      tests: [{ projectName: item.project, expectedStatus: test.expectedStatus, results: [{ status: test.status, errors: test.errors }] }],
+      tests: [{ projectName: item.project, expectedStatus: test.expectedStatus, results: [{ status: test.status, errors: test.errors, ...(test.traces?.length ? { traces: test.traces } : {}) }] }],
     })), errors: item.errors, status: item.status,
   })) }, null, 2));
 }

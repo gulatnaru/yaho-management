@@ -65,12 +65,15 @@ describe("synthetic assertion diagnostics privacy", () => {
     const directory = mkdtempSync(join(tmpdir(), "ux-diagnostics-")); directories.push(directory);
     const paths = { results: join(directory, "results.json"), statuses: join(directory, "statuses.json") };
     const { publishUxDiagnostics: realPublish } = await vi.importActual<typeof import("../../e2e/support/ux-diagnostics")>("../../e2e/support/ux-diagnostics");
-    realPublish(run("family-list.spec.ts"), paths); realPublish(run("family-detail.spec.ts"), paths);
+    const first = run("family-list.spec.ts"); first.tests[0].traces = [{ event: "filter-clear", elapsedMs: 20, facts: { hydrated: true, defaultPrevented: true, finalUrlMatches: false } }];
+    realPublish(first, paths); realPublish(run("family-detail.spec.ts"), paths);
     const results = JSON.parse(readFileSync(paths.results, "utf8"));
     const statuses = JSON.parse(readFileSync(paths.statuses, "utf8"));
     expect(results.suites).toHaveLength(2); expect(statuses.runs).toHaveLength(2);
     expect(results.suites[0].specs[0].tests[0].results[0].errors[0].message).toContain("Expected: 404");
     expect(statuses.runs[0].tests[0].classification).toBe("failed");
+    expect(results.suites[0].specs[0].tests[0].results[0].traces).toEqual(first.tests[0].traces);
+    expect(statuses.runs[0].tests[0].traces).toEqual(first.tests[0].traces);
     expect(Object.keys(results)).toEqual(["suites"]);
     expect(JSON.stringify(results)).not.toMatch(/attachments|stdout|storageState|config|environment/);
   });
@@ -82,7 +85,12 @@ function setupReporter(title: string, options: { expectedStatus?: string; status
   const test = { title, titlePath: () => ["", "MANAGER application denial", title], location: { file: "integrated-ux-family-list.spec.ts", line: 69 }, expectedStatus: options.expectedStatus ?? "passed" } as TestCase;
   const reporter = new UxReporter();
   reporter.onBegin({ projects: [{ name: "desktop-chromium" }] } as FullConfig, { allTests: () => [test] } as Suite);
-  const result = { status: options.status ?? "failed", errors: [{ message: "Expected: 404\nReceived: 200", stack: "Error: Expected: 404\n    at integrated-ux-family-list.spec.ts:69:10", snippet: "SNIPPET_CANARY" }], stdout: ["STDOUT_CANARY"], attachments: [{ body: Buffer.from("ATTACHMENT_CANARY") }] } as unknown as TestResult;
+  const result = { status: options.status ?? "failed", errors: [{ message: "Expected: 404\nReceived: 200", stack: "Error: Expected: 404\n    at integrated-ux-family-list.spec.ts:69:10", snippet: "SNIPPET_CANARY" }],
+    annotations: [
+      { type: "ux-trace", description: JSON.stringify({ event: "filter-clear", elapsedMs: 5, facts: { hydrated: true, navigationRequests: 0 } }) },
+      { type: "ux-trace", description: JSON.stringify({ event: "filter-clear", elapsedMs: 5, facts: { requests: "ANNOTATION_CANARY" } }) },
+      { type: "arbitrary", description: "ARBITRARY_CANARY" },
+    ], stdout: ["STDOUT_CANARY"], attachments: [{ body: Buffer.from("ATTACHMENT_CANARY") }] } as unknown as TestResult;
   reporter.onTestEnd(test, result);
   return reporter;
 }
@@ -95,7 +103,8 @@ describe("UX reporter diagnostic projection and strict status", () => {
     expect(data.project).toBe("mobile-webkit-390");
     expect(data.tests[0].title).toContain("MANAGER application denial › direct list");
     expect(data.tests[0].errors[0].message).toBe("Expected: 404\nReceived: 200");
-    expect(JSON.stringify(data)).not.toMatch(/SNIPPET_CANARY|STDOUT_CANARY|ATTACHMENT_CANARY/);
+    expect(data.tests[0].traces).toEqual([{ event: "filter-clear", elapsedMs: 5, facts: { hydrated: true, navigationRequests: 0 } }]);
+    expect(JSON.stringify(data)).not.toMatch(/SNIPPET_CANARY|STDOUT_CANARY|ATTACHMENT_CANARY|ANNOTATION_CANARY|ARBITRARY_CANARY/);
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("Expected: 404");
   });
   it.each([{ status: "skipped" }, { status: "failed", expectedStatus: "failed" }])("publishes strict failure even if Playwright says passed: %o", async (options) => {

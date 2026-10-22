@@ -9,9 +9,9 @@ import type { ClassLinkOperation, ClassLinkReceipt } from "@/server/reservation-
 import type { LinkCompositionOption } from "@/lib/reservation-applications/link-queries";
 
 /** Browser memory only. Callers reconcile linkId with the latest active server projection. */
-export function IssuedLinkControls({ url, disabled = false }: { url: string; disabled?: boolean }) {
+export function IssuedLinkControls({ url, disabled = false, copyFailureMessage }: { url: string; disabled?: boolean; copyFailureMessage?: string }) {
   const [notice, setNotice] = useState<string>();
-  return <div className="min-w-0 space-y-2"><p className="text-sm">링크를 발급했습니다. 이 화면을 떠나면 주소를 다시 확인할 수 없습니다. 지금 복사하거나 공유해 주세요.</p><CopyControl disabled={disabled} value={url} /><div className="flex flex-col gap-2 sm:flex-row"><Button disabled={disabled || !url} onClick={async () => {
+  return <div className="min-w-0 space-y-2"><p className="text-sm">링크를 발급했습니다. 이 화면을 떠나면 주소를 다시 확인할 수 없습니다. 지금 복사하거나 공유해 주세요.</p><CopyControl disabled={disabled} failureMessage={copyFailureMessage} value={url} /><div className="flex flex-col gap-2 sm:flex-row"><Button disabled={disabled || !url} onClick={async () => {
     if (!navigator.share) { setNotice("공유 기능을 사용할 수 없습니다. 링크를 복사해 전달해 주세요."); return; }
     try { await navigator.share({ title: "예약 신청 링크", url }); setNotice("공유했습니다."); }
     catch (error) { setNotice(error instanceof Error && error.name === "AbortError" ? "공유를 취소했습니다. 링크는 유지됩니다." : "공유하지 못했습니다. 링크를 복사해 전달해 주세요."); }

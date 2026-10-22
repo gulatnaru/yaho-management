@@ -114,6 +114,27 @@ describe("guardian three-step handlers (isolated hooks; browser focus is not sim
     props.recheck = vi.fn().mockResolvedValue({ priceReview: proof(65000) }); await review(); expect(step()).toBe(3); agree(); consent().updateOptional("child-1", "photoShareConsent", true);
     expect(text(render())).toContain("60,000원 → 65,000원"); await click("신청서 제출"); expect(props.action).not.toHaveBeenCalled(); await click("변경 금액 확인"); expect(props.action).not.toHaveBeenCalled(); expect(consent().drafts[0]).toMatchObject({ childName: "합성 자녀 0", photoShareConsent: true }); await click("신청서 제출"); expect(props.action).toHaveBeenCalledTimes(1);
   });
+  it("keeps step 2 pending until an asynchronous price re-query finishes, then requires exact revised price/total approval", async () => {
+    props.classes.push({ id: "c2", label: "합성 클래스2", applicationPrice: 40000 });
+    let finish!: (value: { priceReview: { proof: string; prices: typeof prices } }) => void;
+    props.recheck = vi.fn(() => new Promise<{ priceReview: { proof: string; prices: typeof prices } }>((resolve) => { finish = resolve; }));
+    selectedClasses()[0]!.props.onChange(); selectedClasses()[1]!.props.onChange(); await click("다음");
+    field("guardianName", "합성 보호자"); field("guardianPhone", "010-0000-0000"); field("declaredPayerName", "합성 입금자");
+    fillChild(); updateChild(0, "classScheduleId", "c1"); updateChild(0, "photoShareConsent", true);
+    await click("내 자녀 추가"); fillChild(1); updateChild(1, "classScheduleId", "c2");
+    const before = structuredClone(cards().map((card) => card.props.child));
+    await click("다음"); expect(step()).toBe(2);
+    expect(elements(render()).find((node) => node.type === "fieldset")!.props.disabled).toBe(true);
+    expect(text(render())).toContain("예상 총 참가비 100,000원");
+    expect(props.recheck).toHaveBeenCalledWith({ classScheduleIds: ["c1", "c2"], reviewedPriceProof: undefined });
+    finish({ priceReview: { proof: "fresh-65000", prices: [{ classScheduleId: "c1", amount: 65000 }, { classScheduleId: "c2", amount: 40000 }] } });
+    await flush(); expect(step()).toBe(3);
+    expect(elements(render()).find((node) => node.type === "fieldset")!.props.disabled).toBeFalsy();
+    expect(text(render())).toContain("60,000원 → 65,000원"); expect(text(render())).toContain("가족 예상 합계 100,000원 → 105,000원");
+    expect(consent().drafts).toEqual(before); expect(findButton(render(), "신청서 제출").props.disabled).toBe(true);
+    await click("변경 금액 확인");
+    expect(text(render())).toContain("예상 총 참가비 105,000원"); expect(consent().drafts).toEqual(before); expect(props.action).not.toHaveBeenCalled();
+  });
   it("second submit-time price change also blocks, preserving guardian/child/optional inputs until explicit resubmit", async () => {
     props.action = vi.fn().mockResolvedValueOnce({ priceChanged: true, priceReview: proof(65000), error: "금액 변경" }).mockResolvedValueOnce({ priceChanged: true, priceReview: proof(70000), error: "금액 재변경" }).mockResolvedValue({ submitted: true });
     await review(); agree(); consent().updateOptional("child-1", "photoMarketingConsent", true); await click("신청서 제출");

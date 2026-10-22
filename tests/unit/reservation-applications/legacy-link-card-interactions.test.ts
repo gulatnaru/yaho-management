@@ -27,8 +27,9 @@ const { ApplicationLinkCard } = await import("@/app/(admin)/classes/_components/
 const { CopyControl } = await import("@/components/application-ux/copy-control");
 const { FormFeedback } = await import("@/components/application-ux/form-feedback");
 const { LinkImpactConfirmation } = await import("@/app/(admin)/classes/_components/link-impact-confirmation");
+const { IssuedLinkControls } = await import("@/app/(admin)/classes/_components/multi-class-link-composer");
 
-type Props = { children?: React.ReactNode; onClick?: () => unknown; onConfirm?: () => unknown; value?: string; disabled?: boolean; notice?: string; error?: string };
+type Props = { children?: React.ReactNode; onClick?: () => unknown; onConfirm?: () => unknown; onFocus?: (event: { currentTarget: { select: () => void } }) => void; value?: string; readOnly?: boolean; disabled?: boolean; notice?: string; error?: string; failureMessage?: string };
 function elements(node: React.ReactNode): React.ReactElement<Props>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!React.isValidElement<Props>(node)) return [];
@@ -71,6 +72,37 @@ beforeEach(() => {
   mocks.issue.mockResolvedValue({});
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it.each([
+  [undefined, "복사하지 못했습니다. 직접 선택해서 복사해 주세요."],
+  ["복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.", "복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요."],
+])("uses scoped copy failure guidance %s, retaining manual selection and successful retry", async (failureMessage, expected) => {
+  const value = "http://localhost:3000/apply/synthetic";
+  const copy = () => { hooks.cursor = 0; return CopyControl({ value, failureMessage }); };
+  copy(); hooks.effects.forEach((effect) => effect());
+  mocks.copy.mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"));
+  await button(copy(), "링크 복사").props.onClick!();
+  const denied = copy();
+  expect(elements(denied).find((node) => node.type === FormFeedback)?.props.error).toBe(expected);
+  const address = elements(denied).find((node) => node.type === "textarea")!;
+  expect(address.props.value).toBe(value); expect(address.props.readOnly).toBe(true);
+  const select = vi.fn(); address.props.onFocus!({ currentTarget: { select } }); expect(select).toHaveBeenCalledOnce();
+  await button(copy(), "링크 복사").props.onClick!();
+  expect(mocks.copy).toHaveBeenLastCalledWith(value);
+  expect(elements(copy()).find((node) => node.type === FormFeedback)?.props.error).toBeUndefined();
+  expect(elements(copy()).find((node) => node.type === FormFeedback)?.props.notice).toBe("신청 링크를 복사했습니다.");
+});
+
+it("scopes class-card legacy guidance and forwards issued-link guidance while group defaults stay unset", () => {
+  render();
+  const legacy = elements(render()).find((node) => node.type === CopyControl)!;
+  expect(legacy.props.failureMessage).toBe("복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.");
+  hooks.values = []; hooks.cursor = 0;
+  const issued = IssuedLinkControls({ url: "http://localhost:3000/apply/synthetic", copyFailureMessage: legacy.props.failureMessage });
+  expect(elements(issued).find((node) => node.type === CopyControl)?.props.failureMessage).toBe(legacy.props.failureMessage);
+  hooks.cursor = 0;
+  expect(elements(IssuedLinkControls({ url: "http://localhost:3000/apply/synthetic" })).find((node) => node.type === CopyControl)?.props.failureMessage).toBeUndefined();
+});
 
 it("hides stale addresses after empty reissue success until refreshed, then copies and shares the recovered URL", async () => {
   await reissue();

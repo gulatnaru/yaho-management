@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
+import { traceUx, waitForReactHandler } from "./support/integrated-ux-sync";
 
 // Authenticated, operator-provisioned synthetic fixtures only. This suite performs no writes.
 // Run separately in the existing local desktop/WebKit matrix; actual Safari remains manual.
@@ -71,11 +72,44 @@ test.describe("Phase 3 read-only family list", () => {
     await expect(removeClass).toHaveAttribute("href", "/reservation-applications?status=all");
     await expect(page.getByLabel("보호자 입금 알림", { exact: true })).toHaveValue("all");
     await expect(page.getByLabel("은행 확인 입금", { exact: true })).toHaveValue("all");
-    await Promise.all([
-      page.waitForURL((url) => url.pathname === "/reservation-applications"
-        && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all", { timeout: 15000 }),
-      removeClass.click(),
-    ]);
+    const started = Date.now();
+    const matches = (url: URL) => url.pathname === "/reservation-applications"
+      && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all";
+    let navigationRequests = 0;
+    const observe = (request: import("@playwright/test").Request) => {
+      if (request.method() === "GET" && matches(new URL(request.url()))) navigationRequests++;
+    };
+    page.on("request", observe);
+    await page.exposeFunction("uxFilterClearClick", (prevented: boolean) => {
+      traceUx("filter-clear", started, { clicked: true, defaultPrevented: prevented });
+    });
+    try {
+      await waitForReactHandler(removeClass, "onClick");
+      await expect(page.getByRole("dialog", { name: "사이드 메뉴" })).toBeHidden();
+      await removeClass.scrollIntoViewIfNeeded();
+      const hitTarget = await removeClass.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      });
+      traceUx("filter-clear", started, { hydrated: true, hrefMatches: await removeClass.getAttribute("href") === "/reservation-applications?status=all", hitTarget, menuClosed: true });
+      expect(hitTarget, "Filter-clear anchor must receive the actual pointer click").toBe(true);
+      await removeClass.evaluate((element) => document.addEventListener("click", (event) => {
+        // React delegates to the root below document. Sample only after its
+        // Link handler has had the opportunity to prevent native navigation.
+        if (element.contains(event.target as Node)) void (window as unknown as { uxFilterClearClick: (prevented: boolean) => Promise<void> }).uxFilterClearClick(event.defaultPrevented);
+      }, { once: true }));
+      await Promise.all([
+        page.waitForURL(matches, { timeout: 15000 }),
+        removeClass.click(),
+      ]);
+    } finally {
+      page.off("request", observe);
+      const final = new URL(page.url());
+      traceUx("filter-clear", started, { navigationRequests, finalUrlMatches: matches(final), pageReset: !final.searchParams.has("page"),
+        statusAll: await page.getByLabel("상태", { exact: true }).inputValue({ timeout: 1000 }).catch(() => undefined) === "all",
+        notificationAll: await page.getByLabel("보호자 입금 알림", { exact: true }).inputValue({ timeout: 1000 }).catch(() => undefined) === "all",
+        bankRecordAll: await page.getByLabel("은행 확인 입금", { exact: true }).inputValue({ timeout: 1000 }).catch(() => undefined) === "all" });
+    }
     await expect(page).toHaveURL((url) => url.pathname === "/reservation-applications"
       && !url.searchParams.has("classScheduleId") && !url.searchParams.has("page") && url.searchParams.get("status") === "all");
     await expect(removeClass).toHaveCount(0);

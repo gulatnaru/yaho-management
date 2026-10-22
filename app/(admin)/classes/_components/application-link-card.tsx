@@ -19,6 +19,8 @@ import type { ClassApplicationLinksView } from "@/lib/reservation-applications/l
 import { LinkScopeList } from "./link-scope-list";
 import { LinkReadiness, LinkReadinessIssues } from "./link-readiness";
 
+const COPY_FAILURE_MESSAGE = "복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.";
+
 export function ApplicationLinkCard({ view, classScheduleId, options }: { view: ClassApplicationLinksView | null; classScheduleId: string; options?: LinkCompositionOption[] | null }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string>();
@@ -106,10 +108,10 @@ export function ApplicationLinkCard({ view, classScheduleId, options }: { view: 
       {active && rawLinks.length === 0 && !currentUrl && !legacyRefreshPending ? <p className="text-sm">활성 상태로 발급된 링크가 있습니다. 주소는 발급할 때만 확인할 수 있습니다. 새 주소가 필요하면 고급 설정에서 해당 범위의 링크 교체를 확인해 주세요.</p> : null}
       {!issued && view.canIssue ? <><p className="text-sm">주소는 발급 직후 현재 화면에서만 확인할 수 있습니다. 화면을 떠나기 전에 복사하거나 공유해 주세요.</p><Button className="min-h-11 w-full md:w-auto" disabled={pending || !view.revision || !view.applicationPrice || !view.unissuedReadiness.consentReady} onClick={issueSingle} type="button">{pending ? "링크 발급 중…" : unresolved ? "같은 작업 다시 시도" : "신청 링크 발급"}</Button></> : null}
       {unresolved && issued ? <Button disabled={pending} onClick={issueSingle} type="button">같은 작업 결과 확인</Button> : null}
-      {currentUrl ? <IssuedLinkControls disabled={pending} url={currentUrl} /> : null}
+      {currentUrl ? <IssuedLinkControls copyFailureMessage={COPY_FAILURE_MESSAGE} disabled={pending} url={currentUrl} /> : null}
       {rawLinks.map((link) => { const url = origin ? `${origin}${link.rawPath}` : ""; return <div className="min-w-0 space-y-2" key={link.id}>
         <p className="text-sm">{link.scopeLabel}</p>
-        <CopyControl disabled={pending} value={url} />
+        <CopyControl disabled={pending} failureMessage={COPY_FAILURE_MESSAGE} value={url} />
         <div className="flex flex-col gap-2 md:flex-row">
           <Button className="min-h-11 bg-white text-slate-900 ring-1 ring-slate-300 hover:bg-slate-100" disabled={!url || pending} onClick={async () => {
             setError(undefined); setNotice(undefined);

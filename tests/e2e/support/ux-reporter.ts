@@ -1,6 +1,7 @@
 import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestError, TestResult } from "@playwright/test/reporter";
 import { basename } from "node:path";
 import { diagnosticSecrets, publishUxDiagnostics, scrubDiagnosticText, type DiagnosticError, type DiagnosticTest } from "./ux-diagnostics";
+import { safeUxTraces } from "./ux-trace";
 
 // These cases require a separately provisioned app/read-failure mechanism. Never
 // disable authentication, break the shared DB, or silently count them as passing.
@@ -50,6 +51,7 @@ export default class UxReporter implements Reporter {
       status: result.status, expectedStatus: test.expectedStatus,
       classification: blockedReason ? "BLOCKED" : result.status === "passed" && test.expectedStatus === "passed" ? "passed" : "failed",
       ...(blockedReason ? { blockedReason } : {}), errors: (result.errors ?? []).map((error) => this.error(error)),
+      traces: safeUxTraces(result.annotations ?? []),
     });
     if (result.status === "passed" && test.expectedStatus === "passed") this.passed++;
     else if (result.status === "skipped" && blockedUxReason(test.location.file, test.title)) {

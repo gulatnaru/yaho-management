@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
+import { observeActions, saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
 
 // Local-only admission: operators supply synthetic fixtures and authenticated states.
 // Phase 1 remains read-only; Phase 2 mutations are restricted to explicitly supplied run-owned classes.
@@ -71,8 +72,18 @@ test.describe("Phase 1 existing synthetic class inventory (read only)", () => {
     const before = await fingerprint();
     await page.goto(`/classes/${fixtures!.legacy}`);
     const card = page.getByTestId("application-link-card");
-    const address = card.getByRole("textbox", { name: "신청 링크 주소" });
-    await expect(address).not.toHaveValue("");
+    const address = card.getByRole("textbox", { name: "신청 링크 주소", exact: true });
+    const started = Date.now();
+    const [legacyClass, activePlaintextLinks, upgraded] = await Promise.all([
+      db.classSchedule.findUniqueOrThrow({ where: { id: fixtures!.legacy }, select: { applicationPrice: true } }),
+      db.reservationApplicationLink.count({ where: { classScheduleId: fixtures!.legacy, isActive: true, token: { not: null } } }),
+      db.reservationApplicationGroup.count({ where: { upgradedLegacyClassScheduleId: fixtures!.legacy } }),
+    ]);
+    traceUx("class-link-fixture", started, { activePlaintextLinks, priceBefore: legacyClass.applicationPrice, addressCount: await address.count() });
+    expect(activePlaintextLinks, "Read-only legacy fixture must contain an active stored plaintext link").toBe(1);
+    expect(upgraded, "Read-only legacy fixture must not be an upgraded/hash-only scope").toBe(0);
+    try { await expect(address).toHaveCount(1); await expect(address).not.toHaveValue(""); }
+    finally { traceUx("class-link-fixture", started, { activePlaintextLinks, addressCount: await address.count() }); }
     const raw = await address.inputValue();
     expect(new URL(raw).origin).toBe(new URL(page.url()).origin);
     await expect(card).toContainText("이 클래스 전용");
@@ -144,12 +155,28 @@ test.describe.serial("Phase 2 dedicated local synthetic issuance", () => {
     test.skip(existing > 0, "Provide fresh synthetic classes for each browser project; never rotate a fixture implicitly.");
     await page.goto(`/classes/${id}`);
     const card = page.getByTestId("application-link-card");
-    await card.getByRole("spinbutton", { name: "신청금액 설정 (원)" }).fill("25000");
-    await card.getByRole("button", { name: "신청금액 저장", exact: true }).click();
-    await expect(card).toContainText("25,000원");
-    await card.getByRole("button", { name: "신청 링크 발급", exact: true }).click();
-    const address = card.getByRole("textbox", { name: "신청 링크 주소" });
-    await expect(address).not.toHaveValue("");
+    const priceBefore = await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } });
+    traceUx("class-price", Date.now(), { priceBefore: priceBefore.applicationPrice, requestedPrice: 25000 });
+    try { await saveClassApplicationPrice(page, 25000); }
+    finally {
+      const stored = await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } });
+      traceUx("class-price", Date.now(), { requestedPrice: 25000, storedPrice: stored.applicationPrice, displayedPrice: await card.getByText("참가비: 25,000원", { exact: true }).isVisible() });
+    }
+    expect((await db.classSchedule.findUniqueOrThrow({ where: { id }, select: { applicationPrice: true } })).applicationPrice).toBe(25000);
+    const address = card.getByRole("textbox", { name: "신청 링크 주소", exact: true });
+    const issue = observeActions(page, "class-link-fixture");
+    try {
+      await card.getByRole("button", { name: "신청 링크 발급", exact: true }).click(); issue.mark({ clicked: true });
+      await expect(card.getByRole("status").filter({ hasText: "신청 링크를 발급했습니다." })).toHaveText("신청 링크를 발급했습니다.");
+      await issue.settled();
+      await expect(address).toHaveCount(1); await expect(address).not.toHaveValue("");
+    } finally {
+      issue.mark({ addressCount: await address.count(), receiptVisible: await card.getByText("신청 링크를 발급했습니다.", { exact: true }).isVisible() }); issue.stop();
+      await (async () => {
+        const issued = await db.reservationApplicationGroup.findMany({ where: { classes: { some: { classScheduleId: id } } }, select: { links: { select: { isActive: true } } } });
+        traceUx("class-link-fixture", Date.now(), { issuedGroups: issued.length, activeLinks: issued.flatMap((row) => row.links).filter((row) => row.isActive).length });
+      })().catch(() => traceUx("class-link-fixture", Date.now(), { diagnosticReadFailed: true }));
+    }
     const raw = await address.inputValue();
     const group = await db.reservationApplicationGroup.findFirstOrThrow({ where: { classes: { some: { classScheduleId: id } } }, include: { links: true, classes: true } });
     expect(group.classes.length).toBe(1); expect(group.links.length).toBe(1);
@@ -158,6 +185,9 @@ test.describe.serial("Phase 2 dedicated local synthetic issuance", () => {
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new DOMException("Denied", "NotAllowedError"); } } }));
     await card.getByRole("button", { name: "링크 복사", exact: true }).click();
     await expect(card.getByRole("alert")).toHaveText("복사하지 못했습니다. 아래 주소를 길게 눌러 직접 복사해 주세요.");
+    expect((await address.inputValue()) === raw).toBe(true);
+    await address.focus();
+    expect(await address.evaluate((node: HTMLTextAreaElement) => node.selectionEnd - node.selectionStart === node.value.length)).toBe(true);
     await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: undefined }));
     await card.getByRole("button", { name: "공유하기", exact: true }).click();
     await expect(card).toContainText("공유 기능을 사용할 수 없습니다");

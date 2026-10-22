@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
 import { assertFamilyLedger } from "./support/integrated-ux-invariants";
+import { observeActions, recordTag, saveClassApplicationPrice, traceUx } from "./support/integrated-ux-sync";
 
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
@@ -99,10 +100,7 @@ test("real ADMIN login → class creation/prices → issued link → two childre
     await assertFamilyLedger(db, family.id, { D: 0, A: 0, P: 0, R: 0, T: 0 });
     async function changePublishedPrice(amount: number) {
       await page.goto(`/classes/${classIds[0]}`);
-      const linkCard = page.getByTestId("application-link-card");
-      await linkCard.getByRole("spinbutton", { name: "신청금액 설정 (원)", exact: true }).fill(String(amount));
-      await linkCard.getByRole("button", { name: "신청금액 저장", exact: true }).click();
-      await expect(linkCard.getByRole("status")).toContainText("신청금액을 저장했습니다");
+      await saveClassApplicationPrice(page, amount);
       expect((await db.classSchedule.findUniqueOrThrow({ where: { id: classIds[0] } })).applicationPrice).toBe(amount);
     }
     await changePublishedPrice(45000); await guardian.reload();
@@ -124,15 +122,70 @@ test("real ADMIN login → class creation/prices → issued link → two childre
     await deposit.getByLabel("실제 입금액", { exact: true }).fill("100000");
     await deposit.getByLabel("실제 은행 입금자명", { exact: true }).fill("합성실제입금자");
     await deposit.getByLabel("실제 입금일시 (KST)", { exact: true }).fill("2026-01-01T09:30");
-    await deposit.getByRole("button", { name: "실제 입금 기록", exact: true }).evaluate((element: HTMLButtonElement) => { element.click(); element.click(); });
-    await latest(page);
+    const depositAction = observeActions(page, "deposit");
+    try {
+      depositAction.mark({ clickRequested: true });
+      await deposit.getByRole("button", { name: "실제 입금 기록", exact: true }).evaluate((element: HTMLButtonElement) => { element.click(); element.click(); });
+      depositAction.mark({ clicked: true });
+      await latest(page); await depositAction.settled(2);
+      depositAction.mark({ current: true });
+    } finally { depositAction.mark(); depositAction.stop(); }
     const bankLedger = await assertFamilyLedger(db, family.id, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
     expect(bankLedger.deposits).toHaveLength(1); expect(bankLedger.deposits[0]!.confirmedById).toBe(admin.id);
     const selection = page.getByTestId(`confirmation-${first!.id}`);
     await selection.getByRole("checkbox").check(); await selection.getByRole("combobox").selectOption("NEW");
     await expect(page.getByTestId("confirmation-amounts")).toContainText("100,000원");
-    await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click(); await latest(page);
-    const after = await db.reservationApplication.findUniqueOrThrow({ where: { id: first!.id }, include: { reservation: { include: { paymentItem: { include: { payment: true } } } }, paymentMapping: true } });
+    await expect(selection.getByRole("checkbox")).toBeChecked();
+    await expect(selection.getByRole("combobox")).toHaveValue("NEW");
+    await expect(page.getByTestId(`confirmation-${sibling!.id}`).getByRole("checkbox")).not.toBeChecked();
+    const priorChildIds = new Set((await db.child.findMany({ select: { id: true } })).map((row) => row.id));
+    const confirmation = observeActions(page, "confirmation");
+    const started = Date.now();
+    const readSelected = () => db.reservationApplication.findUniqueOrThrow({ where: { id: first!.id }, include: { reservation: { include: { paymentItem: { include: { payment: true } } } }, paymentMapping: true } });
+    let after: Awaited<ReturnType<typeof readSelected>>;
+    try {
+      confirmation.mark({ applicationMatches: await selection.getAttribute("data-testid") === `confirmation-${first!.id}`, submissionMatches: first!.submissionId === family.id, newChild: true, applicationTag: recordTag(first!.id), submissionTag: recordTag(family.id), siblingTag: recordTag(sibling!.id), clickRequested: true });
+      await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
+      confirmation.mark({ clicked: true });
+      // The deposit's success paragraph remains during a subsequent pending save.
+      // This row disappears only from the authoritative selected-app receipt read.
+      await expect(selection).toHaveCount(0);
+      await latest(page); await confirmation.settled(2);
+      confirmation.mark({ current: true, receiptVisible: true });
+      await expect.poll(async () => {
+        const row = await readSelected();
+        return row.status === "CONFIRMED" && Boolean(row.reservation?.paymentItem && row.paymentMapping);
+      }, { message: "Selected application finance receipt after verified UI read", timeout: 5000 }).toBe(true);
+      after = await readSelected();
+    } finally {
+      confirmation.mark(); confirmation.stop();
+      // Safe diagnostic projection only: never emit application/family payloads.
+      await (async () => {
+        const row = await readSelected();
+        const other = await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling!.id } });
+        const deposits = await db.applicationDeposit.findMany({ where: { submissionId: family.id }, include: { allocations: true } });
+        const mappings = await db.reservationApplicationPaymentMapping.findMany({ where: { application: { submissionId: family.id } }, include: { allocations: true } });
+        const obligations = await db.returnObligation.findMany({ where: { submissionId: family.id }, include: { returns: true } });
+        traceUx("journey-db", started, {
+          applicationTag: recordTag(row.id), submissionTag: recordTag(row.submissionId), siblingTag: recordTag(other.id),
+          childTag: recordTag(row.childId), reservationTag: recordTag(row.reservation?.id), paymentTag: recordTag(row.reservation?.paymentItem?.payment.id), paymentItemTag: recordTag(row.reservation?.paymentItem?.id), mappingTag: recordTag(row.paymentMapping?.id),
+          applicationMatches: row.id === first!.id, submissionMatches: row.submissionId === family.id,
+          newChild: true, childCreated: Boolean(row.childId && !priorChildIds.has(row.childId)),
+          childMatches: Boolean(row.childId && row.childId === row.reservation?.childId),
+          reservation: Boolean(row.reservation), payment: Boolean(row.reservation?.paymentItem?.payment), mapping: Boolean(row.paymentMapping),
+          mappingMatches: Boolean(row.paymentMapping && row.paymentMapping.paymentItemId === row.reservation?.paymentItem?.id),
+          siblingUnchanged: JSON.stringify(other) === JSON.stringify(sibling),
+          D: deposits.reduce((sum, item) => sum + item.amount, 0),
+          A: deposits.reduce((sum, item) => sum + item.amount - item.allocations.reduce((n, allocation) => n + allocation.amount, 0), 0),
+          P: mappings.reduce((sum, item) => sum + item.allocations.reduce((n, allocation) => n + allocation.amount, 0), 0),
+          R: obligations.reduce((sum, item) => sum + item.amount - item.returnedAmount, 0),
+          T: obligations.reduce((sum, item) => sum + item.returns.reduce((n, returned) => n + returned.amount, 0), 0),
+        });
+      })().catch(() => traceUx("journey-db", started, { diagnosticReadFailed: true }));
+    }
+    expect(after.id).toBe(first!.id); expect(after.submissionId).toBe(family.id);
+    expect(after.childId).not.toBeNull(); expect(priorChildIds.has(after.childId!)).toBe(false);
+    expect(after.reservation!.childId).toBe(after.childId);
     expect(after).toMatchObject({ status: "CONFIRMED", quotedAmount: 40000, reservation: { classScheduleId: classIds[0], paymentItem: { amount: 40000, paidAmount: 40000, refundedAmount: 0, payment: { totalAmount: 40000, status: "PAID" } } } });
     expect(after.paymentMapping!.paymentItemId).toBe(after.reservation!.paymentItem!.id);
     expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling!.id } })).toEqual(sibling);
@@ -151,4 +204,8 @@ test("real ADMIN login → class creation/prices → issued link → two childre
   }
 });
 
-async function latest(page: Page) { await expect(page.getByTestId("workflow-status")).toContainText("저장 결과와 최신 서버 원장을 확인했습니다"); }
+async function latest(page: Page) {
+  const status = page.getByTestId("workflow-status");
+  await expect(status.locator("p").first()).toHaveText("서버 원장 확인됨");
+  await expect(status).toContainText("저장 결과와 최신 서버 원장을 확인했습니다");
+}
