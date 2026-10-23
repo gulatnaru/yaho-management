@@ -37,14 +37,14 @@ export async function timeoutSelfChecks(): Promise<number> {
         reporters: [path.resolve("tests/performance/support/sanitized-reporter.ts")],
       },
     })};\n`);
-    for (const mode of ["cell", "cleanup-failure", "setup"]) {
+    for (const mode of ["cell", "cleanup-failure", "setup", "attribution"]) {
       rmSync(resultPath, { force: true });
       const result = await privateChild(["node_modules/vitest/vitest.mjs", "run", "--config", config], {
         ...process.env, YAHO_OBS01_TIMEOUT_PROBE: mode, YAHO_OBS01_TIMEOUT_RESULT: resultPath,
       });
       requireFact(result.status === 1 && !result.overflow, "CALIBRATION");
       const report = parseChild(result);
-      requireFact(report.status === "INCOMPLETE" && report.failure === "INCOMPLETE" && readFileSync(resultPath, "utf8") === "PASS", "CALIBRATION"); count++;
+      requireFact((mode === "attribution" ? report.status === "INVALID" && report.failure === "ATTRIBUTION" && report.attributionDiagnostic?.condition === "UNPROVEN" : report.status === "INCOMPLETE" && report.failure === "INCOMPLETE") && readFileSync(resultPath, "utf8") === "PASS", "CALIBRATION"); count++;
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
   return count;

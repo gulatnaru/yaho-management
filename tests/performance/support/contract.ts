@@ -9,13 +9,24 @@ export type Invariant = typeof INVARIANTS[number];
 export const FAILURE_CODES = ["OPT_IN_REQUIRED", "LOCAL_ONLY", "UNSAFE_DATABASE", "DATABASE_UNAVAILABLE", "SERVER_IDENTITY", "MIGRATIONS", "COMPETING_WORKLOAD", "SOURCE_IDENTITY", "CALIBRATION", "ATTRIBUTION", "LATE_EVENT", "CLIENT_BUSY", "WRONG_OUTCOME", "ASSERTION_MISSING", "CLEANUP", "PRIVACY", "PROTOCOL", "STARTUP", "SETUP", "UNKNOWN_INFRASTRUCTURE", "INCOMPLETE", ...INVARIANTS] as const;
 export type FailureCode = typeof FAILURE_CODES[number];
 export class SafeFailure extends Error {
-  constructor(readonly code: FailureCode) { super(code); this.name = "OBS01_SAFE_FAILURE"; }
+  constructor(readonly code: FailureCode, readonly diagnostic?: AttributionDiagnostic) { super(code); this.name = "OBS01_SAFE_FAILURE"; }
 }
 export function requireFact(value: unknown, code: FailureCode): asserts value { if (!value) throw new SafeFailure(code); }
 export function failureCode(value: unknown): FailureCode { return value instanceof SafeFailure ? value.code : "UNKNOWN_INFRASTRUCTURE"; }
 export const OUTCOMES = ["SUCCESS", "ApplicationNotPendingError", "InsufficientApplicationDepositError", "DuplicateReservationError", "ApplicationPaymentAlreadyExistsError", "UNKNOWN_INFRASTRUCTURE"] as const;
 export type Outcome = typeof OUTCOMES[number];
 const count = z.number().int().min(0).max(100_000_000);
+export const attributionDiagnosticSchema = z.object({
+  stage: z.enum(["BOOTSTRAP", "SESSION", "MODEL", "SELECT", "COMMIT", "ROLLBACK", "CONCURRENT", "ASYMMETRIC", "SAMPLE", "IDLE", "DISCONNECT"]),
+  client: z.enum(["A", "B", "PAIR"]),
+  condition: z.enum(["MISSING", "EXTRA", "LATE", "IDLE", "SESSION", "WORK", "COUNT", "UNSTABLE", "UNPROVEN", "MODEL_EXPIRED", "FENCE_ORDER", "FENCE_OUTCOME"]),
+  repetition: count.max(3), expected: count, observed: count, late: count,
+}).strict();
+export type AttributionDiagnostic = z.infer<typeof attributionDiagnosticSchema>;
+export type AttributionContext = Pick<AttributionDiagnostic, "stage" | "client" | "repetition">;
+export function attributionFailure(context: AttributionContext, condition: AttributionDiagnostic["condition"], expected: number, observed: number, late = 0): SafeFailure {
+  return new SafeFailure("ATTRIBUTION", { ...context, condition, expected, observed, late });
+}
 const finite = z.number().finite().min(0).max(1_000_000_000);
 export const cellSchema = z.object({
   scenario: z.enum(SCENARIOS), n: z.union([z.literal(2), z.literal(4), z.literal(8)]), selected: z.number().int().min(1).max(8),
@@ -83,9 +94,10 @@ export type Calibration = z.infer<typeof calibrationSchema>;
 export const reportSchema = z.object({
   protocol: z.literal("OBS01_V1"), status: statusSchema, primaryCountsKnown: z.boolean(), started: z.string().datetime(), finished: z.string().datetime(), environment: environmentSchema.nullable(),
   calibration: z.array(calibrationSchema).max(8), rows: z.array(rowSchema).max(62), selfChecks: count, selfCheckInvariants: codeCountersSchema,
-  cleanup: z.enum(["PASS", "FAIL", "UNKNOWN"]), failure: z.enum(FAILURE_CODES).nullable(),
+  cleanup: z.enum(["PASS", "FAIL", "UNKNOWN"]), failure: z.enum(FAILURE_CODES).nullable(), attributionDiagnostic: attributionDiagnosticSchema.nullable(),
 }).strict().superRefine((report, ctx) => {
   const invalid = () => ctx.addIssue({ code: "custom", message: "PROTOCOL" });
+  if (report.attributionDiagnostic !== null && report.failure !== "ATTRIBUTION") invalid();
   if (report.rows.length !== 62 || report.rows.some((row) => row.status !== "COMPLETE" && (row.wall !== null || row.queries !== null))) ctx.addIssue({ code: "custom", message: "PROTOCOL" });
   const planned = initialRows();
   if (report.status === "NOT RUN" && (!report.primaryCountsKnown || report.rows.some((row) => row.attempted > 0 || row.warmups > 0 || row.status !== "NOT RUN"))) invalid();
@@ -110,23 +122,31 @@ export const reportSchema = z.object({
   }
   if (report.status === "COMPLETE" && (!report.primaryCountsKnown || !report.environment?.databaseVerified || !report.environment.migrationVerified || !report.environment.independentSessions || report.cleanup !== "PASS" || report.failure || report.calibration.length !== 8 || report.rows.some((row) => row.status !== "COMPLETE" || row.warmups !== 5 || row.valid !== 30 || row.cleanup !== "PASS" || !row.wall || (row.metric !== "PAIR" && !row.queries)))) ctx.addIssue({ code: "custom", message: "PROTOCOL" });
   if (report.status === "COMPLETE") {
+    if (report.attributionDiagnostic !== null) invalid();
     if (report.selfChecks === 0 || INVARIANTS.some((code) => { const c = report.selfCheckInvariants[code]; return c.expected === 0 || c.expected !== c.executed || c.pass !== c.executed || c.fail !== 0; })) invalid();
     for (const client of ["A", "B"] as const) for (const kind of ["SELECT", "COMMIT", "ROLLBACK", "INDEPENDENT"] as const) {
       const entries = report.calibration.filter((c) => c.client === client && c.kind === kind), c = entries[0];
-      if (entries.length !== 1 || !c || !c.verified || !c.attribution || c.lateEvents !== 0 || c.eventMin !== c.eventMax || c.explicit !== (kind === "SELECT" ? 1 : 2) || (kind === "SELECT" ? c.eventMin !== 1 : c.eventMin < 2)) invalid();
+      if (entries.length !== 1 || !c || !c.verified || !c.attribution || c.lateEvents !== 0 || c.eventMin !== c.eventMax || c.explicit !== (kind === "SELECT" ? 1 : 2) || c.eventMin !== (kind === "SELECT" ? 1 : 4)) invalid();
     }
   }
 });
 export type Report = z.infer<typeof reportSchema>;
+export function recordReportFailure(report: Report, error: unknown): void {
+  const code = failureCode(error);
+  if (code === "INCOMPLETE") { report.failure = code; report.status = "INCOMPLETE"; report.attributionDiagnostic = null; }
+  else { report.failure ??= code; if (report.failure !== "INCOMPLETE") report.status = "INVALID"; }
+  if (report.failure === "ATTRIBUTION" && error instanceof SafeFailure && error.code === "ATTRIBUTION" && error.diagnostic) report.attributionDiagnostic ??= error.diagnostic;
+}
 export function initialRows(): AggregateRow[] { return CELLS.flatMap((cell) => cell.scenario === "SAME-SUBMISSION RACE" ? [newRow(cell, "WINNER"), newRow(cell, "LOSER"), newRow(cell, "PAIR")] : [newRow(cell)]); }
 export function safeReport(value: unknown): Report { const result = reportSchema.safeParse(value); if (!result.success) throw new SafeFailure("PROTOCOL"); return result.data; }
-export function emptyReport(code: FailureCode): Report { return { protocol: "OBS01_V1", status: "NOT RUN", primaryCountsKnown: true, started: new Date().toISOString(), finished: new Date().toISOString(), environment: null, calibration: [], rows: initialRows(), selfChecks: 0, selfCheckInvariants: emptyCodes(), cleanup: "UNKNOWN", failure: code }; }
+export function emptyReport(code: FailureCode): Report { return { protocol: "OBS01_V1", status: "NOT RUN", primaryCountsKnown: true, started: new Date().toISOString(), finished: new Date().toISOString(), environment: null, calibration: [], rows: initialRows(), selfChecks: 0, selfCheckInvariants: emptyCodes(), cleanup: "UNKNOWN", failure: code, attributionDiagnostic: null }; }
 export const PROTOCOL_PREFIX = "OBS01_AGGREGATE ";
 export function serializeReport(value: unknown): string { return PROTOCOL_PREFIX + JSON.stringify(safeReport(value)); }
 export function markdown(value: unknown): string {
   const report = safeReport(value);
   const lines = ["# OBS-01", `status: ${report.status}`, `primary_counts_known: ${report.primaryCountsKnown}`, `utc_started: ${report.started}`, `utc_finished: ${report.finished}`, `failure: ${report.failure ?? "N/A"}`, `cleanup: ${report.cleanup}`, `self_checks: ${report.selfChecks}`];
   if (report.environment) for (const [key, val] of Object.entries(report.environment)) lines.push(`${key}: ${val}`);
+  if (report.attributionDiagnostic) for (const [key, value] of Object.entries(report.attributionDiagnostic)) lines.push(`attribution_${key}: ${value}`);
   lines.push("pool topology: dedicated loopback direct PostgreSQL; isolation unchanged default; event counters and clocks; no overhead correction", "query event coverage: observed events only; extra transaction events unclassified; unexposed engine commands excluded", "contention: simultaneous start; lock overlap and lock wait duration unmeasured", "physical table/index growth, cache warming and autovacuum may affect observations", "", "| Client | Calibration | Explicit | Repetitions | Events min/max | Verified | Attribution | Late events |", "| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const c of report.calibration) lines.push(`| ${c.client} | ${c.kind} | ${c.explicit} | ${c.repetitions} | ${c.eventMin}/${c.eventMax} | ${c.verified} | ${c.attribution} | ${c.lateEvents} |`);
   lines.push("", "| Scenario | N | Selected | Mode | Device/consent/deposit/hold | Outcome/metric | Status | Warmups | Attempted/settled/valid | Wall p50/p95/max ms | Query min/p50/p95/max | Fulfilled/rejected | Effects | Invariant scope | Expected/executed/pass/fail | Cleanup |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");

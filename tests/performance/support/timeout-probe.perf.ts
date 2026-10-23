@@ -5,6 +5,7 @@ import { emptyCodes, requireFact, type Environment, type Report } from "./contra
 import type { Fixture, Snapshot } from "./fixtures";
 
 // Executed only by timeoutSelfChecks in an isolated, database-free Vitest child.
+// The attribution mode additionally exercises the real missing-terminal gate.
 const probe = vi.hoisted(() => ({
   mode: process.env.YAHO_OBS01_TIMEOUT_PROBE,
   events: [] as string[], pending: 0, fixtures: 0, calls: 0,
@@ -24,6 +25,14 @@ vi.mock("vitest", async (original) => {
       }
       await callback(suite);
       const report = (suite.meta as { obs01: Report }).obs01;
+      if (probe.mode === "attribution") {
+        requireFact(report.status === "INVALID" && report.failure === "ATTRIBUTION" && report.attributionDiagnostic?.stage === "SAMPLE" && report.attributionDiagnostic.condition === "UNPROVEN", "CALIBRATION");
+        requireFact(probe.pending === 0 && probe.fixtures === 1 && probe.calls === 1 && report.cleanup === "PASS", "CALIBRATION");
+        requireFact(report.rows[0]!.status === "INVALID" && report.rows.every((row) => row.attempted === 0 && row.warmups === 0) && report.rows.slice(1).every((row) => row.status === "NOT RUN"), "CALIBRATION");
+        requireFact(probe.events.includes("roots-start") && probe.events.includes("roots-clean") && probe.events.filter((event) => event === "disconnect").length === 1 && probe.events.indexOf("roots-clean") < probe.events.indexOf("disconnect"), "CALIBRATION");
+        writeFileSync(process.env.YAHO_OBS01_TIMEOUT_RESULT!, "PASS");
+        return;
+      }
       requireFact(report.status === "INCOMPLETE" && report.failure === "INCOMPLETE" && probe.pending === 0, "CALIBRATION");
       requireFact(probe.events.filter((e) => e === "disconnect").length === 1 && probe.events.indexOf("settled") < probe.events.indexOf("disconnect"), "CALIBRATION");
       if (probe.mode === "setup") {
@@ -72,19 +81,28 @@ vi.mock("./fixtures", async (original) => ({
     if (probe.mode === "cleanup-failure") throw new Error("synthetic cleanup failure");
   },
 }));
-vi.mock("./measurement", async (original) => ({
-  ...await original<typeof import("./measurement")>(),
-  clients: () => ({ setup: {}, measured: [{ counter: { drain: async () => {} } }, { counter: { drain: async () => {} } }] }),
-  connect: async () => true,
-  calibrate: async () => [],
-  disconnect: async () => { requireFact(probe.pending === 0, "CALIBRATION"); probe.events.push("disconnect"); },
-  measureCore: async () => {
-    probe.calls++; probe.pending++; probe.events.push("operation-start");
-    await new Promise<void>((resolve) => { probe.release = resolve; });
-    probe.pending--; probe.events.push("settled");
-    return { fulfilled: true, outcome: "SUCCESS", queries: 1, wall: 1 };
-  },
-}));
+vi.mock("./measurement", async (original) => {
+  const actual = await original<typeof import("./measurement")>();
+  return {
+    ...actual,
+    clients: () => ({ setup: {}, measured: [0, 1].map(() => {
+      if (probe.mode !== "attribution") return { counter: { drain: async () => {} } };
+      let time = 0;
+      const counter = new actual.EventCounter({ now: () => time, pause: async () => { time += 5; } });
+      return { counter, db: { $transaction: async () => { counter.event("BEGIN"); counter.event("opaque simulated event"); return { paymentId: "synthetic", reservationIds: [] }; } } };
+    }) }),
+    connect: async () => true,
+    calibrate: async () => [],
+    disconnect: async () => { requireFact(probe.pending === 0, "CALIBRATION"); probe.events.push("disconnect"); },
+    measureCore: async (...args: Parameters<typeof actual.measureCore>) => {
+      if (probe.mode === "attribution") { probe.calls++; return actual.measureCore(...args); }
+      probe.calls++; probe.pending++; probe.events.push("operation-start");
+      await new Promise<void>((resolve) => { probe.release = resolve; });
+      probe.pending--; probe.events.push("settled");
+      return { fulfilled: true, outcome: "SUCCESS", queries: 1, wall: 1 };
+    },
+  };
+});
 
 // Release deferred work only after the real runner has reported its timeout.
 // setImmediate lets the harness's finish hook close sampling before it settles.

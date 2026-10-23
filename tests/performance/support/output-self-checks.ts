@@ -62,6 +62,18 @@ export async function outputSelfChecks(): Promise<number> {
     requireFact(result.status !== 0 && !result.overflow && (result.stdout.includes(canary) || result.stderr.includes(canary)), "PRIVACY");
     mustReject(() => parseChild(result)); checks++;
   }
+  // Exercise the real fenced listener, deferred emitter cases and private
+  // query/error canaries behind captured process streams. Only one aggregate
+  // protocol line is allowed to escape; a listener-side log breaks this check.
+  const fencedOutput = await privateChild(["--import", "tsx", "-e", `(async () => {
+    const fence = await import('./tests/performance/support/fence-self-checks.ts');
+    await (fence.fenceSelfChecks ?? fence.default.fenceSelfChecks)();
+    const loaded = await import('./tests/performance/support/contract.ts');
+    const contract = loaded.default ?? loaded;
+    require('node:fs').writeSync(1, contract.serializeReport(contract.emptyReport('ATTRIBUTION')));
+    process.exitCode = 1;
+  })().catch(() => { process.exitCode = 2; });`]);
+  requireFact(fencedOutput.status === 1 && !fencedOutput.overflow && !fencedOutput.stdout.includes("PRIVATE_QUERY_CANARY") && !fencedOutput.stderr.includes("PRIVATE_QUERY_CANARY") && parseChild(fencedOutput).failure === "ATTRIBUTION", "PRIVACY"); checks++;
   const deniedEnvironments: Array<{ environment: NodeJS.ProcessEnv; code: string }> = [];
   for (const value of [undefined, "0", "other"]) {
     const environment: NodeJS.ProcessEnv = { ...process.env, YAHO_OBS01_PERF: value };

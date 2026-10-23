@@ -4,12 +4,14 @@ import { EventCounter } from "./measurement";
 import { outputSelfChecks } from "./output-self-checks";
 import { invariantMutationChecks } from "./invariant-self-checks";
 import { timeoutSelfChecks } from "./timeout-self-checks";
+import { attributionSelfChecks } from "./attribution-self-checks";
 
 export async function selfChecks(): Promise<{ count: number; invariants: CodeCounters }> {
   let count = 0;
   const invariants = emptyCodes();
   count += invariantMutationChecks();
   count += await timeoutSelfChecks();
+  count += await attributionSelfChecks();
   requireFact(CELLS.length === 50 && CELLS.filter((c) => c.scenario === "SAME-SUBMISSION RACE").length === 6 && CELLS.filter((c) => c.device === "NONE").length === 2 && CELLS.every((c) => !c.scenario.startsWith("DUPLICATE") || c.mode === "EXISTING"), "CALIBRATION"); count++;
   const ranks = distribution(Array.from({ length: 30 }, (_, i) => i + 1));
   requireFact(ranks?.p50 === 15 && ranks.p95 === 29 && ranks.max === 30 && distribution([1, 2]) === null, "CALIBRATION"); count++;

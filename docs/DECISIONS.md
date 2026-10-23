@@ -619,3 +619,12 @@
 - Compatibility: ADR-052의 기존 Phase 18 주소 재발급과 ADR-060/063의 명시적 새 방식 전환을 구분한다. 재발급은 이전 주소 무효화 경고 후 ADMIN이 기존 raw-token 행만 revision 검증하여 교체하며 금액/새 방식 설정을 강제하지 않는다. 업그레이드 후 raw-token 행을 새로 만들지 않는다. 기존 신청·예약·금액 스냅샷, 토큰 정책과 저장 범위를 유지한다.
 - Reason: 가격 경로를 제거하는 (a)보다 기존 ADMIN 전체 폼의 가격 설정/해제를 보존하면서 stale 가격 덮어쓰기를 차단한다. 가격을 변경하지 않은 운영정보 편집까지 가격 충돌로 막을 필요는 없다.
 - Scope: 금액·환불·개인정보 수집 정책 변경은 없다. ADR-020/052/060/063의 나머지 정책, Phase 2 범위, schema/migration 불변과 Preview/Production 접근 금지를 유지한다. 재시도/검증 상태는 `docs/UX-REDESIGN-INTEGRATED-PLAN.md`의 Phase 2 후속 절과 `docs/PHASE2-INTEGRATION-STATUS.md`에 기록한다.
+
+## ADR-065: OBS-01 트랜잭션 종료 fence에 한정한 이벤트 문자열 비교 예외
+
+- Status: Accepted
+- Date: 2026-10-23
+- Source: 흥영의 이번 Iteration 6B BUILD 승인 — "예외 승인 — BEGIN/COMMIT/ROLLBACK fence만 허용".
+- Context: OBS-01의 미지수 query-event 총수는 유한한 quiet interval만으로 전달 완료를 증명할 수 없다. 기존 PLAN 7의 SQL 분류 금지 때문에 이전 ATTRIBUTION 수정은 calibration 뒤 primary 실행을 UNPROVEN으로 차단했다.
+- Decision: 이벤트 query 문자열을 메모리 안에서 정확한 세 상수 `BEGIN`, `COMMIT`, `ROLLBACK`와 동등 비교하는 것만 허용한다. 목적은 해당 트랜잭션의 결과와 일치하는 종료 명령의 전달을 event-stream 완료 fence로 사용하는 것뿐이다. pinned Prisma 6.19.3 / engine c2990dca591cba766e3b7ef5d9e8a84796e47ab7의 source 기본 경로는 이 대문자 문자열을 그대로 전달하므로 normalization하지 않는다. prefix/substring/일반 statement 분류, 원문 보관·로그·진단/리포트 포함·원문 hash 출력은 금지한다. 불일치 문자열은 비교 후 폐기한다.
+- Consequences: primary와 독립 client별 race 창은 BEGIN 및 결과에 맞는 COMMIT/ROLLBACK 전달과 기존 count quiescence를 모두 확인해야 완료된다. fence 누락·순서/결과 불일치·종료 뒤 stray callback은 INVALID로 남는다. 기존 bootstrap/calibration 정확한 총수·asymmetric probe·수명 guard·출력/환경/불변식 경계는 유지한다. 이 예외는 일반 SQL 관찰, 실DB 실행/CI trigger, stage/commit/push/merge 승인이 아니다. 실제 PostgreSQL 확인은 NOT RUN이며 source 근거·로컬 검증은 `docs/OBS-01-PERF-RESULTS.md`의 이번 fence 기록에 남긴다.

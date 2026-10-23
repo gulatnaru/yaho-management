@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, it } from "vitest";
 import { isDeepStrictEqual } from "node:util";
 import { confirmApplicationSubmissionCore } from "../../../server/reservation-applications/finance";
-import { CELLS, REPETITIONS, WARMUPS, SafeFailure, addCodes, distribution, emptyReport, failureCode, requireFact, type AggregateRow, type Cell, type Report } from "../support/contract";
+import { CELLS, REPETITIONS, WARMUPS, SafeFailure, addCodes, distribution, emptyReport, failureCode, recordReportFailure, requireFact, type AggregateRow, type Cell, type Report } from "../support/contract";
 import { collectEnvironment, guardEnvironment } from "../support/environment";
 import { cleanupFixture, cleanupRoots, createRoots, manifest, prepareFixture, runRoots, snapshot, type Fixture, type Snapshot } from "../support/fixtures";
 import { AssertionGate, assertFacts, deriveFacts, expectedInvariants, ledger } from "../support/invariants";
-import { calibrate, classify, clients, connect, disconnect, measureCore, measureRace, type Call, type Clients } from "../support/measurement";
+import { auditCounters, calibrate, classify, clients, connect, disconnect, measureCore, measureRace, type Call, type Clients } from "../support/measurement";
 import { selfChecks } from "../support/self-checks";
 import { HarnessLifecycle } from "../support/lifecycle";
 
@@ -19,9 +19,7 @@ let cleanupPromise: Promise<void> | undefined;
 const lifecycle = new HarnessLifecycle<Fixture>();
 function stop(error: unknown): void {
   lifecycle.stop();
-  const code = failureCode(error);
-  if (code === "INCOMPLETE") { report.failure = code; report.status = "INCOMPLETE"; }
-  else { report.failure ??= code; if (report.failure !== "INCOMPLETE") report.status = "INVALID"; }
+  recordReportFailure(report, error);
 }
 function fixtureCleanupStatus(cell: Cell): AggregateRow["cleanup"] {
   return lifecycle.cleanupStatus([...lifecycle.fixtures.keys()].filter((f) => f.cell === cell));
@@ -64,7 +62,16 @@ async function finishCleanup(): Promise<void> {
     } else report.cleanup = "UNKNOWN";
   } catch { report.cleanup = "FAIL"; stop(new SafeFailure("CLEANUP")); }
   finally {
-    if (db) { try { await disconnect(db); } catch { report.cleanup = "FAIL"; stop(new SafeFailure("CLEANUP")); } }
+    if (db) {
+      try { await disconnect(db); }
+      catch (error) {
+        // A log-attribution failure does not undo separately verified fixture
+        // cleanup or fulfilled disconnects. Real disconnect failures still fail
+        // CLEANUP inside disconnect(), even if attribution also failed.
+        if (!(error instanceof SafeFailure && error.code === "ATTRIBUTION")) report.cleanup = "FAIL";
+        stop(error instanceof SafeFailure ? error : new SafeFailure("CLEANUP"));
+      }
+    }
   }
 }
 beforeAll(() => lifecycle.run(async () => {
@@ -109,6 +116,7 @@ async function runCell(cell: Cell): Promise<void> {
       catch (error) { throw error instanceof SafeFailure ? error : new SafeFailure("SETUP"); }
       if (lifecycle.stopped) return;
       checkFixture(f, before);
+      await auditCounters(db, "SAMPLE");
       const input = { submissionId: f.id, choices: f.choices, actorUserId: roots.actors[0], now: f.now };
       if (!warmup) for (const row of rows) row.attempted++;
       let calls: Call[], pairWall = 0, actor = roots.actors[0], raceSingleWinner = false;
@@ -130,7 +138,7 @@ async function runCell(cell: Cell): Promise<void> {
         const call = await measureCore(db.measured[0], input);
         calls = [call];
         if (!warmup) recordCall(rows[0]!, call);
-        await Promise.all(db.measured.map((m) => m.counter.drain()));
+        await auditCounters(db, "SAMPLE");
         requireFact(call.outcome === cell.expected && call.fulfilled === (cell.expected === "SUCCESS"), "WRONG_OUTCOME");
       }
       if (lifecycle.stopped) return;
