@@ -73,7 +73,21 @@ jobs:
           NODE
       - name: Prisma generate
         run: npm run prisma:generate
-      - name: Install browser engines
+      - name: Install browser binaries (no APT)
+        timeout-minutes: 10
+        run: |
+          if [ "${{ matrix.project }}" = "desktop-chromium" ]; then
+            npx playwright install chromium
+          else
+            npx playwright install chromium webkit
+          fi
+      - name: Smoke check required browser engines
+        id: browser-smoke
+        continue-on-error: true
+        timeout-minutes: 3
+        run: node --import tsx scripts/ci/playwright-browser-smoke.ts
+      - name: Install system dependencies after failed browser smoke
+        if: steps.browser-smoke.outcome == 'failure'
         timeout-minutes: 10
         run: |
           if [ "${{ matrix.project }}" = "desktop-chromium" ]; then
@@ -81,6 +95,10 @@ jobs:
           else
             npx playwright install --with-deps chromium webkit
           fi
+      - name: Recheck required browser engines after system dependencies
+        if: steps.browser-smoke.outcome == 'failure'
+        timeout-minutes: 3
+        run: node --import tsx scripts/ci/playwright-browser-smoke.ts
       - name: Verify PostgreSQL
         run: npx tsx scripts/ci/verify-e2e-db.ts
       - name: Prepare ephemeral database roles

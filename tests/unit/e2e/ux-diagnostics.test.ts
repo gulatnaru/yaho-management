@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,10 @@ import UxReporter from "../../e2e/support/ux-reporter";
 const publish = vi.hoisted(() => vi.fn());
 vi.mock("../../e2e/support/ux-diagnostics", async (original) => ({ ...await original<typeof import("../../e2e/support/ux-diagnostics")>(), publishUxDiagnostics: publish }));
 const directories: string[] = [];
+type WorkflowStep = { name: string; run?: string; id?: string; if?: string; "timeout-minutes"?: number; "continue-on-error"?: boolean };
+const { load: loadYaml } = createRequire(import.meta.url)("js-yaml") as {
+  load: (source: string) => { jobs: { ux: { "timeout-minutes": number; env: Record<string, string>; strategy: { matrix: { project: string[] } }; steps: WorkflowStep[] } } };
+};
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); publish.mockReset(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 const run = (spec: string): DiagnosticRun => ({ project: "mobile-webkit-390", spec, status: "failed", counts: { discovered: 1, completed: 1, passed: 0, blocked: 0 }, tests: [{ title: "MANAGER denial › direct list", file: spec, line: 69, status: "failed", expectedStatus: "passed", classification: "failed", errors: [{ message: "Expected: 404\nReceived: 200", stack: `Error: Expected: 404\n    at ${spec}:69:20` }] }], errors: [] });
 
@@ -84,6 +89,37 @@ describe("synthetic assertion diagnostics privacy", () => {
     expect(workflow).toContain("install --with-deps chromium\n");
     expect(workflow).toContain("else\n            npx playwright install --with-deps chromium webkit\n");
     expect(readFileSync("tests/e2e/support/ux-auth.ts", "utf8")).toContain("chromium.launch(");
+
+    const job = loadYaml(workflow).jobs.ux;
+    const start = job.steps.findIndex((step) => step.name === "Prisma generate");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const [binaries, smoke, dependencies, recheck, postgres] = job.steps.slice(start + 1, start + 6);
+    expect(binaries.name).toBe("Install browser binaries (no APT)");
+    expect(binaries["timeout-minutes"]).toBe(10);
+    expect(binaries).not.toHaveProperty("if");
+    expect(binaries).not.toHaveProperty("continue-on-error");
+    expect(binaries.run).not.toContain("--with-deps");
+    expect(smoke).toMatchObject({ id: "browser-smoke", "continue-on-error": true, "timeout-minutes": 3, run: "node --import tsx scripts/ci/playwright-browser-smoke.ts" });
+    expect(smoke).not.toHaveProperty("if");
+    expect(dependencies.name).toBe("Install system dependencies after failed browser smoke");
+    expect(dependencies).toMatchObject({ if: "steps.browser-smoke.outcome == 'failure'", "timeout-minutes": 10 });
+    expect(dependencies).not.toHaveProperty("continue-on-error");
+    expect(recheck.name).toBe("Recheck required browser engines after system dependencies");
+    expect(recheck).toMatchObject({ if: "steps.browser-smoke.outcome == 'failure'", "timeout-minutes": 3, run: smoke.run });
+    expect(recheck).not.toHaveProperty("continue-on-error");
+    expect(postgres.name).toBe("Verify PostgreSQL");
+    expect(job["timeout-minutes"]).toBe(40);
+    expect(job.env).not.toHaveProperty("UX_SPECS");
+    expect(job.strategy.matrix.project).toEqual(["desktop-chromium", "mobile-webkit-360", "mobile-webkit-390", "tablet-webkit-768"]);
+    for (const [step, flags] of [[binaries, ""], [dependencies, "--with-deps "]] as const) {
+      expect(step.run?.trim()).toBe([
+        'if [ "${{ matrix.project }}" = "desktop-chromium" ]; then',
+        `  npx playwright install ${flags}chromium`,
+        "else",
+        `  npx playwright install ${flags}chromium webkit`,
+        "fi",
+      ].join("\n"));
+    }
   });
   it("writes allowlisted results/status fields outside browser output and retains earlier specs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "ux-diagnostics-")); directories.push(directory);

@@ -186,3 +186,46 @@ This is a harness-bookkeeping correction: passing the transport observation cann
 - Parent read-only QA followed by sequential code review: **PASS**, **Critical 0 / Major 0 / Minor 0**. Inspected the final diff, all four requested regression cases and actual focused/full-unit/lint/build logs without duplicating the full suite. Confirmed exact four-file scope, unchanged product/spec/workflow content, byte-identical `saveClassApplicationPrice`/`recordPriceStates`, prior report as an exact HEAD prefix, unchanged HEAD `dd742934394b40d16fc9160abb81fc30ea99df0a`, no staged/untracked files and clean `git diff --check`.
 
 These synthetic observer/locator unit regressions verify transport classification and existing assertion rejection paths, not an actual browser/network reproduction. Browser/DB E2E and remote CI are not rerun; the accepted run above predates this harness correction. CI must still verify the newly unblocked Chromium flows, including the full-journey money flow. The observer cannot establish application success or the originating stream interruption's cause.
+
+## Final supplement — CI install-step hardening only
+
+Baseline: HEAD `10ef9c3`, branch `feature/phase21-ai-service`, existing Draft PR **#54**. This supplement changes only browser installation, its standalone launch smoke check, the existing workflow regression and this appended report. No product code, E2E spec/step/assertion, UX runner/reporting, fixture, auth, database guard, schema or migration changes. No stage, commit, push or remote CI dispatch was performed.
+
+### Established CI evidence
+
+The supplied evidence from run **39871025674**, **mobile-webkit-360 attempts 1–3**, identifies the APT system-dependency phase of `npx playwright install --with-deps chromium webkit` as the bottleneck. Downloads from `azure.archive.ubuntu.com` reached only approximately **26 of 60+ packages in 10 minutes**; **libflite1 (13.5 MB) took approximately 80 seconds**. The existing 10-minute install-step timeout terminated APT before browser-binary downloads were reached. WebKit brings a large gstreamer/ffmpeg dependency tree. The other three projects completed the full suite successfully in that run. These are accepted supplied observations, not newly retrieved CI results, and do not establish a Playwright browser-download bottleneck.
+
+### New install sequence and failure ownership
+
+The original install block, immediately after Prisma generate and before Verify PostgreSQL, becomes:
+
+1. **Install browser binaries (no APT)**: `npx playwright install chromium` for desktop Chromium; `npx playwright install chromium webkit` for every WebKit project. There is no `--with-deps`. Its **10-minute** timeout/failure belongs to the clearly named browser-binary download step.
+2. **Smoke check required browser engines**, ID `browser-smoke`: run `node --import tsx scripts/ci/playwright-browser-smoke.ts`, with **3 minutes** and `continue-on-error: true`. From `UX_PROJECT`, the script actually launches Chromium alone for desktop or Chromium plus WebKit otherwise. For each engine it creates a context and page, closes the page/context/browser, then prints `SMOKE_OK <engine>`. Launch or lifecycle errors print `SMOKE_FAIL <engine>` with details. A failed engine does not prevent checking the next engine; any failure makes the process exit nonzero. Each launch has a **30-second** timeout, with browser/context cleanup in `finally` blocks.
+3. **Install system dependencies after failed browser smoke**: only `if: steps.browser-smoke.outcome == 'failure'`, run the official `npx playwright install --with-deps` command with the same engine split and a separate **10-minute** timeout. An APT timeout/failure fails this explicitly named system-dependency step. There are no wrapper retries or ignored dependency-install failures.
+4. **Recheck required browser engines after system dependencies**: the identical smoke command, the same failure condition and **3-minute** timeout, without `continue-on-error`. After a successful fallback installation, engines that still cannot launch fail the job here with their smoke output.
+
+**Fast path:** if the GitHub-hosted runner image already provides the required system libraries, the first smoke passes, steps 3–4 are skipped and no APT download occurs. **Fallback path:** an initial launch failure is recorded while allowing the dependency step to run; its condition uses the original smoke **outcome**, which remains `failure` despite `continue-on-error`. Dependency installation must succeed before the final smoke can validate launchability. Slow or failing APT remains a visible infrastructure failure within its original 10-minute bound; this change does not promise to accelerate APT when fallback is genuinely needed.
+
+Only official Playwright installation and GitHub-hosted runners are used. Chromium remains required for the unchanged auth harness in every project; WebKit remains the WebKit projects' test engine. The job timeout remains **40 minutes**, and matrix, PostgreSQL service, environment, seed/auth steps, DB guards, artifact allowlist and cleanup remain byte-identical outside this install block. `UX_SPECS` remains unset for the full suite.
+
+### Files changed
+
+| File | Change |
+| --- | --- |
+| `.github/workflows/e2e-ux.yml` | Replace only the original browser-install block with the four bounded steps above. |
+| `scripts/ci/playwright-browser-smoke.ts` | New standalone real-launch smoke for each required engine, cleanup, per-engine records and aggregate failure exit. |
+| `tests/unit/e2e/ux-diagnostics.test.ts` | Retain all existing assertions, including Chromium auth and the engine split; parse YAML and assert sequence/position, exact install commands, unchanged four-project matrix, timeouts, failure conditions, initial-only continuation, identical recheck command, 40-minute job bound and unset `UX_SPECS`. |
+| `docs/E2E_CI_ITERATION_5_REPORT.md` | Append this supplement, preserving all earlier report content verbatim. |
+
+### Verification
+
+- Workflow regression: **20/20 PASS in 1 file**, `npx vitest run tests/unit/e2e/ux-diagnostics.test.ts --maxWorkers=2 --minWorkers=1`, exit **0**, **922 ms**; log `/tmp/yaho-final-supplement-focused.log`.
+- Workflow YAML: **PASS**, parsed with the already-installed `js-yaml`; observed `YAML_PARSE_OK` and the four-step sequence before Verify PostgreSQL. Parsing is also part of the regression above; log `/tmp/yaho-final-supplement-yaml.log`. No dependency/package changes.
+- Typecheck: **PASS**, `npx tsc --noEmit`, exit **0**; log `/tmp/yaho-final-supplement-typecheck.log`.
+- Lint: **PASS**, `npm run lint`, exit **0**, zero errors; only the existing unrelated `_body` unused-variable warning at `tests/unit/ai-service/selection-safety.test.ts:40` remains; log `/tmp/yaho-final-supplement-lint.log`.
+- Full unit suite: **2557/2557 PASS in 206 files**, `npm test -- --maxWorkers=2 --minWorkers=1`, exit **0**, **105.25 seconds**, without file filters; log `/tmp/yaho-final-supplement-unit.log`.
+- Production build: **PASS**, sequential `npm run build`, exit **0**, optimized compilation/type validation, all **19** static pages and final route output. Immediate port-independent `pgrep -af '[n]ext dev'` preflight returned **1** with no matching dev process; logs `/tmp/yaho-final-supplement-dev-preflight.log` and `/tmp/yaho-final-supplement-build.log`.
+- Local real-launch attempts: `UX_PROJECT=desktop-chromium node --import tsx scripts/ci/playwright-browser-smoke.ts` exited **1**, reporting `SMOKE_FAIL chromium` because the browser executable is absent. The same command with `UX_PROJECT=mobile-webkit-360` exited **1**, reporting **both** `SMOKE_FAIL chromium` and `SMOKE_FAIL webkit` for absent executables, demonstrating that the first failure does not stop checking the second required engine; logs `/tmp/yaho-final-supplement-smoke-chromium.log` and `/tmp/yaho-final-supplement-smoke-webkit.log`. **No local browser smoke pass is claimed.** No browser downloads or APT installation were attempted locally.
+- Scope/format: `git diff --check` **PASS**; installation is the only changed workflow block, the previous report remains an exact HEAD prefix, HEAD remains `10ef9c3` and the index remains empty.
+
+Browser/DB E2E and remote CI were not rerun. The changed workflow's real runner-image fast path and any APT fallback still require CI observation; local YAML/unit checks and the observed missing-executable failure paths do not establish a successful browser launch or a new full-matrix runtime pass.
