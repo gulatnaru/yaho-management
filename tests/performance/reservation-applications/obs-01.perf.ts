@@ -82,7 +82,8 @@ beforeAll(() => lifecycle.run(async () => {
     report.environment = await collectEnvironment(db.setup);
     if (lifecycle.stopped) return;
     connected = true;
-    report.environment.independentSessions = await connect(db);
+    try { report.environment.independentSessions = await connect(db); }
+    finally { report.bootstrapObserved = { A: db.measured[0].counter.bootstrapObserved, B: db.measured[1].counter.bootstrapObserved }; }
     if (lifecycle.stopped) return;
     rootsTouched = true; await createRoots(db.setup, roots);
     if (lifecycle.stopped) return;

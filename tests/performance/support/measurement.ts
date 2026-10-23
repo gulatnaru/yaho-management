@@ -39,17 +39,35 @@ export async function connect(c: Clients, now: () => number = () => performance.
   // Reconnecting must not refresh the proof's age using an already-live pool.
   if (deliveryModels.has(c)) throw attributionFailure({ stage: "MODEL", client: "PAIR", repetition: 0 }, "UNPROVEN", 1, 0);
   deliveryModels.set(c, { started: now(), now });
-  // Pinned native engine: fresh $connect emits one version() query; the PID
-  // probe emits one more. Observe BEFORE $connect: ignoring bootstrap callbacks
-  // permits them to bleed into calibration. Fresh mobc connections skip the
-  // 15-second checkout health check. An unexpected extra still fails closed.
-  const connected = await Promise.allSettled([c.setup.$connect(), ...c.measured.map((m, index) => captureKnown(m, 2, { stage: "BOOTSTRAP", client: index === 0 ? "A" : "B", repetition: 0 }, async () => {
-    await m.db.$connect();
-    return m.db.$queryRaw<Array<{ value: number }>>`SELECT pg_backend_pid()::integer AS value`;
-  }))]);
+  // Own every callback before fresh connect, without assuming how many engine
+  // initialization queries are emitted. The exact A/B probe event must arrive
+  // on its own client, then ALL callbacks must quiesce before bootstrap closes.
+  // The probe is issued after $connect settles: its observed callback fences
+  // preceding initialization callbacks under the pinned per-engine FIFO model.
+  // Quiet time alone never proves that an unobserved internal query occurred.
+  // This establishes a baseline, not attribution accuracy: the unchanged exact
+  // calibration totals, asymmetric probes and terminal fences establish that.
+  const connected = await Promise.allSettled([c.setup.$connect(), ...c.measured.map(async (m, index) => {
+    const client = index === 0 ? "A" : "B";
+    const bootstrap = { stage: "BOOTSTRAP", client, repetition: 0 } as const;
+    try {
+      m.counter.startBootstrap(client);
+      await m.db.$connect();
+      const value = client === "A"
+        ? await m.db.$queryRaw<Array<{ value: number }>>`SELECT pg_backend_pid()::integer AS value /* OBS01_BOOTSTRAP_A */`
+        : await m.db.$queryRaw<Array<{ value: number }>>`SELECT pg_backend_pid()::integer AS value /* OBS01_BOOTSTRAP_B */`;
+      await m.counter.completeBootstrap(bootstrap);
+      return value;
+    } catch (error) {
+      if (m.counter.active) m.counter.stop();
+      if (error instanceof SafeFailure && error.code === "LATE_EVENT") throw attributionFailure(bootstrap, "LATE", 1, 0, m.counter.late);
+      if (error instanceof SafeFailure) throw error;
+      throw attributionFailure(bootstrap, "WORK", 1, 0, m.counter.late);
+    }
+  })]);
   const connectionFailure = connected.find((result) => result.status === "rejected");
   if (connectionFailure?.status === "rejected") throw connectionFailure.reason;
-  const [a, b] = connected.slice(1).map((result) => (result as PromiseFulfilledResult<{ value: Array<{ value: number }> }>).value.value);
+  const [a, b] = connected.slice(1).map((result) => (result as PromiseFulfilledResult<Array<{ value: number }>>).value);
   const valid = (rows: Array<{ value: number }> | undefined): boolean => rows?.length === 1 && Number.isSafeInteger(rows[0]?.value) && rows[0]!.value > 0;
   const independent = valid(a) && valid(b) && a![0]!.value !== b![0]!.value;
   if (!independent) throw attributionFailure(context, "SESSION", 2, valid(a) && valid(b) ? 1 : 0);

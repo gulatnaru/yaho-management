@@ -7,6 +7,12 @@ import { attributionFailure, requireFact, SafeFailure, type AttributionContext }
 // a way to recover from contamination.
 const QUIET_MS = 25;
 const DELIVERY_TIMEOUT_MS = 1000;
+// Fixed, client-distinguishable harness statements only: never normalize, retain
+// or output event payloads. An engine-internal callback cannot prove a PID probe.
+export const BOOTSTRAP_PROBES = {
+  A: "SELECT pg_backend_pid()::integer AS value /* OBS01_BOOTSTRAP_A */",
+  B: "SELECT pg_backend_pid()::integer AS value /* OBS01_BOOTSTRAP_B */",
+} as const;
 export type CounterClock = { now(): number; pause(): Promise<void> };
 const clock: CounterClock = { now: () => performance.now(), pause: () => new Promise((resolve) => setTimeout(resolve, 5)) };
 
@@ -14,6 +20,10 @@ export class EventCounter {
   active = false;
   events = 0;
   late = 0;
+  bootstrapObserved = 0;
+  private bootstrapClient: "A" | "B" | undefined;
+  private bootstrapProbes = 0;
+  private foreignProbe = false;
   private fenced = false;
   private began = false;
   private terminal: 0 | 1 | 2 = 0;
@@ -21,6 +31,15 @@ export class EventCounter {
   constructor(private readonly time: CounterClock = clock) {}
   event(query?: string): void {
     if (!this.active || (this.fenced && this.terminal !== 0)) { this.late++; return; }
+    if (this.bootstrapClient) {
+      this.bootstrapObserved++;
+      if (query === BOOTSTRAP_PROBES[this.bootstrapClient]) this.bootstrapProbes++;
+      else if (query === BOOTSTRAP_PROBES[this.bootstrapClient === "A" ? "B" : "A"]) this.foreignProbe = true;
+      return;
+    }
+    // These exact probes belong only to bootstrap. A delayed probe cannot
+    // replace a missing calibration callback, even inside an active window.
+    if (query === BOOTSTRAP_PROBES.A || query === BOOTSTRAP_PROBES.B) { this.late++; return; }
     this.events++;
     if (!this.fenced) return;
     // Approved 2026-10-23 exception: compare only these exact pinned-engine
@@ -33,10 +52,35 @@ export class EventCounter {
     requireFact(!this.active, "CLIENT_BUSY");
     requireFact(this.late === 0, "LATE_EVENT");
     this.events = 0; this.active = true;
+    this.bootstrapClient = undefined;
     this.fenced = false; this.began = false; this.terminal = 0; this.controlOrder = true;
   }
   startFenced(): void { this.start(); this.fenced = true; }
-  stop(): number { requireFact(this.active, "CLIENT_BUSY"); this.active = false; return this.events; }
+  startBootstrap(client: "A" | "B"): void {
+    this.start(); this.bootstrapClient = client;
+    this.bootstrapObserved = 0; this.bootstrapProbes = 0; this.foreignProbe = false;
+  }
+  stop(): number { requireFact(this.active, "CLIENT_BUSY"); this.active = false; this.bootstrapClient = undefined; return this.events; }
+  async completeBootstrap(context: AttributionContext): Promise<void> {
+    requireFact(this.active && this.bootstrapClient, "CLIENT_BUSY");
+    const started = this.time.now();
+    let observed = this.bootstrapObserved, stableSince = started;
+    try {
+      for (;;) {
+        if (this.late) throw attributionFailure(context, "LATE", 1, this.bootstrapProbes, this.late);
+        if (this.foreignProbe) throw attributionFailure(context, "PROBE_CLIENT", 1, this.bootstrapProbes);
+        if (this.bootstrapProbes > 1) throw attributionFailure(context, "PROBE_EXTRA", 1, this.bootstrapProbes);
+        const now = this.time.now();
+        if (observed !== this.bootstrapObserved) { observed = this.bootstrapObserved; stableSince = now; }
+        // Only the harness-issued probe has an exact expectation. Engine init
+        // events are owned here but have no expected count and never enter a
+        // measured total. Their observed number only resets this quiet window.
+        if (now - started >= DELIVERY_TIMEOUT_MS) throw attributionFailure(context, this.bootstrapProbes === 0 ? "PROBE_MISSING" : "UNSTABLE", 1, this.bootstrapProbes);
+        if (this.bootstrapProbes === 1 && now - stableSince >= QUIET_MS) return;
+        await this.time.pause();
+      }
+    } finally { this.stop(); }
+  }
   async complete(expected: number, context: AttributionContext): Promise<number> {
     requireFact(this.active, "CLIENT_BUSY");
     const started = this.time.now();

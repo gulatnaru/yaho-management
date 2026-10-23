@@ -19,7 +19,7 @@ const count = z.number().int().min(0).max(100_000_000);
 export const attributionDiagnosticSchema = z.object({
   stage: z.enum(["BOOTSTRAP", "SESSION", "MODEL", "SELECT", "COMMIT", "ROLLBACK", "CONCURRENT", "ASYMMETRIC", "SAMPLE", "IDLE", "DISCONNECT"]),
   client: z.enum(["A", "B", "PAIR"]),
-  condition: z.enum(["MISSING", "EXTRA", "LATE", "IDLE", "SESSION", "WORK", "COUNT", "UNSTABLE", "UNPROVEN", "MODEL_EXPIRED", "FENCE_ORDER", "FENCE_OUTCOME"]),
+  condition: z.enum(["MISSING", "EXTRA", "LATE", "IDLE", "SESSION", "WORK", "COUNT", "UNSTABLE", "UNPROVEN", "MODEL_EXPIRED", "FENCE_ORDER", "FENCE_OUTCOME", "PROBE_MISSING", "PROBE_EXTRA", "PROBE_CLIENT"]),
   repetition: count.max(3), expected: count, observed: count, late: count,
 }).strict();
 export type AttributionDiagnostic = z.infer<typeof attributionDiagnosticSchema>;
@@ -93,6 +93,7 @@ export const calibrationSchema = z.object({ client: z.enum(["A", "B"]), kind: z.
 export type Calibration = z.infer<typeof calibrationSchema>;
 export const reportSchema = z.object({
   protocol: z.literal("OBS01_V1"), status: statusSchema, primaryCountsKnown: z.boolean(), started: z.string().datetime(), finished: z.string().datetime(), environment: environmentSchema.nullable(),
+  bootstrapObserved: z.object({ A: count, B: count }).strict().nullable(),
   calibration: z.array(calibrationSchema).max(8), rows: z.array(rowSchema).max(62), selfChecks: count, selfCheckInvariants: codeCountersSchema,
   cleanup: z.enum(["PASS", "FAIL", "UNKNOWN"]), failure: z.enum(FAILURE_CODES).nullable(), attributionDiagnostic: attributionDiagnosticSchema.nullable(),
 }).strict().superRefine((report, ctx) => {
@@ -139,13 +140,14 @@ export function recordReportFailure(report: Report, error: unknown): void {
 }
 export function initialRows(): AggregateRow[] { return CELLS.flatMap((cell) => cell.scenario === "SAME-SUBMISSION RACE" ? [newRow(cell, "WINNER"), newRow(cell, "LOSER"), newRow(cell, "PAIR")] : [newRow(cell)]); }
 export function safeReport(value: unknown): Report { const result = reportSchema.safeParse(value); if (!result.success) throw new SafeFailure("PROTOCOL"); return result.data; }
-export function emptyReport(code: FailureCode): Report { return { protocol: "OBS01_V1", status: "NOT RUN", primaryCountsKnown: true, started: new Date().toISOString(), finished: new Date().toISOString(), environment: null, calibration: [], rows: initialRows(), selfChecks: 0, selfCheckInvariants: emptyCodes(), cleanup: "UNKNOWN", failure: code, attributionDiagnostic: null }; }
+export function emptyReport(code: FailureCode): Report { return { protocol: "OBS01_V1", status: "NOT RUN", primaryCountsKnown: true, started: new Date().toISOString(), finished: new Date().toISOString(), environment: null, bootstrapObserved: null, calibration: [], rows: initialRows(), selfChecks: 0, selfCheckInvariants: emptyCodes(), cleanup: "UNKNOWN", failure: code, attributionDiagnostic: null }; }
 export const PROTOCOL_PREFIX = "OBS01_AGGREGATE ";
 export function serializeReport(value: unknown): string { return PROTOCOL_PREFIX + JSON.stringify(safeReport(value)); }
 export function markdown(value: unknown): string {
   const report = safeReport(value);
   const lines = ["# OBS-01", `status: ${report.status}`, `primary_counts_known: ${report.primaryCountsKnown}`, `utc_started: ${report.started}`, `utc_finished: ${report.finished}`, `failure: ${report.failure ?? "N/A"}`, `cleanup: ${report.cleanup}`, `self_checks: ${report.selfChecks}`];
   if (report.environment) for (const [key, val] of Object.entries(report.environment)) lines.push(`${key}: ${val}`);
+  if (report.bootstrapObserved) for (const client of ["A", "B"] as const) lines.push(`bootstrap_observed_${client}: ${report.bootstrapObserved[client]}`);
   if (report.attributionDiagnostic) for (const [key, value] of Object.entries(report.attributionDiagnostic)) lines.push(`attribution_${key}: ${value}`);
   lines.push("pool topology: dedicated loopback direct PostgreSQL; isolation unchanged default; event counters and clocks; no overhead correction", "query event coverage: observed events only; extra transaction events unclassified; unexposed engine commands excluded", "contention: simultaneous start; lock overlap and lock wait duration unmeasured", "physical table/index growth, cache warming and autovacuum may affect observations", "", "| Client | Calibration | Explicit | Repetitions | Events min/max | Verified | Attribution | Late events |", "| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const c of report.calibration) lines.push(`| ${c.client} | ${c.kind} | ${c.explicit} | ${c.repetitions} | ${c.eventMin}/${c.eventMax} | ${c.verified} | ${c.attribution} | ${c.lateEvents} |`);

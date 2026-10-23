@@ -86,7 +86,7 @@ vi.mock("./measurement", async (original) => {
   return {
     ...actual,
     clients: () => ({ setup: {}, measured: [0, 1].map(() => {
-      if (probe.mode !== "attribution") return { counter: { drain: async () => {} } };
+      if (probe.mode !== "attribution") return { counter: { bootstrapObserved: 0, drain: async () => {} } };
       let time = 0;
       const counter = new actual.EventCounter({ now: () => time, pause: async () => { time += 5; } });
       return { counter, db: { $transaction: async () => { counter.event("BEGIN"); counter.event("opaque simulated event"); return { paymentId: "synthetic", reservationIds: [] }; } } };

@@ -1,5 +1,5 @@
 import { attributionFailure, emptyReport, markdown, recordReportFailure, requireFact, SafeFailure, serializeReport, type AttributionContext } from "./contract";
-import { EventCounter, type CounterClock } from "./event-counter";
+import { BOOTSTRAP_PROBES, EventCounter, type CounterClock } from "./event-counter";
 import { auditCounters, calibrate, captureKnown, connect, disconnect, type Clients, type Contender } from "./measurement";
 import { fenceSelfChecks } from "./fence-self-checks";
 
@@ -17,31 +17,42 @@ class DeliveryClock implements CounterClock {
     ready.forEach((task) => task.run());
   }
 }
-type SimulationOptions = { delay?: number; sameSession?: boolean; bootstrapExtra?: boolean; missingTerminal?: boolean; idleLeak?: boolean; swapConcurrent?: boolean; workFailure?: boolean };
+type SimulationOptions = { delay?: number; sameSession?: boolean; internalEvents?: number; missingProbe?: boolean; probeRouting?: "WRONG_A" | "SWAP"; duplicateProbe?: boolean; probeLookalike?: boolean; internalAfterProbe?: boolean; trickle?: boolean; missingTerminal?: boolean; idleLeak?: boolean; swapConcurrent?: boolean; workFailure?: boolean };
 function simulated(options: SimulationOptions = {}): { c: Clients; clock: DeliveryClock; disconnected: number[] } {
   const clock = new DeliveryClock(), disconnected = [0, 0, 0];
   const counters = [new EventCounter(clock), new EventCounter(clock)];
   let transactions = 0;
   const transactionStates: Array<{ swapped: boolean } | null> = [null, null];
   const create = (index: number) => {
-    const emit = () => {
+    const emit = (statement?: string, routed = index) => {
       const transaction = transactionStates[index];
       const deliver = () => {
-        const destination = transaction?.swapped ? 1 - index : index;
-        counters[destination]!.event();
+        const destination = transaction?.swapped ? 1 - index : routed;
+        counters[destination]!.event(statement);
         if (options.idleLeak && transactions === 1) counters[1 - index]!.event();
       };
       if (options.delay || options.swapConcurrent) clock.after(options.delay || 5, deliver); else deliver();
     };
     const query = async (parts: TemplateStringsArray) => {
-      emit();
       const statement = parts.join("");
-      if (statement.includes("pg_backend_pid")) return [{ value: options.sameSession ? 1 : index + 1 }];
+      if (statement.includes("pg_backend_pid")) {
+        if (!options.missingProbe) {
+          const routed = options.probeRouting === "SWAP" || options.probeRouting === "WRONG_A" && index === 0 ? 1 - index : index;
+          emit(options.probeLookalike ? ` ${statement}` : statement, routed);
+          if (options.duplicateProbe) emit(statement, routed);
+        }
+        if (options.internalAfterProbe) clock.after(20, () => counters[index]!.event("PRIVATE_QUERY_CANARY internal init"));
+        return [{ value: options.sameSession ? 1 : index + 1 }];
+      }
+      emit(statement);
       return [{ value: statement.includes("3::integer") ? 3 : statement.includes("2::integer") ? 2 : 1 }];
     };
     const tx = { $queryRaw: query, $executeRaw: async () => { emit(); return 1; } };
     return {
-      $connect: async () => { emit(); if (options.bootstrapExtra) emit(); },
+      $connect: async () => {
+        for (let i = 0; i < (options.internalEvents ?? 1); i++) emit("PRIVATE_QUERY_CANARY internal init");
+        if (options.trickle) for (let delay = 20; delay <= 1200; delay += 20) clock.after(delay, () => counters[index]!.event("PRIVATE_QUERY_CANARY internal init"));
+      },
       $disconnect: async () => { disconnected[index + 1]!++; },
       ...tx,
       $transaction: async (work: (client: typeof tx) => Promise<unknown>) => {
@@ -108,12 +119,67 @@ export async function attributionSelfChecks(): Promise<number> {
   await invalid(() => connect(alias.c), "SESSION"); count++;
   const shared = simulated(); shared.c.measured[1].counter = shared.c.measured[0].counter;
   await invalid(() => connect(shared.c), "SESSION"); count++;
-  const extraBootstrap = simulated({ bootstrapExtra: true });
-  await invalid(() => connect(extraBootstrap.c), "EXTRA"); count++;
+  // Internal emissions have no exact expected count. Even several callbacks
+  // cannot substitute for delivery of this client's exact explicit PID probe.
+  for (const internalEvents of [0, 1, 2, 7]) {
+    const bootstrap = simulated({ internalEvents });
+    requireFact(await connect(bootstrap.c) && bootstrap.c.measured.every((m) => m.counter.bootstrapObserved === internalEvents + 1 && m.counter.events === 0 && m.counter.late === 0 && !m.counter.active), "CALIBRATION");
+    const calibrated = await calibrate(bootstrap.c, "synthetic-program");
+    requireFact(calibrated.length === 8 && calibrated.every((entry) => entry.eventMin === (entry.kind === "SELECT" ? 1 : 4)), "CALIBRATION"); count++;
+  }
+  const deferredInternal = simulated({ internalAfterProbe: true });
+  requireFact(await connect(deferredInternal.c) && deferredInternal.c.measured.every((m) => m.counter.bootstrapObserved === 3 && m.counter.late === 0), "CALIBRATION"); count++;
+  for (const options of [{ missingProbe: true }, { missingProbe: true, internalEvents: 7 }, { probeLookalike: true }]) {
+    const absent = simulated(options);
+    const failure = await invalid(() => connect(absent.c), "PROBE_MISSING");
+    requireFact(failure.diagnostic?.stage === "BOOTSTRAP" && failure.diagnostic.expected === 1 && failure.diagnostic.observed === 0, "CALIBRATION"); count++;
+  }
+  for (const probeRouting of ["WRONG_A", "SWAP"] as const) {
+    const wrong = simulated({ probeRouting });
+    const failure = await invalid(() => connect(wrong.c));
+    requireFact(failure.diagnostic?.stage === "BOOTSTRAP" && ["PROBE_MISSING", "PROBE_CLIENT"].includes(failure.diagnostic.condition), "CALIBRATION");
+    // Two-way swaps must fail even though both clients receive one probe event.
+    if (probeRouting === "SWAP") requireFact(failure.diagnostic.condition === "PROBE_CLIENT", "CALIBRATION"); count++;
+  }
+  const duplicate = simulated({ duplicateProbe: true });
+  await invalid(() => connect(duplicate.c), "PROBE_EXTRA"); count++;
+  for (const query of [BOOTSTRAP_PROBES.A.toLowerCase(), `${BOOTSTRAP_PROBES.A};`, `${BOOTSTRAP_PROBES.A} PRIVATE_QUERY_CANARY`]) {
+    const counter = new EventCounter(new DeliveryClock()); counter.startBootstrap("A"); counter.event(query);
+    await invalid(() => counter.completeBootstrap({ stage: "BOOTSTRAP", client: "A", repetition: 0 }), "PROBE_MISSING");
+    requireFact(!JSON.stringify(counter).includes("PRIVATE_QUERY_CANARY"), "PRIVACY"); count++;
+  }
+  const unstable = simulated({ trickle: true });
+  const unstableFailure = await invalid(() => connect(unstable.c), "UNSTABLE");
+  requireFact(unstableFailure.diagnostic?.stage === "BOOTSTRAP" && unstable.c.measured.every((m) => !m.counter.active), "CALIBRATION"); count++;
+  const jumpClock = new DeliveryClock(), jumpCounter = new EventCounter(jumpClock);
+  jumpCounter.startBootstrap("A"); jumpCounter.event(BOOTSTRAP_PROBES.A);
+  jumpClock.pause = async () => { jumpClock.value += 1005; };
+  await invalid(() => jumpCounter.completeBootstrap({ stage: "BOOTSTRAP", client: "A", repetition: 0 }), "UNSTABLE"); count++;
+  const postBootstrap = simulated(); await connect(postBootstrap.c);
+  postBootstrap.clock.after(10, () => postBootstrap.c.measured[0].counter.event("PRIVATE_QUERY_CANARY internal init"));
+  await invalid(() => auditCounters(postBootstrap.c), "LATE"); count++;
+  const calibrationLeak = simulated(); await connect(calibrationLeak.c);
+  const select = calibrationLeak.c.measured[0].db.$queryRaw;
+  calibrationLeak.c.measured[0].db.$queryRaw = (async (parts: TemplateStringsArray) => {
+    const value = await select(parts);
+    calibrationLeak.c.measured[0].counter.event("PRIVATE_QUERY_CANARY internal init");
+    return value;
+  }) as typeof select;
+  const leakFailure = await invalid(() => calibrate(calibrationLeak.c, "synthetic-program"), "EXTRA");
+  requireFact(leakFailure.diagnostic?.stage === "SELECT", "CALIBRATION"); count++;
+  for (const deliveredSelect of [false, true]) {
+    const oldProbe = simulated(); await connect(oldProbe.c);
+    const counter = oldProbe.c.measured[0].counter;
+    const failure = await invalid(() => captureKnown(oldProbe.c.measured[0], 1, { ...context, stage: "SELECT" }, async () => {
+      if (deliveredSelect) counter.event();
+      oldProbe.clock.after(5, () => counter.event(BOOTSTRAP_PROBES.A));
+    }), deliveredSelect ? "LATE" : "MISSING");
+    requireFact(failure.diagnostic?.late === 1 && counter.events === Number(deliveredSelect), "CALIBRATION"); count++;
+  }
   const missing = simulated({ missingTerminal: true }); await connect(missing.c);
   await invalid(() => calibrate(missing.c, "synthetic-program"), "MISSING"); count++;
   const lateBootstrap = simulated({ delay: 1500 });
-  await invalid(() => connect(lateBootstrap.c), "MISSING"); count++;
+  await invalid(() => connect(lateBootstrap.c), "PROBE_MISSING"); count++;
   const idle = simulated({ idleLeak: true }); await connect(idle.c);
   await invalid(() => calibrate(idle.c, "synthetic-program"), "IDLE"); count++;
   const swapped = simulated({ swapConcurrent: true }); await connect(swapped.c);

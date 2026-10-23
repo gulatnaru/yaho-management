@@ -22,12 +22,19 @@ export async function outputSelfChecks(): Promise<number> {
   const serialized = serializeReport(reduced) + markdown(reduced);
   requireFact(![canary, sqlShaped, paramShaped, personalShaped].some((value) => serialized.includes(value)), "PRIVACY"); checks++;
   const valid = emptyReport("INCOMPLETE");
+  const bootstrapReport = { ...valid, bootstrapObserved: { A: 7, B: 0 } };
+  requireFact(serializeReport(bootstrapReport).includes('"bootstrapObserved":{"A":7,"B":0}') && markdown(bootstrapReport).includes("bootstrap_observed_A: 7"), "PRIVACY"); checks++;
   for (const mutated of [
     { ...valid, raw: rawError },
     { ...valid, failure: canary },
     { ...valid, status: "COMPLETE" },
     { ...valid, rows: [...valid.rows, { sql: sqlShaped }] },
     { ...valid, rows: valid.rows.map((row, index) => index ? row : { ...row, outcome: personalShaped }) },
+    { ...valid, bootstrapObserved: { A: sqlShaped, B: 0 } },
+    { ...valid, bootstrapObserved: { A: -1, B: 0 } },
+    { ...valid, bootstrapObserved: { A: 0.5, B: 0 } },
+    { ...valid, bootstrapObserved: { A: 100_000_001, B: 0 } },
+    { ...valid, bootstrapObserved: { A: 1, B: 0, query: sqlShaped, params: paramShaped, pid: personalShaped } },
   ]) { mustReject(() => serializeReport(mutated)); mustReject(() => markdown(mutated)); checks++; }
   for (const result of [
     { status: 1, stdout: canary, stderr: "", overflow: false },
@@ -62,15 +69,17 @@ export async function outputSelfChecks(): Promise<number> {
     requireFact(result.status !== 0 && !result.overflow && (result.stdout.includes(canary) || result.stderr.includes(canary)), "PRIVACY");
     mustReject(() => parseChild(result)); checks++;
   }
-  // Exercise the real fenced listener, deferred emitter cases and private
+  // Exercise bootstrap and fenced listeners, deferred emitter cases and private
   // query/error canaries behind captured process streams. Only one aggregate
   // protocol line is allowed to escape; a listener-side log breaks this check.
   const fencedOutput = await privateChild(["--import", "tsx", "-e", `(async () => {
-    const fence = await import('./tests/performance/support/fence-self-checks.ts');
-    await (fence.fenceSelfChecks ?? fence.default.fenceSelfChecks)();
+    const attribution = await import('./tests/performance/support/attribution-self-checks.ts');
+    await (attribution.attributionSelfChecks ?? attribution.default.attributionSelfChecks)();
     const loaded = await import('./tests/performance/support/contract.ts');
     const contract = loaded.default ?? loaded;
-    require('node:fs').writeSync(1, contract.serializeReport(contract.emptyReport('ATTRIBUTION')));
+    const report = contract.emptyReport('ATTRIBUTION');
+    report.bootstrapObserved = { A: 7, B: 0 };
+    require('node:fs').writeSync(1, contract.serializeReport(report));
     process.exitCode = 1;
   })().catch(() => { process.exitCode = 2; });`]);
   requireFact(fencedOutput.status === 1 && !fencedOutput.overflow && !fencedOutput.stdout.includes("PRIVATE_QUERY_CANARY") && !fencedOutput.stderr.includes("PRIVATE_QUERY_CANARY") && parseChild(fencedOutput).failure === "ATTRIBUTION", "PRIVACY"); checks++;
