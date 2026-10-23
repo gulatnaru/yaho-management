@@ -137,6 +137,55 @@ This is 흥영's explicitly **last approved query-event calibration cycle**, bas
 
 **Real PostgreSQL outcome for this final fix: NOT RUN until CI.** Actual emitted probe forms, real bootstrap quiescence, exact calibration, session independence, sampling and real fixture cleanup remain unverified locally. No benchmark or successful real-DB outcome is claimed.
 
+## CI trial result — 2026-10-24 run 39983585312 (COMPLETE)
+
+The final approved calibration cycle **SUCCEEDED**. This section records the orchestrator-verified CI evidence supplied for finalization. It supersedes the earlier pending/NOT RUN statements as the current trial result; the attempt histories and initial local NOT RUN aggregate remain unchanged as historical records.
+
+- Run **39983585312**, job **obs01-perf**, conclusion **success**; PR **#54**, checked-out PR head **37e7db4**, checkout **fetch-depth: 0**. The source-identity check passed.
+- Measurement environment: GitHub-hosted **ubuntu-26.04** runner, **PostgreSQL 16.15** service, dedicated loopback direct connection, **3 clients** (setup + measured A/B), **connection_limit 1 each**. Measurements use synthetic fixtures and do not establish production latency.
+- Published report header: **status COMPLETE**, **failure N/A**, **cleanup PASS**, **self_checks 209**, **bootstrap_observed_A 1 / bootstrap_observed_B 1**; **utc_started 2026-10-23T16:05:53Z**, **utc_finished 2026-10-23T16:12:55Z**.
+- Calibration: **8/8 rows**, both clients **A/B**, **3 repetitions each**, all **verified=true**, **attribution=true**, **late events 0**. SELECT has **explicit=1**, observed events **1/1** (min/max); COMMIT, ROLLBACK and INDEPENDENT each have **explicit=2**, observed events **4/4** (min/max).
+
+### Completion and evidence boundary
+
+The published **COMPLETE** status proves completion of all **50 cells / 62 report rows**: **44 single rows + 6 race cells × 3 rows** (WINNER, LOSER, PAIR). The report schema's strict `superRefine` in `contract.ts` requires exactly this matrix and exact planned cell/metric/outcome/effects/invariantScope values for every row. It also requires every row COMPLETE, warmups **5/5**, attempted/settled/valid **30/30/30**, exact planned fulfilled/rejected counts, cleanup **PASS**, wall and query statistics present, and every invariant **expected=executed=pass**, **fail=0**. The environment must have **databaseVerified=true**, **migrationVerified=true** and **independentSessions=true**. A violation throws **PROTOCOL → INVALID**, so this proof follows from the published report status, not merely the job's success conclusion.
+
+**Eyeball-visible evidence:** the GitHub job-log display exposed detailed statistics for **44/62 rows**, all COMPLETE with cleanup PASS and invariant failures 0. **Schema-proven evidence:** the remaining **18 rows** were cut off by the display: INSUFFICIENT **6**, HELD-FUNDS INSUFFICIENT **6**, DUPLICATE UNPAID **3**, DUPLICATE PAID **3**. Their completion and required statistics are proven by the strict schema and COMPLETE header; their detailed numbers were not eyeball-visible and are not reconstructed here.
+
+### Summary of eyeball-visible statistics
+
+Wall p50 ranges below span the individual visible rows' p50 values for each scenario and n; they are not pooled percentiles or sample min/max values. Query ranges span those rows' observed query-event counts per call. Rows COMPLETE counts only the rows summarized in that table entry.
+
+| Scenario | n | Wall p50 range (ms) | Query events per call | Rows COMPLETE (visible) |
+| --- | --- | --- | --- | --- |
+| NORMAL | 2 | 26.683–30.133 | 44–49 | 4/4 |
+| NORMAL | 4 | 48.204–51.854 | 76–83 | 2/2 |
+| NORMAL | 8 | 87.096–93.382 | 136–151 | 2/2 |
+| SUBSET | 2 | 19.439–20.413 | 31–32 | 2/2 |
+| SUBSET | 4 | 38.152–40.799 | 61–66 | 2/2 |
+| SUBSET | 8 | 79.722–87.874 | 121–134 | 2/2 |
+| FRAGMENTED | 2 | 30.258–31.664 | 47–50 | 2/2 |
+| FRAGMENTED | 4 | 49.566–52.599 | 77–84 | 2/2 |
+| FRAGMENTED | 8 | 86.703–93.057 | 137–152 | 2/2 |
+| RETURN-HOLD | 2 | 20.616–22.255 | 32–33 | 2/2 |
+| RETURN-HOLD | 4 | 39.241–41.315 | 62–67 | 2/2 |
+| RETURN-HOLD | 8 | 81.023–83.692 | 122–135 | 2/2 |
+| SAME-SUBMISSION RACE WINNER | 2 | 28.410–33.528 | 46–49 | 2/2 |
+| SAME-SUBMISSION RACE WINNER | 4 | 49.799–50.417 | 76–83 | 2/2 |
+| SAME-SUBMISSION RACE WINNER | 8 | 85.617–92.112 | 136–151 | 2/2 |
+
+The table summarizes **32** visible rows. The other **12** visible rows are the six race LOSER and six PAIR rows, all COMPLETE. Each LOSER row reports **ApplicationNotPendingError**, **5 query events per call**, and fulfilled/rejected **0/30**; PAIR is a separate metric and is not presented as a per-call query count above.
+
+### Observed scaling and remaining risks
+
+For the successful-call and race-WINNER rows summarized above, wall p50 and per-call query-event counts grow as n increases from **2 → 4 → 8**. These are observations only: **no latency or query-count threshold was set, and no optimization work was entered**. The fixed five-event LOSER path is reported separately rather than generalized into that scaling observation.
+
+- The log display truncated the 18 rows' detailed statistics. Their COMPLETE status is schema-proven; direct visual review of those numbers remains unavailable in the supplied evidence.
+- Shared-runner noise, physical table/index growth, cache warming and autovacuum can affect observations. No overhead correction or production extrapolation is claimed.
+- Synthetic fixtures on a dedicated loopback PostgreSQL service do not represent production workloads or production latency.
+
+This finalization removes the temporary `obs01-perf` job, including its job-level concurrency, from `.github/workflows/phase2-integration.yml` while preserving `integration` byte-for-byte. The handoff/removal instructions below describe the historical trial procedure; the authorized removal is now applied in the worktree. No staging, commit, push or CI trigger is performed in this finalization.
+
 ## CI handoff and trial removal
 
 Before an independently authorized Git/SHIP trigger, verify Actions quota/storage allowance and queued runs. Quota remains UNVERIFIED here. Existing integration normally uses a PR merge ref; performance explicitly checks out the PR head. The new job records both requested head and integration event SHA and the harness verifies its actual checkout. No dispatch was requested or attempted.
