@@ -1,3 +1,4 @@
+import { enterGuardianInformation, enterConsentReview } from "./support/integrated-ux-guardian";
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { hash } from "bcryptjs";
@@ -89,13 +90,15 @@ async function fillApplicationForm(
   childName: string,
   options?: { photoShare?: boolean; marketing?: boolean },
 ) {
+  await enterGuardianInformation(page);
   await page.getByLabel("아이 이름").fill(childName);
   await page.getByLabel("생년월일").fill("2019-05-01");
-  await page.getByLabel("여", { exact: true }).check();
+  await page.getByLabel("성별", { exact: true }).selectOption("FEMALE");
   await page.getByLabel("보호자 이름").fill(`보호자_${marker}`);
   await page.getByLabel("보호자 연락처").fill(guardianPhone);
-  await page.getByLabel("모", { exact: true }).check();
+  await page.getByLabel("아이와의 관계 (필수)").selectOption("MOTHER");
   await page.getByLabel("요청사항").fill("합성 요청사항");
+  await enterConsentReview(page);
   await page.getByLabel(/위 안전 및 프로그램 이용사항을 확인하였습니다/).check();
   await page.getByLabel(/개인정보 수집·이용에 동의합니다/).check();
   await page.getByLabel(/본인은 위 아동의 법정대리인이며/).check();
@@ -305,7 +308,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
   test("공개 신청 화면은 허용된 클래스 정보만 보여주고 운영·가용성 정보는 응답에 없다", async ({ page }) => {
     await page.goto(`/apply/${tokens.open}`);
 
-    await expect(page.getByRole("heading", { name: "예약 신청" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "클래스 신청" })).toBeVisible();
     await expect(page.getByText(`프로그램_${marker}`)).toBeVisible();
     await expect(page.getByText(`설명_${marker}`)).toBeVisible();
     await expect(page.getByText(`장소_open_${marker}`)).toBeVisible();
@@ -320,11 +323,12 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
 
   test("만석 클래스도 신청 화면이 여유 있는 클래스와 같다", async ({ page }) => {
     await page.goto(`/apply/${tokens.open}`);
-    const openForm = await page.locator("form").innerText();
-
+    await enterGuardianInformation(page);
+    const openForm = await page.getByRole("group", { name: /^보호자 정보/ }).innerText();
     await page.goto(`/apply/${tokens.full}`);
-    await expect(page.getByRole("button", { name: "신청하기" })).toBeVisible();
-    expect(await page.locator("form").innerText()).toBe(openForm);
+    await expect(page.getByRole("button", { name: "다음", exact: true })).toBeVisible();
+    await enterGuardianInformation(page);
+    expect(await page.getByRole("group", { name: /^보호자 정보/ }).innerText()).toBe(openForm);
     expect(await page.content()).not.toContain("만석");
   });
 
@@ -332,25 +336,20 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     for (const token of [tokens.cancelled, tokens.started, tokens.stopped, tokens.missing, "not-a-valid-token"]) {
       await page.goto(`/apply/${token}`);
       await expect(page.getByTestId("application-closed")).toHaveText(APPLICATION_CLOSED_MESSAGE);
-      await expect(page.getByRole("button", { name: "신청하기" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "신청서 제출" })).toHaveCount(0);
       expect(await page.content()).not.toContain(`장소_`);
     }
   });
 
   test("필수 항목과 동의가 없으면 필드별 오류를 보여주고 입력값을 유지한다", async ({ page }) => {
     await page.goto(`/apply/${tokens.open}`);
+    await enterGuardianInformation(page);
     await page.getByLabel("아이 이름").fill(`검증아이_${marker}`);
     await page.getByLabel("보호자 연락처").fill("abc");
-    await page.getByRole("button", { name: "신청하기" }).click();
-
-    await expect(page.getByText("생년월일을 입력해주세요")).toBeVisible();
-    await expect(page.getByText("성별을 선택해주세요")).toBeVisible();
-    await expect(page.getByText("아이와의 관계를 선택해주세요")).toBeVisible();
-    await expect(page.getByText("프로그램 안전 및 이용사항을 확인해주세요")).toBeVisible();
-    await expect(page.getByText("법정대리인 확인에 동의해주세요")).toBeVisible();
-    await expect(page.getByText("취소 및 환불규정을 확인해주세요")).toBeVisible();
-    await expect(page.getByText("전화번호 형식이 올바르지 않습니다 (숫자, 하이픈만 가능)")).toBeVisible();
-    await expect(page.getByText("개인정보 수집·이용에 동의해주세요")).toBeVisible();
+    await page.getByRole("button", { name: "다음", exact: true }).click();
+    await expect(page.locator("#application-child-1-childBirthDate-error")).toContainText("올바른 생년월일");
+    await expect(page.locator("#application-guardianName-error")).toHaveText("보호자 이름을 입력해 주세요.");
+    await expect(page.locator("#application-guardianPhone-error")).toHaveText("연락처를 확인해 주세요.");
     await expect(page.getByLabel("아이 이름")).toHaveValue(`검증아이_${marker}`);
     await expect(page.getByLabel("보호자 연락처")).toHaveValue("abc");
     expect(await prisma.reservationApplication.count({ where: { childName: `검증아이_${marker}` } })).toBe(0);
@@ -367,7 +366,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await page.evaluate(() => {
       (window as unknown as { __applicationFormDocument?: boolean }).__applicationFormDocument = true;
     });
-    await page.getByRole("button", { name: "신청하기" }).click();
+    await page.getByRole("button", { name: "신청서 제출" }).click();
 
     await expect(page).toHaveURL(/\/apply\/complete$/);
     expect(
@@ -416,7 +415,7 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await fillApplicationForm(page, childName);
     await prisma.reservationApplicationLink.update({ where: { token: tokens.open }, data: { isActive: false } });
     try {
-      await page.getByRole("button", { name: "신청하기" }).click();
+      await page.getByRole("button", { name: "신청서 제출" }).click();
       await expect(page.getByText(APPLICATION_CLOSED_MESSAGE)).toBeVisible();
       expect(await prisma.reservationApplication.count({ where: { childName } })).toBe(0);
     } finally {
@@ -554,18 +553,19 @@ test.describe.serial("Phase 18 예약자용 고객 예약신청", () => {
     await login(page, adminEmail, adminPassword);
     await page.goto(`/classes/${openClassId}`);
     const card = page.getByTestId("application-link-card");
-    await expect(card.getByLabel("예약 신청 링크 주소")).toHaveValue(new RegExp(`/apply/${tokens.open}$`));
+    await expect(card.getByLabel("신청 링크 주소")).toHaveValue(new RegExp(`/apply/${tokens.open}$`));
 
+    await card.getByText("고급 설정 펼치기", { exact: true }).click();
     page.once("dialog", (dialog) => dialog.accept());
-    await card.getByRole("button", { name: "재발급" }).click();
-    await expect(card.getByLabel("예약 신청 링크 주소")).not.toHaveValue(new RegExp(`/apply/${tokens.open}$`));
+    await card.getByRole("button", { name: "링크 교체" }).click();
+    await expect(card.getByLabel("신청 링크 주소")).not.toHaveValue(new RegExp(`/apply/${tokens.open}$`));
 
     const reissued = await prisma.reservationApplicationLink.findUniqueOrThrow({ where: { classScheduleId: openClassId } });
     expect(reissued.token).not.toBe(tokens.open);
     await page.goto(`/apply/${tokens.open}`);
     await expect(page.getByTestId("application-closed")).toHaveText(APPLICATION_CLOSED_MESSAGE);
     await page.goto(`/apply/${reissued.token}`);
-    await expect(page.getByRole("button", { name: "신청하기" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "다음", exact: true })).toBeVisible();
   });
 
   test("보관기간이 지난 반려 신청은 ADMIN 보관기간 관리에서 개인정보만 파기된다", async ({ page }) => {

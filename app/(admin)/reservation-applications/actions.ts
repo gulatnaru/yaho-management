@@ -1,5 +1,11 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { getApplicationWorkflowDetail } from "@/lib/reservation-applications/detail-queries";
+import { getApplicationReturn, listApplicationReturns, WORKFLOW_LEDGER_SELECT } from "@/lib/reservation-applications/return-queries";
+import { z } from "zod";
+import { summarizeDetailLedger } from "@/lib/reservation-applications/ledger-summary";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
@@ -13,6 +19,7 @@ import {
   ApplicationLinkNotFoundError,
   ApplicationNotFoundError,
   ApplicationNotPendingError,
+  classifyInfrastructureError,
   describeErrorForLog,
 } from "@/lib/reservation-applications/errors";
 import {
@@ -30,10 +37,10 @@ import {
 } from "@/lib/validation/reservation-application";
 import { confirmReservationApplicationCore } from "@/server/reservation-applications/confirm";
 import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplicationLinkCore } from "@/server/reservation-applications/links";
-import { createApplicationGroupCore, issueApplicationGroupLinkCore, stopApplicationGroupCore, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
+import { classLinkOperationSchema, issueClassLinkOperationCore, LinkOperationConflictError, LinkRevisionConflictError, LinkSettingsNotReadyError, type ClassLinkReceipt, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { reservationApplicationSettingsSchema, groupCreateSchema, submissionConfirmationSchema } from "@/lib/reservation-applications/phase20-validation";
 import { getReservationApplicationSettings, importLegacyReservationApplicationSettingsCore, isReservationApplicationSettingsReady, saveReservationApplicationSettingsCore } from "@/server/reservation-applications/settings";
-import { ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
+import { ApplicationPaymentAlreadyExistsError, InsufficientApplicationDepositError, ApplicationReturnAmountExceededError, ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
 import { depositInputSchema, returnInputSchema } from "@/lib/reservation-applications/phase20-validation";
 import {
   closeReservationApplicationCore,
@@ -52,31 +59,38 @@ import {
 
 export type ApplicationActionResult = { error?: string };
 
-/** Phase 20 group creation is ADMIN-only and uses the schedule's explicit applicationPrice. */
-export async function createApplicationGroup(formData: FormData): Promise<{ error?: string; groupId?: string }> {
-  const principal = await requireAdminPrincipal();
-  const parsed = groupCreateSchema.safeParse({ classScheduleIds: formData.getAll("classScheduleId") });
-  if (!parsed.success) return { error: "하나 이상의 중복되지 않은 클래스를 선택해주세요." };
-  try {
-    const result = await createApplicationGroupCore(prisma, { classScheduleIds: parsed.data.classScheduleIds, actorUserId: principal.userId, now: new Date() });
-    revalidatePath("/reservation-applications/groups");
-    return result;
-  } catch (error) {
-    console.error("[reservation-applications] failed to create group:", describeErrorForLog(error));
-    return { error: "가격이 설정된 미래 예정 클래스만 그룹에 넣을 수 있습니다." };
-  }
+/** Preview-only group marking remains ADMIN-only under ADR-053, matching the hosting page. */
+export async function markGroupManualTestSession(groupId: string): Promise<{ error?: string; runId?: string }> {
+  await requireAdminPrincipal();
+  if (process.env.VERCEL_ENV !== "preview") return { error: "Preview 환경에서만 사용할 수 있습니다." };
+  const parsed = z.string().trim().min(1).safeParse(groupId);
+  if (!parsed.success) return { error: "잘못된 요청입니다." };
+  const group = await prisma.reservationApplicationGroup.findUnique({ where: { id: parsed.data }, select: { id: true, syntheticRunId: true, isActive: true } });
+  if (!group) return { error: "그룹을 찾을 수 없습니다." };
+  if (group.syntheticRunId) return { error: "이미 테스트 세션으로 지정된 그룹입니다." };
+  const settings = await getReservationApplicationSettings(prisma);
+  const checked = reservationApplicationSettingsSchema.safeParse(settings);
+  if (!checked.success || !isReservationApplicationSettingsReady(settings)) return { error: "예약 신청 설정을 먼저 완료해주세요." };
+  const runId = `manual-${randomBytes(17).toString("base64url").slice(0, 22)}`;
+  const updated = await prisma.reservationApplicationGroup.updateMany({
+    where: { id: group.id, syntheticRunId: null },
+    data: { syntheticRunId: runId, syntheticSettings: checked.data },
+  });
+  if (updated.count !== 1) return { error: "이미 테스트 세션으로 지정된 그룹입니다." };
+  return { runId };
 }
 
-export async function issueApplicationGroupLink(groupId: string): Promise<{ error?: string; token?: string }> {
-  const principal = await requireAdminPrincipal();
-  try {
-    const result = await issueApplicationGroupLinkCore(prisma, { groupId, actorUserId: principal.userId, now: new Date() });
-    revalidatePath(`/reservation-applications/groups/${groupId}`);
-    return result;
-  } catch (error) {
-    console.error("[reservation-applications] failed to issue group link:", describeErrorForLog(error));
-    return { error: "가격이 설정된 미래 예정 클래스 그룹만 접수 링크를 만들 수 있습니다." };
-  }
+/** Phase 20 group creation is ADMIN-only and uses the schedule's explicit applicationPrice. */
+export async function createApplicationGroup(_formData: FormData): Promise<{ error?: string; groupId?: string }> {
+  await requireAdminPrincipal();
+  void _formData;
+  return { error: "그룹과 첫 링크를 함께 발급하도록 새 화면을 다시 불러와 주세요." };
+}
+
+export async function issueApplicationGroupLink(_groupId: string): Promise<{ error?: string; token?: string }> {
+  await requireAdminPrincipal();
+  void _groupId;
+  return { error: "링크 작업과 현재 범위를 확인하도록 화면을 다시 불러와 주세요." };
 }
 
 /** Membership edits affect only future submissions. Existing submitted quotes remain immutable. */
@@ -85,7 +99,10 @@ export async function updateApplicationGroup(groupId: string, formData: FormData
   const parsed = groupCreateSchema.safeParse({ classScheduleIds: formData.getAll("classScheduleId") });
   if (!parsed.success) return { error: "하나 이상의 중복되지 않은 클래스를 선택해주세요." };
   try {
-    await updateApplicationGroupCore(prisma, { groupId, classScheduleIds: parsed.data.classScheduleIds, now: new Date() });
+    const revision = z.string().regex(/^[a-f0-9]{64}$/).safeParse(formData.get("revision"));
+    if (!revision.success) return { error: "구성 정보를 다시 불러와 주세요." };
+    await updateApplicationGroupCore(prisma, { groupId, classScheduleIds: parsed.data.classScheduleIds, now: new Date(), revision: revision.data });
+    revalidatePath("/classes", "layout");
     revalidatePath(`/reservation-applications/groups/${groupId}`);
     revalidatePath("/reservation-applications/groups");
     return {};
@@ -96,17 +113,10 @@ export async function updateApplicationGroup(groupId: string, formData: FormData
 }
 
 /** Stopping a group invalidates every issued group capability. */
-export async function stopApplicationGroup(groupId: string): Promise<{ error?: string }> {
+export async function stopApplicationGroup(_groupId: string): Promise<{ error?: string }> {
   await requireAdminPrincipal();
-  try {
-    await stopApplicationGroupCore(prisma, { groupId });
-    revalidatePath(`/reservation-applications/groups/${groupId}`);
-    revalidatePath("/reservation-applications/groups");
-    return {};
-  } catch (error) {
-    console.error("[reservation-applications] failed to stop group:", describeErrorForLog(error));
-    return { error: "이미 중지되었거나 없는 그룹입니다." };
-  }
+  void _groupId;
+  return { error: "중지할 클래스 범위와 현재 상태를 확인하도록 화면을 다시 불러와 주세요." };
 }
 
 export async function saveReservationApplicationSettings(formData: FormData): Promise<ApplicationActionResult> {
@@ -138,71 +148,216 @@ export async function importLegacyReservationApplicationSettings(): Promise<Appl
   }
 }
 
-/** Actual bank transactions are ADMIN-only and remain separate from Payment until confirmation. */
-export async function recordApplicationDeposit(submissionId: string, formData: FormData): Promise<{ error?: string; availableAmount?: number }> {
-  const principal = await requireAdminPrincipal();
-  const parsed = depositInputSchema.safeParse({ amount: formData.get("amount"), payerName: formData.get("payerName"), depositedAt: formData.get("depositedAt"), idempotencyKey: formData.get("idempotencyKey") || undefined });
-  if (!parsed.success) return { error: "실제 입금액·입금자명·입금일시를 확인해주세요." };
-  try {
-    const result = await recordApplicationDepositCore(prisma, { submissionId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
-    revalidatePath(`/reservation-applications/submissions/${submissionId}`);
-    revalidatePath("/reservation-applications/returns");
-    return { availableAmount: result.availableAmount };
-  } catch (error) {
-    console.error("[reservation-applications] failed to record deposit:", describeErrorForLog(error));
-    return { error: "입금을 기록하지 못했습니다. 같은 거래를 다시 입력하지 않았는지 확인해주세요." };
-  }
+export type WorkflowActionResult = {
+  status: "success" | "failure" | "result-unknown";
+  error?: string;
+  errors?: Record<string, string[]>;
+  code?: "not-found";
+  receiptId?: string;
+  submissionId?: string;
+  applicationIds?: string[];
+  reservationIds?: string[];
+  paymentId?: string;
+  verified?: boolean;
+};
+const workflowId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+const transactionKey = z.string().trim().min(16).max(200);
+class WorkflowConflict extends Error {}
+class WorkflowLedgerUnavailable extends Error {}
+async function assertWorkflowLedger(tx: Prisma.TransactionClient, submissionId: string) {
+  const records = await tx.reservationApplicationSubmission.findUnique({ where: { id: submissionId }, select: WORKFLOW_LEDGER_SELECT });
+  if (!records || summarizeDetailLedger(records).state !== "available") throw new WorkflowLedgerUnavailable();
 }
 
-export async function recordApplicationReturn(obligationId: string, formData: FormData): Promise<{ error?: string; remainingAmount?: number }> {
+/** Join an existing transaction without changing the finance cores or their lock order. */
+function financeInTransaction(tx: Prisma.TransactionClient) {
+  return { $transaction: async (callback: (value: Prisma.TransactionClient) => Promise<unknown>) => callback(tx) } as Pick<PrismaClient, "$transaction">;
+}
+async function lockWorkflowSubmission(tx: Prisma.TransactionClient, id: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ReservationApplicationSubmission" WHERE "id" = ${id} FOR UPDATE`;
+  if (rows.length !== 1) throw new WorkflowConflict();
+}
+function invalidateWorkflow(submissionId: string) {
+  revalidatePath(`/reservation-applications/submissions/${submissionId}`);
+  revalidatePath("/reservation-applications");
+  revalidatePath("/reservation-applications/returns");
+}
+export async function refreshApplicationWorkflow(submissionId: string) {
+  await requireAdminPrincipal();
+  if (!workflowId.safeParse(submissionId).success) return null;
+  try { return await getApplicationWorkflowDetail(submissionId); } catch { return null; }
+}
+export async function refreshApplicationReturn(obligationId: string) {
+  await requireAdminPrincipal();
+  if (!workflowId.safeParse(obligationId).success) return null;
+  try { return await getApplicationReturn(obligationId); } catch { return null; }
+}
+export async function refreshApplicationReturns() {
+  await requireAdminPrincipal();
+  try { return await listApplicationReturns(); } catch { return null; }
+}
+
+/** Receipt lookup is read-only. An unclear financial request is never replayed here. */
+export async function lookupWorkflowReceipt(kind: "deposit" | "return", targetId: string, key: string, formData?: FormData): Promise<WorkflowActionResult> {
+  await requireAdminPrincipal();
+  if (!z.enum(["deposit", "return"]).safeParse(kind).success || !workflowId.safeParse(targetId).success || !transactionKey.safeParse(key).success) return { status: "failure", error: "거래 식별자를 확인해주세요." };
+  try {
+    if (kind === "deposit") {
+      const record = await prisma.applicationDeposit.findUnique({ where: { idempotencyKey: key }, select: { id: true, submissionId: true, amount: true, payerName: true, depositedAt: true } });
+      if (record && formData) {
+        const parsed = depositInputSchema.safeParse(Object.fromEntries(formData));
+        if (!parsed.success || parsed.data.amount !== record.amount || parsed.data.payerName !== record.payerName || parsed.data.depositedAt.getTime() !== record.depositedAt.getTime()) return { status: "failure", error: "같은 거래 식별자의 입력이 다릅니다. 원래 거래를 확인해주세요." };
+      }
+      if (record && record.submissionId !== targetId) return { status: "failure", error: "거래 대상이 일치하지 않습니다." };
+      return record ? { status: "success", receiptId: record.id, submissionId: record.submissionId } : { status: "failure", code: "not-found", error: "저장 기록이 없습니다. 같은 거래 식별자와 입력으로만 다시 시도하세요." };
+    }
+    const record = await prisma.applicationReturn.findUnique({ where: { idempotencyKey: key }, select: { id: true, amount: true, reason: true, returnedAt: true, returnObligationId: true, returnObligation: { select: { submissionId: true } } } });
+    if (record && formData) {
+      const parsed = returnInputSchema.safeParse(Object.fromEntries(formData));
+      if (!parsed.success || parsed.data.amount !== record.amount || parsed.data.reason !== record.reason || parsed.data.returnedAt.getTime() !== record.returnedAt.getTime()) return { status: "failure", error: "같은 거래 식별자의 입력이 다릅니다. 원래 거래를 확인해주세요." };
+    }
+    if (record && record.returnObligationId !== targetId) return { status: "failure", error: "거래 대상이 일치하지 않습니다." };
+    return record ? { status: "success", receiptId: record.id, submissionId: record.returnObligation.submissionId } : { status: "failure", code: "not-found", error: "저장 기록이 없습니다. 같은 거래 식별자와 입력으로만 다시 시도하세요." };
+  } catch { return { status: "result-unknown", error: "저장 결과를 확인하지 못했습니다. 금융 요청을 반복하지 말고 결과를 다시 조회하세요." }; }
+}
+
+/** Compare the complete immutable bank payload under the same Submission lock as the core. */
+export async function recordApplicationDeposit(submissionId: string, formData: FormData): Promise<WorkflowActionResult> {
+  const principal = await requireAdminPrincipal();
+  const parsed = depositInputSchema.extend({ idempotencyKey: transactionKey }).safeParse({ amount: formData.get("amount"), payerName: formData.get("payerName"), depositedAt: formData.get("depositedAt"), idempotencyKey: formData.get("idempotencyKey") });
+  if (!workflowId.safeParse(submissionId).success || !parsed.success) return { status: "failure", error: "실제 입금액·입금자명·입금일시를 확인해주세요.", errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors };
+  let receiptId: string;
+  try {
+    receiptId = await prisma.$transaction(async (tx) => {
+      await lockWorkflowSubmission(tx, submissionId);
+      await assertWorkflowLedger(tx, submissionId);
+      const prior = await tx.applicationDeposit.findUnique({ where: { idempotencyKey: parsed.data.idempotencyKey }, select: { id: true, submissionId: true, amount: true, payerName: true, depositedAt: true } });
+      if (prior && (prior.submissionId !== submissionId || prior.amount !== parsed.data.amount || prior.payerName !== parsed.data.payerName || prior.depositedAt.getTime() !== parsed.data.depositedAt.getTime())) throw new WorkflowConflict();
+      const result = await recordApplicationDepositCore(financeInTransaction(tx), { submissionId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, submissionId);
+      return result.depositId;
+    }, { maxWait: 10000, timeout: 20000 });
+  } catch (error) {
+    return { status: error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationReturnAmountExceededError || error instanceof ApplicationNotPendingError ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다. 최신 서버 기록을 확인해주세요." : error instanceof WorkflowConflict ? "같은 거래 식별자의 대상·금액·입금자·일시를 변경할 수 없습니다." : "입금 저장 결과를 확인해주세요. 결과 조회 전에는 다시 기록하지 마세요." };
+  }
+  // Invalidation is advisory; only a separate successful authoritative read proves freshness.
+  try { invalidateWorkflow(submissionId); } catch { /* receipt remains committed */ }
+  return { status: "success", receiptId, submissionId };
+}
+
+export async function recordApplicationReturn(obligationId: string, formData: FormData): Promise<WorkflowActionResult> {
   const principal = await requireAdminPrincipal();
   const parsed = returnInputSchema.safeParse({ amount: formData.get("amount"), reason: formData.get("reason"), returnedAt: formData.get("returnedAt"), idempotencyKey: formData.get("idempotencyKey") });
-  if (!parsed.success) return { error: "반환 금액·사유·실제 반환일시를 확인해주세요." };
+  const observed = z.object({ amount: z.coerce.number().int().positive().max(2147483647), returnedAmount: z.coerce.number().int().nonnegative().max(2147483647) }).safeParse({ amount: formData.get("observedAmount"), returnedAmount: formData.get("observedReturnedAmount") });
+  if (!workflowId.safeParse(obligationId).success || !parsed.success || !observed.success) return { status: "failure", error: "반환 금액·사유·실제 반환일시와 최신 반환 대상을 확인해주세요.", errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors };
+  let saved: { receiptId: string; submissionId: string };
   try {
-    const result = await recordApplicationReturnCore(prisma, { obligationId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
-    revalidatePath("/reservation-applications/returns");
-    return { remainingAmount: result.remainingAmount };
+    saved = await prisma.$transaction(async (tx) => {
+      const target = await tx.returnObligation.findUnique({ where: { id: obligationId }, select: { submissionId: true } });
+      if (!target) throw new WorkflowConflict();
+      await lockWorkflowSubmission(tx, target.submissionId);
+      await assertWorkflowLedger(tx, target.submissionId);
+      const [obligation] = await tx.$queryRaw<{ id: string; amount: number; returnedAmount: number; resolvedAt: Date | null }[]>`SELECT "id", "amount", "returnedAmount", "resolvedAt" FROM "ReturnObligation" WHERE "id" = ${obligationId} FOR UPDATE`;
+      const prior = await tx.applicationReturn.findUnique({ where: { idempotencyKey: parsed.data.idempotencyKey }, select: { id: true, returnObligationId: true, amount: true, reason: true, returnedAt: true } });
+      if (prior && (prior.returnObligationId !== obligationId || prior.amount !== parsed.data.amount || prior.reason !== parsed.data.reason || prior.returnedAt.getTime() !== parsed.data.returnedAt.getTime())) throw new WorkflowConflict();
+      if (!obligation || (!prior && (obligation.resolvedAt || obligation.amount !== observed.data.amount || obligation.returnedAmount !== observed.data.returnedAmount))) throw new WorkflowConflict();
+      const result = await recordApplicationReturnCore(financeInTransaction(tx), { obligationId, ...parsed.data, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, target.submissionId);
+      return { receiptId: result.returnId, submissionId: target.submissionId };
+    }, { maxWait: 10000, timeout: 20000 });
   } catch (error) {
-    console.error("[reservation-applications] failed to record return:", describeErrorForLog(error));
-    return { error: "남은 반환 필요 금액을 초과했거나 처리할 수 없습니다." };
+    return { status: error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationReturnAmountExceededError || error instanceof ApplicationNotPendingError ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다. 최신 서버 기록을 확인해주세요." : error instanceof WorkflowConflict ? "반환 대상이 변경되었거나 같은 거래의 입력이 다릅니다. 최신 기록을 확인해주세요." : "반환 저장 결과를 확인해주세요. 결과 조회 전에는 다시 기록하지 마세요." };
+  }
+  try { invalidateWorkflow(saved.submissionId); } catch { /* receipt remains committed */ }
+  return { status: "success", ...saved };
+}
+
+/** Family route adapter: preserve the existing child route actions and finance-aware core. */
+export async function resolveApplicationWorkflow(applicationId: string, kind: "REJECTED" | "CANCELLED", formData: FormData): Promise<WorkflowActionResult> {
+  const principal = await requireAdminPrincipal();
+  const parsed = applicationResolutionSchema.safeParse({ resolutionNote: formData.get("resolutionNote") });
+  if (!workflowId.safeParse(applicationId).success || !z.enum(["REJECTED", "CANCELLED"]).safeParse(kind).success || !parsed.success) return { status: "failure", error: "대상과 필수 사유를 확인해주세요.", errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors };
+  let submissionId: string | undefined;
+  try {
+    const application = await prisma.reservationApplication.findUnique({ where: { id: applicationId }, select: { submissionId: true } });
+    if (!application?.submissionId) return { status: "failure", error: "가족 신청 대상을 찾을 수 없습니다." };
+    submissionId = application.submissionId;
+    await prisma.$transaction(async (tx) => {
+      await lockWorkflowSubmission(tx, application.submissionId!);
+      await assertWorkflowLedger(tx, application.submissionId!);
+      await closeApplicationWithReturnCore(financeInTransaction(tx), { applicationId, status: kind, resolutionNote: parsed.data.resolutionNote, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, application.submissionId!);
+    }, { maxWait: 10000, timeout: 20000 });
+    try { invalidateWorkflow(application.submissionId); revalidateApplication(applicationId); } catch { /* committed */ }
+    return { status: "success", receiptId: applicationId, submissionId: application.submissionId };
+  } catch (error) {
+    return { submissionId, status: error instanceof ApplicationNotPendingError || error instanceof WorkflowLedgerUnavailable ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다." : error instanceof ApplicationNotPendingError ? "이미 처리가 끝난 신청입니다." : "처리 결과가 불명확합니다. 최신 신청 상태를 조회해주세요." };
   }
 }
 
 /** Selected siblings are one atomic financial confirmation: no partial Payment mapping is left behind. */
-export type SubmissionConfirmationActionResult = {
+export type SubmissionConfirmationActionResult = WorkflowActionResult & {
   error?: string;
   reservationIds?: string[];
-  overbookingConfirmation?: { applicationId: string; classScheduleId: string; childChoice: string; selectionFingerprint: string; capacity: number; reservedCount: number; overByAfterCreate: number };
+  overbookingConfirmation?: { applicationId: string; classScheduleId: string; childChoice: string; selectionFingerprint: string; classState: string; capacity: number; reservedCount: number; overByAfterCreate: number };
 };
 
 export async function confirmApplicationSubmission(formData: FormData): Promise<SubmissionConfirmationActionResult> {
   const principal = await requireAdminPrincipal();
   let payload: unknown;
-  try { payload = JSON.parse(String(formData.get("payload") ?? "")); } catch { return { error: "확정할 아이를 다시 선택해주세요." }; }
+  try { payload = JSON.parse(String(formData.get("payload") ?? "")); } catch { return { status: "failure", error: "확정할 아이를 다시 선택해주세요." }; }
   const parsed = submissionConfirmationSchema.safeParse(payload);
-  if (!parsed.success) return { error: "확정할 아이를 다시 선택해주세요." };
+  if (!parsed.success) return { status: "failure", error: "확정할 아이와 기존 아이 연결 또는 새 아이 등록을 명시적으로 선택해주세요." };
+  const { submissionId } = parsed.data;
+  const applicationIds = parsed.data.choices.map((choice) => choice.applicationId);
+  const observedClassStates = new Map<string, string>();
   try {
-    const result = await confirmApplicationSubmissionCore(prisma, { ...parsed.data, actorUserId: principal.userId, now: new Date() });
-    revalidatePath(`/reservation-applications/submissions/${parsed.data.submissionId}`);
-    revalidatePath("/reservation-applications");
-    revalidatePath("/reservations");
-    return { reservationIds: result.reservationIds };
+    const result = await prisma.$transaction(async (tx) => {
+      // Preserve parent -> application -> class -> child lock order. The existing
+      // core takes the same (re-entrant) locks and still owns every financial write.
+      await lockWorkflowSubmission(tx, submissionId);
+      await assertWorkflowLedger(tx, submissionId);
+      const choices = parsed.data.choices.map((choice) => ({ ...choice }));
+      await tx.$queryRaw`SELECT "id" FROM "ReservationApplication" WHERE "id" IN (${Prisma.join(applicationIds)}) AND "submissionId" = ${submissionId} ORDER BY "id" FOR UPDATE`;
+      const targets = await tx.reservationApplication.findMany({ where: { id: { in: applicationIds }, submissionId }, select: { id: true, classScheduleId: true, personalDataPurgedAt: true, status: true, programTermsAcknowledged: true, privacyConsentAgreed: true, legalGuardianConfirmed: true, refundTermsAcknowledged: true }, orderBy: { id: "asc" } });
+      const submission = await tx.reservationApplicationSubmission.findUnique({ where: { id: submissionId }, select: { personalDataPurgedAt: true } });
+      if (!submission || submission.personalDataPurgedAt || targets.length !== applicationIds.length || targets.some((row) => row.status !== "SUBMITTED" || row.personalDataPurgedAt || !row.programTermsAcknowledged || !row.privacyConsentAgreed || !row.legalGuardianConfirmed || !row.refundTermsAcknowledged)) throw new ApplicationNotPendingError();
+      {
+        const classIds = [...new Set(targets.map((row) => row.classScheduleId))].sort();
+        if (classIds.length) await tx.$queryRaw`SELECT "id" FROM "ClassSchedule" WHERE "id" IN (${Prisma.join(classIds)}) ORDER BY "id" FOR UPDATE`;
+        const classes = await tx.classSchedule.findMany({ where: { id: { in: classIds } }, select: { id: true, capacity: true, status: true, startsAt: true, endsAt: true, _count: { select: { reservations: { where: { status: "RESERVED" } } } } } });
+        for (const schedule of classes) observedClassStates.set(schedule.id, JSON.stringify([schedule.id, schedule.status, schedule.startsAt, schedule.endsAt]));
+        for (const choice of choices) {
+          const binding = choice.overbookingConfirmation;
+          if (!choice.confirmOverbooking || !binding) continue;
+          const target = targets.find((row) => row.id === choice.applicationId);
+          const schedule = classes.find((row) => row.id === target?.classScheduleId);
+          // A warning may include earlier targets in this same atomic batch.
+          const earlier = targets.slice(0, targets.findIndex((row) => row.id === choice.applicationId)).filter((row) => row.classScheduleId === target?.classScheduleId).length;
+          if (!schedule || binding.classState !== observedClassStates.get(schedule.id) || binding.capacity !== schedule.capacity || binding.reservedCount !== schedule._count.reservations + earlier) {
+            choice.confirmOverbooking = false; choice.overbookingConfirmation = undefined;
+          }
+        }
+      }
+      const confirmed = await confirmApplicationSubmissionCore(financeInTransaction(tx), { submissionId, choices, actorUserId: principal.userId, now: new Date() });
+      await assertWorkflowLedger(tx, submissionId);
+      return confirmed;
+    }, { maxWait: 10000, timeout: 20000 });
+    // A cache failure after commit must never be reported as a failed transaction.
+    try { invalidateWorkflow(submissionId); revalidatePath("/reservations"); revalidatePath("/payments"); revalidatePath("/", "layout"); } catch { /* committed; authoritative read follows */ }
+    return { status: "success", submissionId, applicationIds, reservationIds: result.reservationIds, paymentId: result.paymentId };
   } catch (error) {
     if (error instanceof ApplicationSubmissionOverbookingConfirmationError) {
-      return {
-        overbookingConfirmation: {
-          applicationId: error.applicationId,
-          classScheduleId: error.classScheduleId,
-          childChoice: error.childChoice,
-          selectionFingerprint: error.selectionFingerprint,
-          capacity: error.capacity,
-          reservedCount: error.reservedCount,
-          overByAfterCreate: error.overByAfterCreate,
-        },
-      };
+      return { status: "failure", submissionId, applicationIds, overbookingConfirmation: {
+        applicationId: error.applicationId, classScheduleId: error.classScheduleId,
+        childChoice: error.childChoice, selectionFingerprint: error.selectionFingerprint, classState: observedClassStates.get(error.classScheduleId)!,
+        capacity: error.capacity, reservedCount: error.reservedCount, overByAfterCreate: error.overByAfterCreate,
+      } };
     }
     console.error("[reservation-applications] failed to confirm submission:", describeErrorForLog(error));
-    return { error: "가용 입금액, 아이 정보, 클래스 상태와 정원을 다시 확인해주세요." };
+    const known = error instanceof ApplicationPaymentAlreadyExistsError || error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationNotPendingError || error instanceof ChildNotActiveError || error instanceof ChildNotFoundError || error instanceof ChildPersonalDataPurgedError || error instanceof ClassNotFoundError || error instanceof ClassNotScheduledError || error instanceof DuplicateReservationError || error instanceof TerminalReservationError;
+    return { status: known ? "failure" : "result-unknown", submissionId, applicationIds,
+      error: error instanceof ApplicationPaymentAlreadyExistsError ? "이미 연결된 결제가 있는 예약입니다. 기존 예약·결제 연결을 확인해주세요." : error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 예약 확정을 차단했습니다." : error instanceof InsufficientApplicationDepositError ? "선택한 아이의 청구액보다 가용 입금액이 부족합니다." : known ? "아이 연결, 중복 예약, 신청·클래스 상태를 다시 확인해주세요." : classifyInfrastructureError(error) ?? "예약 확정 결과가 불명확합니다. 재확정하지 말고 최신 예약·결제 상태를 조회해주세요." };
   }
 }
 
@@ -212,26 +367,24 @@ function revalidateApplication(applicationId: string) {
 }
 
 /** 클래스 신청 링크 만들기·재발급(ADR-052). 재발급하면 이전 링크는 즉시 무효가 된다. */
-export async function issueApplicationLink(classScheduleId: string): Promise<ApplicationActionResult> {
+export async function issueApplicationLink(classScheduleId: string, revision?: string): Promise<ApplicationActionResult> {
   const principal = await requireAdminPrincipal();
+  if (!z.string().min(1).max(200).safeParse(classScheduleId).success || !z.string().regex(/^[a-f0-9]{64}$/).safeParse(revision).success) return { error: "잘못된 요청입니다." };
   try {
-    await issueApplicationLinkCore(prisma, { classScheduleId, actorUserId: principal.userId, now: new Date() });
+    await issueApplicationLinkCore(prisma, { classScheduleId, revision: revision!, actorUserId: principal.userId, now: new Date() });
+    revalidatePath(`/classes/${classScheduleId}`);
+    return {};
   } catch (error) {
-    if (error instanceof ApplicationLinkNotFoundError) return { error: "클래스를 찾을 수 없습니다." };
-    if (error instanceof ApplicationLinkClassClosedError) {
-      return { error: "취소되었거나 이미 시작한 클래스는 신청 링크를 만들 수 없습니다." };
-    }
-    console.error("[reservation-applications] failed to issue link:", describeErrorForLog(error));
-    return { error: "신청 링크를 만들지 못했습니다. 다시 시도해주세요." };
+    if (error instanceof LinkRevisionConflictError) return { error: "링크 상태가 변경되었습니다. 다시 불러와 현재 주소를 확인해 주세요." };
+    return { error: "기존 링크와 클래스 상태를 확인한 뒤 다시 불러와 주세요." };
   }
-  revalidatePath(`/classes/${classScheduleId}`);
-  return {};
 }
 
-export async function stopApplicationLink(classScheduleId: string): Promise<ApplicationActionResult> {
+export async function stopApplicationLink(classScheduleId: string, revision?: string): Promise<ApplicationActionResult> {
   await requireAdminPrincipal();
   try {
-    await stopApplicationLinkCore(prisma, { classScheduleId });
+    if (!z.string().min(1).max(200).safeParse(classScheduleId).success || !z.string().regex(/^[a-f0-9]{64}$/).safeParse(revision).success) return { error: "잘못된 요청입니다." };
+    await stopApplicationLinkCore(prisma, { classScheduleId, revision });
   } catch (error) {
     if (error instanceof ApplicationLinkNotFoundError) return { error: "이미 중지되었거나 없는 링크입니다." };
     console.error("[reservation-applications] failed to stop link:", describeErrorForLog(error));
@@ -242,11 +395,12 @@ export async function stopApplicationLink(classScheduleId: string): Promise<Appl
 }
 
 /** ADMIN explicitly upgrades a priced legacy class URL while preserving the same raw capability. */
-export async function upgradeLegacyApplicationLink(classScheduleId: string): Promise<{ error?: string; groupId?: string }> {
+export async function upgradeLegacyApplicationLink(classScheduleId: string, revision?: string): Promise<{ error?: string; groupId?: string }> {
   const principal = await requireAdminPrincipal();
   try {
     const settings = await getReservationApplicationSettings(prisma);
-    const result = await upgradeLegacyApplicationLinkCore(prisma, { classScheduleId, actorUserId: principal.userId, now: new Date(), configReady: Boolean(settings && isReservationApplicationSettingsReady(settings)) });
+    if (!z.string().min(1).max(200).safeParse(classScheduleId).success || !z.string().regex(/^[a-f0-9]{64}$/).safeParse(revision).success) return { error: "잘못된 요청입니다." };
+    const result = await upgradeLegacyApplicationLinkCore(prisma, { revision, classScheduleId, actorUserId: principal.userId, now: new Date(), configReady: Boolean(settings && isReservationApplicationSettingsReady(settings)) });
     revalidatePath(`/classes/${classScheduleId}`);
     return result;
   } catch (error) {
@@ -362,7 +516,10 @@ export async function confirmReservationApplication(
     const message = describeConfirmFailure(error);
     if (message) return { formError: message, values };
     console.error("[reservation-applications] failed to confirm application:", describeErrorForLog(error));
-    return { formError: "예약 확정에 실패했습니다. 다시 시도해주세요.", values };
+    return {
+      formError: classifyInfrastructureError(error) ?? "예약 확정에 실패했습니다. 다시 시도해주세요.",
+      values,
+    };
   }
 
   revalidateApplication(applicationId);
@@ -451,4 +608,24 @@ export async function purgeExpiredPersonalData(): Promise<PersonalDataPurgeActio
   revalidatePath("/reservation-applications/retention");
   revalidatePath("/children");
   return result;
+}
+
+
+/** Capability writes are separate from copying/sharing/opening an already-issued address. */
+export async function issueClassApplicationLink(input: unknown): Promise<Partial<ClassLinkReceipt> & { error?: string; conflict?: boolean }> {
+  const principal = await requireAdminPrincipal();
+  const parsed = classLinkOperationSchema.safeParse(input);
+  if (!parsed.success) return { error: "잘못된 링크 작업입니다. 화면을 다시 불러와 주세요." };
+  try {
+    const result = await issueClassLinkOperationCore(prisma, { ...parsed.data, actorUserId: principal.userId, now: new Date() });
+    revalidatePath("/classes", "layout");
+    revalidatePath("/reservation-applications/groups", "layout");
+    return result;
+  } catch (error) {
+    if (error instanceof LinkOperationConflictError) return { error: "같은 작업 번호에 다른 요청을 사용할 수 없습니다. 현재 상태를 확인해 주세요.", conflict: true };
+    if (error instanceof LinkRevisionConflictError) return { error: "다른 관리자가 가격·구성·링크를 변경했습니다. 다시 불러와 현재 상태를 확인해 주세요.", conflict: true };
+    if (error instanceof LinkSettingsNotReadyError) return { error: "입금 안내 설정과 동의 문구를 먼저 준비해 주세요." };
+    if (error instanceof ApplicationLinkClassClosedError) return { error: "신청금액이 지정된 미래 예정 클래스만 링크를 발급할 수 있습니다." };
+    return { error: "링크 작업 결과를 확인하지 못했습니다. 같은 작업으로 다시 시도하거나 현재 상태를 다시 불러와 주세요. 기존 유효 링크는 유지됩니다." };
+  }
 }

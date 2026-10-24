@@ -35,6 +35,7 @@ export type ClassFormDefaultValues = {
   location: string;
   capacity: string;
   applicationPrice?: string;
+  applicationPriceRevision?: string;
   teacherIds: string[];
   memo: string;
   insured?: boolean;
@@ -88,6 +89,7 @@ export function ClassForm({
   const action = mode === "edit" && classId ? updateClass.bind(null, classId) : createClass;
   const [state, formAction, pending] = useActionState(action, initialState);
   const formRef = useRef<HTMLFormElement>(null);
+  const [loadedPrice] = useState(() => ({ baseline: defaultValues.applicationPrice ?? "", revision: defaultValues.applicationPriceRevision ?? "" }));
   const [registrationMode, setRegistrationMode] = useState<ClassRegistrationMode>(
     state.values?.registrationMode ?? "single",
   );
@@ -219,6 +221,10 @@ export function ClassForm({
         ) : null}
       </div>
 
+      {mode === "edit" && allowApplicationPrice ? <>
+        <input name="applicationPriceBaseline" type="hidden" value={state.values?.applicationPriceBaseline ?? loadedPrice.baseline} />
+        <input name="applicationPriceRevision" type="hidden" value={state.values?.applicationPriceRevision ?? loadedPrice.revision} />
+      </> : null}
       {allowApplicationPrice ? <div className="space-y-1.5">
         <Label htmlFor="applicationPrice">예약 신청 최종 금액</Label>
         <Input defaultValue={state.values?.applicationPrice ?? defaultValues.applicationPrice ?? ""} id="applicationPrice" min="1" name="applicationPrice" placeholder="미설정" type="number" />

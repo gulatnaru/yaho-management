@@ -44,12 +44,12 @@ export async function submitAndExpectPublicCompletion(page: Page, now: () => num
   const finished = (value: Request) => { if (submissions.has(value)) record("SUBMIT_FINISHED"); if (completions.has(value)) record("COMPLETE_FINISHED"); };
   const failed = (value: Request) => { if (submissions.has(value)) record("SUBMIT_FAILED"); if (completions.has(value)) record("COMPLETE_FAILED"); };
   page.on("request", request); page.on("response", response); page.on("requestfinished", finished); page.on("requestfailed", failed);
-  const form = page.locator("form").filter({ has: page.locator('input[name="payload"]') });
+  const form = page.locator("form").filter({ has: page.getByRole("button", { name: "신청서 제출", exact: true }) });
   const heading = page.getByRole("heading", { name: "신청이 접수되었습니다", exact: true });
   const startedAt = now();
   try {
     try {
-      await form.getByRole("button", { name: "신청하기", exact: true }).click({ timeout: PUBLIC_COMPLETION_TIMEOUT_MS });
+      await form.getByRole("button", { name: "신청서 제출", exact: true }).click({ timeout: PUBLIC_COMPLETION_TIMEOUT_MS });
       const remainingMs = PUBLIC_COMPLETION_TIMEOUT_MS - (now() - startedAt);
       if (remainingMs <= 0) throw new Error("P20_PUBLIC_COMPLETION_TIMEOUT");
       await heading.waitFor({ state: "visible", timeout: remainingMs });

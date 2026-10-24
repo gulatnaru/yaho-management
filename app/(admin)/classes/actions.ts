@@ -1,10 +1,12 @@
 "use server";
 
+import { z } from "zod";
+import { APPLICATION_PRICE_CONFLICT, ApplicationPriceRevisionConflictError, saveApplicationPriceCore } from "@/server/classes/application-price";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { requireAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { readFormString } from "@/lib/forms/form-data";
 import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
@@ -68,6 +70,8 @@ export type ClassFormValues = {
   location?: string;
   capacity?: string;
   applicationPrice?: string;
+  applicationPriceBaseline?: string;
+  applicationPriceRevision?: string;
   teacherIds?: string[];
   memo?: string;
   insured?: string;
@@ -130,6 +134,8 @@ function readClassFormValues(formData: FormData): ClassFormValues {
     location: readFormString(formData, "location"),
     capacity: readFormString(formData, "capacity"),
     applicationPrice: readFormString(formData, "applicationPrice"),
+    applicationPriceBaseline: readFormString(formData, "applicationPriceBaseline"),
+    applicationPriceRevision: readFormString(formData, "applicationPriceRevision"),
     teacherIds: formData.getAll("teacherIds").filter((value): value is string => typeof value === "string"),
     memo: readFormString(formData, "memo"),
     insured: formData.get("insured") === "on" ? "on" : undefined,
@@ -370,17 +376,31 @@ export async function updateClass(
   }
 
   const data: ClassInput = result.data;
+  // Unchanged loaded price is deliberately omitted even when another ADMIN has saved a newer one.
+  // Missing baselines cannot authorize price writes. Keep the original baseline/revision on errors.
+  let priceChange: { revision: string; applicationPrice: number | null } | undefined;
+  if (principal.role === "ADMIN" && formData.has("applicationPrice")) {
+    const baseline = z.string().regex(/^(?:[1-9]\d*)?$/).refine((value) => !value || Number(value) <= 2147483647).safeParse(formData.get("applicationPriceBaseline"));
+    const revision = z.string().datetime().safeParse(formData.get("applicationPriceRevision"));
+    if (!baseline.success || !revision.success) return { formError: "가격 정보를 다시 불러온 뒤 수정해 주세요.", values: readClassFormValues(formData) };
+    if ((data.applicationPrice ?? null) !== (baseline.data ? Number(baseline.data) : null)) priceChange = { revision: revision.data, applicationPrice: data.applicationPrice ?? null };
+  }
 
   // isProgramUsable/areTeachersUsable 재확인은 createClass 와 동일하게 $transaction 내부에서
   // (같은 tx 클라이언트로) 실행한다. 확인과 실제 쓰기 사이의 시간 간격을 최소화해 TOCTOU 레이스
-  // 창을 좁히기 위함이다(ARCHITECTURE.md §7.1). 상태 조건부 updateMany 는 이미 가장 저렴하고
-  // 확실한 확인이므로 트랜잭션의 첫 작업 자리를 유지하고, 프로그램/선생님 재확인은 그 다음
-  // — ClassTeacher diff 보다 먼저 — 수행한다.
+  // 창을 좁히기 위함이다(ARCHITECTURE.md §7.1). 클래스 잠금·가격 CAS·상태 조건부 쓰기를
+  // 먼저 수행하고, 프로그램/선생님 재확인은 ClassTeacher diff 전에 수행한다.
   try {
     await prisma.$transaction(async (tx) => {
+      // Lock before reading the current revision: an unchanged-price form must not move
+      // updatedAt backwards after a same-millisecond inline CAS (revision ABA).
+      await tx.$queryRaw`SELECT "id" FROM "ClassSchedule" WHERE "id" = ${id} FOR UPDATE`;
+      const locked = await tx.classSchedule.findUnique({ where: { id }, select: { updatedAt: true } });
+      if (!locked) throw new ClassNotUpdatableError();
+      const priceRevision = priceChange ? await saveApplicationPriceCore(tx, { classScheduleId: id, ...priceChange }) : new Date(Math.max(Date.now(), locked.updatedAt.getTime() + 1));
       // ADR-020: 트랜잭션 시작 전(위의 사전 체크) ~ 여기 사이에 다른 요청이 먼저 이 클래스를
       // 취소했을 수 있다(TOCTOU). 그래서 최종 쓰기 자체를 status 조건부 updateMany 로 만들고,
-      // ClassTeacher diff 보다 먼저 — 트랜잭션의 첫 작업으로 — 실행해 레이스를 막는다
+      // 클래스 잠금·가격 CAS 이후, ClassTeacher diff 전에 실행해 레이스를 막는다
       // (ARCHITECTURE.md §7.1). status 값 자체는 여기서 절대 건드리지 않는다 — 상태 전환은
       // cancelClass 전용이다.
       const updateResult = await tx.classSchedule.updateMany({
@@ -391,10 +411,8 @@ export async function updateClass(
           endsAt: data.endsAt,
           location: data.location,
           capacity: data.capacity,
-          // Managers may edit operational class details, but never write a stale
-          // application price read before the transaction. Omitting the field lets
-          // a concurrent ADMIN price edit remain authoritative.
-          ...(principal.role === "ADMIN" ? { applicationPrice: data.applicationPrice ?? null } : {}),
+          // The shared CAS already wrote any deliberate price change. Never overwrite an unchanged price.
+          updatedAt: priceRevision,
           memo: data.memo || null,
           insured: data.insured,
           insurer: data.insurer || null,
@@ -441,6 +459,7 @@ export async function updateClass(
       }
     });
   } catch (error) {
+    if (error instanceof ApplicationPriceRevisionConflictError) return { formError: APPLICATION_PRICE_CONFLICT, values: readClassFormValues(formData) };
     if (error instanceof ClassNotUpdatableError) {
       return {
         formError: "취소되었거나 완료된 클래스는 수정할 수 없습니다.",
@@ -569,4 +588,18 @@ export async function cancelClass(
   revalidatePath("/classes");
   revalidatePath(`/classes/${id}`);
   redirect(`/classes/${id}`);
+}
+
+
+/** ADMIN price CAS: this write deliberately cannot carry any other class fields. */
+export async function saveApplicationPrice(input: unknown): Promise<{ error?: string; revision?: string }> {
+  await requireAdminPrincipal();
+  const parsed = z.object({ classScheduleId: z.string().min(1).max(200), revision: z.string().datetime(), applicationPrice: z.number().int().positive().max(2147483647) }).strict().safeParse(input);
+  if (!parsed.success) return { error: "신청금액은 1원 이상의 정수로 입력해 주세요." };
+  try {
+    const nextRevision = await saveApplicationPriceCore(prisma, parsed.data);
+    revalidatePath(`/classes/${parsed.data.classScheduleId}`);
+    revalidatePath("/reservation-applications/groups", "layout");
+    return { revision: nextRevision.toISOString() };
+  } catch (error) { return { error: error instanceof ApplicationPriceRevisionConflictError ? APPLICATION_PRICE_CONFLICT : "신청금액을 저장하지 못했습니다. 입력을 유지한 채 다시 시도해 주세요." }; }
 }

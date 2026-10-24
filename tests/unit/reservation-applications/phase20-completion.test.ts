@@ -4,7 +4,7 @@ import { hashApplicationCapabilityToken } from "@/lib/reservation-applications/t
 
 describe("Phase 20 completion deposit notification", () => {
   const completion = (overrides: Partial<ApplicationCompletionView> = {}): ApplicationCompletionView => ({
-    submissionId: "submission-1", declaredPayerName: "입금자", syntheticRunId: null, syntheticSettings: null,
+    submissionId: "submission-1", declaredPayerName: "입금자", depositNotifiedAt: null, syntheticRunId: null, syntheticSettings: null,
     applications: [{ id: "application-1", childName: "아이", quotedAmount: 10_000 }], ...overrides,
   });
 

@@ -17,6 +17,8 @@ import { getReservationApplicationSettings } from "@/server/reservation-applicat
 import { cn } from "@/lib/utils";
 import { CompletionGuide } from "./completion-guide";
 import { hasActivePhase20PreviewLease, parseAndVerifySignedPreviewRun, PHASE20_PREVIEW_HEADER } from "@/lib/e2e/phase20-lease";
+import { resolvePreviewApplyAccess } from "@/lib/e2e/preview-manual-session";
+import { TestSessionBanner } from "../group/[token]/test-session-banner";
 
 // 배포 설정(환경변수)을 요청 시점에 읽는다.
 export const dynamic = "force-dynamic";
@@ -27,9 +29,12 @@ export default async function ReservationApplicationCompletePage() {
   const jar = await cookies();
   const token = jar.get(COMPLETION_COOKIE_NAME)?.value;
   const [completion, dbSettings] = await Promise.all([loadApplicationCompletionView(token), getReservationApplicationSettings(prisma)]);
-  const previewAllowed = process.env.VERCEL_ENV !== "preview" || await hasActivePhase20PreviewLease(prisma, { signed: parseAndVerifySignedPreviewRun((await headers()).get(PHASE20_PREVIEW_HEADER), process.env), syntheticRunId: completion?.syntheticRunId ?? null, now: new Date() });
+  const leaseAllowed = process.env.VERCEL_ENV === "preview"
+    ? await hasActivePhase20PreviewLease(prisma, { signed: parseAndVerifySignedPreviewRun((await headers()).get(PHASE20_PREVIEW_HEADER), process.env), syntheticRunId: completion?.syntheticRunId ?? null, now: new Date() })
+    : true;
+  const access = await resolvePreviewApplyAccess(leaseAllowed, completion?.syntheticRunId ?? null);
   const dbConfig = dbSettings ? reservationApplicationSettingsSchema.safeParse(dbSettings) : null;
-  const showCompletionGuide = canShowApplicationCompletionGuide({ completion, vercelEnv: process.env.VERCEL_ENV, previewAllowed });
+  const showCompletionGuide = canShowApplicationCompletionGuide({ completion, vercelEnv: process.env.VERCEL_ENV, previewAllowed: access.allowed });
   const previewConfig = showCompletionGuide && process.env.VERCEL_ENV === "preview"
     ? reservationApplicationSettingsSchema.safeParse(completion?.syntheticSettings)
     : null;
@@ -48,7 +53,8 @@ export default async function ReservationApplicationCompletePage() {
     : completionDbConfig ?? genericDbConfig ?? legacyConfig;
 
   return (
-    <section className="space-y-6">
+    <section className="min-w-0 space-y-6">
+      {access.operatorSession ? <TestSessionBanner /> : null}
       <Card>
         <CardContent className="space-y-2 p-6">
           <h1 className="text-xl font-bold">신청이 접수되었습니다</h1>
@@ -59,7 +65,7 @@ export default async function ReservationApplicationCompletePage() {
       </Card>
 
       {showCompletionGuide && completion && config ? (
-        <CompletionGuide accountHolder={config.bankAccountHolder} accountNumber={config.bankAccountNumber} applications={completion.applications} bankName={config.bankName} payerName={completion.declaredPayerName} />
+        <CompletionGuide accountHolder={config.bankAccountHolder} accountNumber={config.bankAccountNumber} applications={completion.applications} bankName={config.bankName} initiallyNotified={!!completion.depositNotifiedAt} payerName={completion.declaredPayerName} />
       ) : config ? (
         <>
           <Card>

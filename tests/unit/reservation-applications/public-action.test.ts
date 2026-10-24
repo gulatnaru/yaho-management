@@ -79,7 +79,7 @@ describe("submitReservationApplication (public action)", () => {
     );
 
     expect(state.errors?.guardianPhone?.[0]).toBeDefined();
-    expect(state.errors?.guardianRelationship?.[0]).toBe("아이와의 관계를 선택해주세요");
+    expect(state.errors?.guardianRelationship?.[0]).toBe("보호자와의 관계를 선택해주세요");
     expect(state.errors?.legalGuardianConfirmation?.[0]).toBe("법정대리인 확인에 동의해주세요");
     expect(state.errors?.refundTerms?.[0]).toBe("취소 및 환불규정을 확인해주세요");
     expect(state.errors?.photoShareConsent).toBeUndefined();

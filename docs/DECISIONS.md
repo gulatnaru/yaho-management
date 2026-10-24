@@ -568,3 +568,63 @@
 - Retention: 새 상담 원문만90일 보관·자동 삭제, 실패 재시도·ADMIN 확인을 제공한다. 카카오 식별값은 최소화·가명처리하고 삭제 후 원문·사용자 연결키 없는 비식별 통계만 유지한다. 가명 ID가 익명정보라는 가정이나 기존 예약 동의 재사용, 기존 Child/Application/거래 보관기간 변경은 허용하지 않는다.
 - Reason: 공개 허용·조회 경계와 실제 운영 전환을 분리하면 기존 도메인과 개인정보 정책을 유지하면서 합성 데이터로 상담 품질·보안·삭제 흐름을 검증할 수 있다.
 - Consequences: 현재 범위의 SPEC Open Questions는 없다. PLAN 승인 뒤에만 developer BUILD를 수행한다. migration 파일 작성/검증과 DB 적용은 분리하고 migration 적용·Production 배포·PR merge는 별도 명시 승인을 기다린다. ADR-030/051/059와 기존 Preview guard를 유지한다. 이 ADR은 기존 Accepted ADR을 수정하지 않으며 ADR-052/060의 AI 상담 경로에 한정한 예외만 확정한다.
+
+## ADR-062: AI 실연동의 실제 청구액 목표 예산과 개인정보 검토 전 합성 전용 범위를 확정한다
+- Status: Accepted — 정책 확정 및 아래 후속 조건부 PLAN·합성 BUILD 승인 기록. 실호출·DB 적용·운영 전환 승인은 아니다.
+- Date: 2026-10-15
+- Context: Phase21 Mock PR53은 Draft/OPEN이고 실서비스 Skill/cron이 비활성화되어 있다. 후속 SPEC의 비용 범위와 실제 개인정보 처리 승인 여부 QLIVE-01~02에 사용자가 답했다. 현재 Mock schema와 guard는 SYNTHETIC/runId/zero-cost이며 실제 서비스 활성화로 재해석할 수 없다.
+- Budget Decision: 월 LLM 예산KRW10,000은 부가세·환율·해외 결제·카드 수수료 등을 포함한 실제 청구액 기준 목표 지출 상한이다. 예상 환율·세금·수수료에 보수적 여유를 적용해 신규 호출을 차단하고 소진시 담당자 안내로 전환한다. 실제 청구액은 사전 확정할 수 없어10,000원을 절대 초과하지 않는다고 보장하지 않는다. ADMIN/Provider 변경으로 목표 금액을 조용히 높이지 않는다.
+- Provider/Public/Retention Decision: OpenAI 경량 모델을 최초 평가하고 Gemini/Claude 등으로 교체 가능한 Provider 계약을 설계한다. ADMIN 승인 Program/ClassSchedule/공식 원문만 사용하고 정원·예약수·잔여석 숫자를 고객/LLM에 공개하지 않는다. 실제 상담 원문은 암호화90일 후 자동 삭제한다. 기존 Payment/Refund/Revenue와 LLM 운영 비용을 혼합하지 않는다.
+- Privacy Decision: 개인정보 처리방침·외부 AI 전송·국외 이전·보관/삭제·백업 승인 문서는 미확보다. 검토 완료 전 실제 고객 데이터·카카오 사용자 식별정보·실제 상담내용의 외부 LLM 전송을 금지하며 합성 데이터 기반 개발·검증만 허용한다. 기존 예약 동의를 재사용하거나 가명화/암호화를 법적 승인으로 간주하지 않는다. 실제 수집/보존/전송·백업/복구 정책과 서비스 연결은 별도 운영 승인 gate다.
+- PLAN Baseline: KST 매월1일00:00 갱신을 기본안으로 검토한다. 환율 출처/효력·세금/수수료 예비율·안전 여유·가격 버전·토큰별 비용·원자적 예약·중복/실패/불확실 usage·월경계/청구 보정은 yaho-plan이 제안한다. 구체적인 계수·월 갱신은 PLAN 승인 전 확정 구현 정책이 아니다.
+- Open Questions: 없음 — QLIVE-01/02는 위 사용자 결정으로 해소됐다. 개인정보 승인 문서 미확보·카카오 기능 미확인 등은 운영 전환 차단 조건으로 남으며 SPEC/합성 설계 질문과 구분한다. 상세: docs/AI_CONSULTATION_LIVE_SPEC.md.
+- Preserved Decisions: ADR-061의 Mock 전용·Production 차단·ADMIN opt-in·read-only Tool·90일/가명화·법적/운영 gate를 유지한다. ADR-052/060 예약신청과 기존 예약/결제/환불, ADR-055~058 개인정보, ADR-030/051/059 DB/migration/Preview guard도 유지하며 기존 Accepted ADR을 수정/supersede하지 않는다.
+- Execution Gate: PR53 Draft/OPEN·원격 HEAD 보존. 초기 SPEC/PLAN 문서 작업 승인 후, 아래 후속 절의 사용자 조건부 PLAN·합성 BUILD 승인이 추가됐다. 실제 외부 API 호출·실제 데이터·DB/migration/배포·Production schema gate 승인·PR53 merge 금지. 설계 승인은 각각의 실행 승인과 별개다.
+- Reason: 사전 추정 한계가 있는 실제 원화 청구액은 목표 예산과 보수적 admission/정산으로 관리하고 절대 보장을 주장하지 않는다. 실제 개인정보 승인 미확보 상태를 명시하면 합성 설계를 진행하면서 기존 Mock 보호 경계를 보존할 수 있다.
+- Consequences: 신규 schema 필요성·API/Provider·보안·budget·삭제 운영과 요건–테스트 추적표는 PLAN에서 검토하고 설계 승인을 기다린다. 이미 적용한 Mock migration 변경 금지. 후속 Phase 번호/구현 브랜치는 별도 착수 시 실제 저장소 상태로 결정한다. 이 정책 ADR은 서비스 활성화 근거가 아니다.
+
+### ADR-062 후속 조건부 PLAN·BUILD 승인 (2026-10-15)
+사용자는 호출승인8000원(Preview1000/Production7000), FX10%·세금10%·수수료5% 초기예비율과환경별DB hardcap/외부청구대조를승인했다. 기존Mock과migration불변·별도브랜치, 삭제worker하루1회기본안과정확히90일조회차단. 물리삭제지연·scheduler·백업은운영전별도검토/승인. 승인PLAN에따른코드·additive migration파일·합성unit/local검증/QA/Review만허용하며DB적용·실API·고객데이터·Preview E2E·Production·merge는포함하지않는다. 세부설계/종속merge순서는 docs/AI_CONSULTATION_LIVE_PLAN.md. 기존 ADR-061 Mock 정책은유지한다.
+
+## ADR-063: 보호자 참가비 표시 정책 변경 (A안)
+
+- Status: Accepted
+- Date: 2026-10-20
+- Source: 2026-10-20 사용자 결정 — 보호자 참가비 표시 A안.
+- Context: ADR-052의 가격 비공개와 ADR-060의 신청 완료 후 자기 송금액 안내를 따르는 Phase 20 흐름은 신청 완료 전 가격을 표시하지 않는다. 사용자는 보호자가 유효한 링크 안에서 클래스별 참가비와 본인 자녀의 예상 총액을 확인한 뒤 신청하도록 변경하기로 결정했다.
+- Decision:
+  - Phase 20의 "신청 완료 전 가격 비공개"를 변경한다. 유효한 신청 링크·동행 초대 링크로 접근한 보호자에게 그 링크 범위의 접수 가능 클래스에 ADMIN이 지정한 `ClassSchedule.applicationPrice`를 표시한다.
+  - 1단계: 프로그램명·프로그램 설명·대상 연령·날짜·시작 및 종료 시간·장소와 함께 클래스별 참가비를 보여준다.
+  - 2단계: 본인 자녀별 선택 클래스와 금액, 예상 합계를 보여준다. 자녀 추가·삭제·클래스 변경 때마다 자녀별 금액과 예상 합계를 갱신한다.
+  - 3단계: 제출 전 검토에서 자녀 이름과 선택 클래스별 참가비, 총액, "아직 예약이 확정되지 않았습니다" 안내를 보여준다.
+  - 완료 화면: 클라이언트의 예상금액이나 조회 시점의 클래스 가격이 아니라 서버가 제출을 검증하고 저장한 아이별 `ReservationApplication.quotedAmount` 스냅샷과 그 합계를 사용한다. 기존 계좌·예금주·입금자명·복사 안내는 유지한다.
+  - 신청 중 클래스 가격이 바뀌면 보호자에게 변경된 클래스별 금액과 총액을 알리고 다시 확인받는다. 보호자가 확인하지 않은 새 가격으로 조용히 제출하지 않으며, 가격이 다르면 다시 확인받기 전에는 신청을 저장하지 않는다.
+  - 서버는 제출 시 링크 유효성, 클래스의 접수 가능 상태와 링크 소속, 현재 가격과 보호자가 확인한 가격의 일치, 현재 버전의 필수 확인·동의, 보호자·자녀의 접근 범위를 다시 검증한다.
+  - 제출 후에는 기존 스냅샷 보존 원칙을 유지한다. 이미 제출한 신청과 기존 확정(CONFIRMED) 신청의 `quotedAmount`는 이후 클래스 가격 변경으로 바꾸지 않는다.
+  - 가격 공개 범위는 유효한 링크 범위 안의 클래스별 가격과 본인 자녀의 예상 총액뿐이다. 전체 카탈로그, 다른 그룹의 가격, 정원·예약 인원·잔여석·만석 여부·예약 가능 여부, 다른 가족의 개인정보, 내부 메모·운영정보, 입금·결제·반환·환불 원장은 계속 비공개이며 HTML·RSC·서버 응답·오류·로그·캐시에 노출하지 않는다.
+  - 무효·중지·접근 불가 링크에는 가격을 노출하지 않는다. 기존의 접수 거부와 일반 오류 문구 원칙을 유지한다.
+  - Preview 접근 제한은 ADR-059/060과 기존 guard를 그대로 따른다. 가격 표시 허용은 Preview의 일반 공개 접수나 합성 E2E 접근 범위를 확대하지 않는다.
+  - 가격이 없는 기존 Phase 18 링크·신청의 호환성을 유지한다. `applicationPrice` 또는 `quotedAmount`가 NULL인 값을 0원으로 표시하거나 `Program.defaultPrice`로 채우지 않는다. 임의 가격 backfill·자동 링크 폐쇄 없이 기존 금액 미표시 흐름을 보존하고, ADMIN이 실제 금액을 명시해 업그레이드한 뒤에만 Phase 20 금액 흐름을 적용한다.
+  - Q-SEATS(좌석 공개)는 이 결정의 범위가 아니다. 좌석 정보는 계속 비공개이며 만석 신청 허용, 신청의 좌석 미점유와 ADMIN 최종 확정은 유지한다.
+- Relationship to ADR-052/060: 이 ADR은 유효 링크를 통한 보호자 신청 흐름의 가격 비공개 조항만 대체(supersede)한다. 그 외 링크·권한·개인정보·동의·보관·파기·Preview 제한과 기존 결제·입금·반환·환불·할인·예약 확정 정책은 유지한다. ADR-052/060을 포함한 과거 ADR 기록은 삭제하거나 다시 쓰지 않는다.
+- Reason: 보호자가 제출 전에 실제 클래스별 참가비와 본인 자녀의 예상 총액을 확인하게 하면서, 공개 범위를 유효 링크 안으로 제한한다. 제출 시 가격 재확인과 서버 스냅샷을 구분하면 신청 중 가격 변경과 과거 신청 금액의 불일치를 막을 수 있다.
+- Consequences: Phase 20 요구사항의 가격 표시 범위와 단계별 안내를 이 결정에 맞춘다. 이번 작업은 공식 문서 변경이며 UI·API·테스트·DB 코드는 변경하지 않는다.
+
+## ADR-064: Phase 2 신청 가격 수정 경로와 기존 링크 재발급 호환
+
+- Status: Accepted
+- Date: 2026-10-20
+- Source: 사용자 요청 “Phase 2 review fix — commit 3138d8c follow-up”, 기존 편집 동작 보존을 위한 (a)/(b) 선택 및 구현 승인.
+- Decision: (b)를 적용한다. ADMIN 전체 편집 폼은 최초 신청금액 baseline과 `updatedAt` revision을 유지한다. 입력 금액이 baseline과 같으면 가격 쓰기를 생략해 다른 관리자의 최신 inline 가격을 보존하고 장소 등 운영정보 수정은 ADR-020 정책대로 저장한다. 의도적인 금액 변경만 inline과 동일한 `saveApplicationPriceCore`에서 revision·접수 가능 상태를 검증하며 클래스/선생님 수정과 같은 트랜잭션에 포함한다. 오래된 의도적 가격 변경은 전체 수정이 롤백된다. revision 없는 가격 변경은 금지하고, 기존 전체 폼의 명시적 NULL 해제는 유지한다. 클래스 잠금과 단조 증가 revision으로 같은 시각의 revision 재사용도 막는다.
+- Compatibility: ADR-052의 기존 Phase 18 주소 재발급과 ADR-060/063의 명시적 새 방식 전환을 구분한다. 재발급은 이전 주소 무효화 경고 후 ADMIN이 기존 raw-token 행만 revision 검증하여 교체하며 금액/새 방식 설정을 강제하지 않는다. 업그레이드 후 raw-token 행을 새로 만들지 않는다. 기존 신청·예약·금액 스냅샷, 토큰 정책과 저장 범위를 유지한다.
+- Reason: 가격 경로를 제거하는 (a)보다 기존 ADMIN 전체 폼의 가격 설정/해제를 보존하면서 stale 가격 덮어쓰기를 차단한다. 가격을 변경하지 않은 운영정보 편집까지 가격 충돌로 막을 필요는 없다.
+- Scope: 금액·환불·개인정보 수집 정책 변경은 없다. ADR-020/052/060/063의 나머지 정책, Phase 2 범위, schema/migration 불변과 Preview/Production 접근 금지를 유지한다. 재시도/검증 상태는 `docs/UX-REDESIGN-INTEGRATED-PLAN.md`의 Phase 2 후속 절과 `docs/PHASE2-INTEGRATION-STATUS.md`에 기록한다.
+
+## ADR-065: OBS-01 트랜잭션 종료 fence에 한정한 이벤트 문자열 비교 예외
+
+- Status: Accepted
+- Date: 2026-10-23
+- Source: 흥영의 이번 Iteration 6B BUILD 승인 — "예외 승인 — BEGIN/COMMIT/ROLLBACK fence만 허용".
+- Context: OBS-01의 미지수 query-event 총수는 유한한 quiet interval만으로 전달 완료를 증명할 수 없다. 기존 PLAN 7의 SQL 분류 금지 때문에 이전 ATTRIBUTION 수정은 calibration 뒤 primary 실행을 UNPROVEN으로 차단했다.
+- Decision: 이벤트 query 문자열을 메모리 안에서 정확한 세 상수 `BEGIN`, `COMMIT`, `ROLLBACK`와 동등 비교하는 것만 허용한다. 목적은 해당 트랜잭션의 결과와 일치하는 종료 명령의 전달을 event-stream 완료 fence로 사용하는 것뿐이다. pinned Prisma 6.19.3 / engine c2990dca591cba766e3b7ef5d9e8a84796e47ab7의 source 기본 경로는 이 대문자 문자열을 그대로 전달하므로 normalization하지 않는다. prefix/substring/일반 statement 분류, 원문 보관·로그·진단/리포트 포함·원문 hash 출력은 금지한다. 불일치 문자열은 비교 후 폐기한다.
+- Consequences: primary와 독립 client별 race 창은 BEGIN 및 결과에 맞는 COMMIT/ROLLBACK 전달과 기존 count quiescence를 모두 확인해야 완료된다. fence 누락·순서/결과 불일치·종료 뒤 stray callback은 INVALID로 남는다. 기존 bootstrap/calibration 정확한 총수·asymmetric probe·수명 guard·출력/환경/불변식 경계는 유지한다. 이 예외는 일반 SQL 관찰, 실DB 실행/CI trigger, stage/commit/push/merge 승인이 아니다. 실제 PostgreSQL 확인은 NOT RUN이며 source 근거·로컬 검증은 `docs/OBS-01-PERF-RESULTS.md`의 이번 fence 기록에 남긴다.

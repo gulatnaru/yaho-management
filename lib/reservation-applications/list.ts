@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Prisma, ReservationApplicationStatus } from "@prisma/client";
 
 export const APPLICATION_LIST_PAGE_SIZE = 20;
@@ -12,8 +13,7 @@ export function parseApplicationListStatus(value: string | undefined): Applicati
 }
 
 export function parseApplicationListPage(value: string | undefined): number {
-  const page = value ? Number.parseInt(value, 10) : 1;
-  return Number.isFinite(page) && page > 0 ? page : 1;
+  return z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).catch(1).parse(value);
 }
 
 export function buildApplicationListWhere(status: ApplicationListStatus): Prisma.ReservationApplicationWhereInput {

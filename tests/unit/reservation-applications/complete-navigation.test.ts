@@ -55,10 +55,14 @@ describe("preventResubmitAfterSuccess", () => {
 describe("public application form wiring", () => {
   const form = read("../../../app/(public)/apply/[token]/_components/reservation-application-form.tsx");
   const actions = read("../../../app/(public)/apply/[token]/actions.ts");
+  const wizard = read("../../../app/(public)/apply/_components/application-wizard.tsx");
   const groupForm = read("../../../app/(public)/apply/group/[token]/group-application-form.tsx");
 
   it("opens the completion page with a full document navigation, never a client transition", () => {
-    expect(form).toMatch(/useEffect\(\(\) => \{\s*if \(submitted\) openApplicationCompletePage\(\);\s*\}, \[submitted\]\);/);
+    expect(wizard).toContain("openApplicationCompletePage(); return;");
+    expect(wizard).toContain("setChildren([])");
+    expect(wizard).toContain("window.addEventListener(\"pagehide\", wipe)");
+    expect(wizard).toContain("if (event.persisted) wipe()");
     expect(form).not.toContain("next/navigation");
     expect(form).not.toContain("useRouter");
     expect(form).not.toMatch(/router\.(push|replace)/);
@@ -66,9 +70,10 @@ describe("public application form wiring", () => {
   });
 
   it("guards the action and disables the submit button after success", () => {
-    expect(form).toContain("useActionState(guardedAction, initialState)");
-    expect(form).toContain("preventResubmitAfterSuccess(action)");
-    expect(form).toContain("disabled={pending || submitted}");
+    expect(form).toContain("<ApplicationWizard");
+    expect(wizard).toContain("finished.current = true;");
+    expect(wizard).toContain("busy.current || finished.current");
+    expect(wizard).toContain("if (state.submitted) return <p");
   });
 
   it("does not redirect from the Server Action on success", () => {
@@ -77,9 +82,9 @@ describe("public application form wiring", () => {
     expect(actions).toContain("return { submitted: true };");
   });
 
-  it("passes the group Server Action directly to useActionState while retaining its pending and success submit guard", () => {
-    expect(groupForm).toContain("useActionState(action, {})");
-    expect(groupForm).not.toContain("preventResubmitAfterSuccess");
-    expect(groupForm).toContain("disabled={pending || state.submitted}");
+  it("shares the same submission guard for group and legacy wrappers", () => {
+    expect(groupForm).toContain("<ApplicationWizard action={action}");
+    expect(wizard).toContain("disabled={pending || state.resultUnknown}");
+    expect(wizard).toContain("if (step !== 3 || busy.current || finished.current");
   });
 });

@@ -68,6 +68,20 @@ export async function requireOperationalPrincipal(): Promise<AdminPrincipal | Ex
   return principal;
 }
 
+/** Non-throwing public-route lookup; stale, forced-password and non-operational sessions fail closed. */
+export async function getOptionalOperationalPrincipal(): Promise<
+  AdminPrincipal | Extract<CurrentPrincipal, { role: "MANAGER" }> | null
+> {
+  try {
+    const principal = await getRequestPrincipal();
+    if (!principal || principal.mustChangePassword) return null;
+    if (principal.role === "TEACHER") return null;
+    return principal;
+  } catch {
+    return null;
+  }
+}
+
 export async function requireAdminPrincipal(): Promise<AdminPrincipal> {
   const principal = await requireCurrentPrincipal();
   if (principal.role !== "ADMIN") {

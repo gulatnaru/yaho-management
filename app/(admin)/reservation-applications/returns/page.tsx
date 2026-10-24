@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { requireAdminPrincipal } from "@/lib/auth/authorization";
-import { formatKstDateTime } from "@/lib/classes/datetime";
-import { prisma } from "@/lib/db/prisma";
-import { ReturnForm } from "./return-form";
+import { listApplicationReturns } from "@/lib/reservation-applications/return-queries";
+import { ApplicationReturnsWorkbench } from "../_components/application-return-card";
 export const dynamic = "force-dynamic";
-export default async function ApplicationReturnsPage() { await requireAdminPrincipal(); const obligations = await prisma.returnObligation.findMany({ where: { resolvedAt: null }, orderBy: { createdAt: "asc" }, select: { id: true, kind: true, amount: true, returnedAmount: true, submissionId: true, returns: { orderBy: [{ returnedAt: "asc" }, { id: "asc" }], select: { id: true, amount: true, returnedAt: true, createdAt: true, reason: true, processedBy: { select: { name: true } } } } } }); return <section className="space-y-6"><Link className="text-sm text-slate-500 hover:underline" href="/reservation-applications">신청 목록으로</Link><h1 className="text-2xl font-bold">예약 확정 전 반환 관리</h1>{obligations.length === 0 ? <p className="text-sm text-slate-500">처리할 반환이 없습니다.</p> : obligations.map((item) => { const remaining = item.amount - item.returnedAmount; return <article className="rounded border p-4" data-testid={`return-obligation-${item.id}`} key={item.id}><Link className="font-medium underline" href={`/reservation-applications/submissions/${item.submissionId}`}>{item.kind} · 남은 반환 <span data-testid="return-obligation-remaining">{remaining.toLocaleString("ko-KR")}원</span></Link><ul className="mt-2 text-sm">{item.returns.map((record) => <li key={record.id}>반환일시 {formatKstDateTime(record.returnedAt)} · 처리일시 {formatKstDateTime(record.createdAt)} · {record.amount.toLocaleString("ko-KR")}원 · 사유 {record.reason ?? "-"} · 처리자 {record.processedBy.name ?? "-"}</li>)}</ul><ReturnForm obligationId={item.id} remaining={remaining} /></article>; })}</section>; }
+export default async function ApplicationReturnsPage() {
+  await requireAdminPrincipal();
+  const obligations = await listApplicationReturns();
+  return <section className="min-w-0 space-y-6 [overflow-wrap:anywhere]"><Link className="inline-flex min-h-11 items-center text-sm underline" href="/reservation-applications">신청 목록으로</Link><h1 className="text-2xl font-bold">예약 확정 전 반환 관리</h1><p>은행에서 이미 실행한 반환 이체를 기록합니다. 예약 확정 후 환불은 기존 결제·환불 화면에서 처리합니다.</p>{obligations.length ? <ApplicationReturnsWorkbench initialObligations={obligations} /> : <p>반환 기록이 없습니다.</p>}</section>;
+}

@@ -1,3 +1,4 @@
+import { enterGuardianInformation, enterConsentReview, acceptGuardianConsents } from "./support/integrated-ux-guardian";
 import { expect, test, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { formatKstDateTime } from "@/lib/classes/datetime";
@@ -45,13 +46,14 @@ async function ensureTaggedKnownGroup(prisma: PrismaClient, input: { groupId: st
 }
 
 async function fillChild(page: Page, ordinal: number, childName: string, birthDate: string, classId: string) {
-  const child = page.getByRole("group", { name: `아이 ${ordinal}` });
+  const child = page.getByRole("group", { name: new RegExp(`^자녀 ${ordinal} ·`) });
   await child.getByLabel(`아이 ${ordinal} 클래스`).selectOption(classId); await child.getByLabel("아이 이름").fill(childName); await child.getByLabel("생년월일").fill(birthDate);
-  for (const checkbox of await child.getByTestId("application-consents").getByRole("checkbox").all()) await checkbox.check();
 }
 async function fillPublicSiblingSubmission(page: Page, input: { guardian: string; payer: string; firstChild: string; secondChild: string; firstClassId: string; secondClassId: string }) {
-  await page.getByLabel("보호자 이름").fill(input.guardian); await page.getByLabel("보호자 연락처").fill("010-1234-5678"); await page.getByLabel("입금자명").fill(input.payer); await page.getByLabel("아이와의 관계").selectOption("MOTHER");
-  await fillChild(page, 1, input.firstChild, "2020-01-01", input.firstClassId); await page.getByRole("button", { name: "아이 추가" }).click(); await fillChild(page, 2, input.secondChild, "2021-01-01", input.secondClassId);
+  await enterGuardianInformation(page);
+  await page.getByLabel("보호자 이름").fill(input.guardian); await page.getByLabel("보호자 연락처").fill("010-1234-5678"); await page.getByLabel("입금할 때 사용할 이름").fill(input.payer); await page.getByLabel("아이와의 관계").selectOption("MOTHER");
+  await fillChild(page, 1, input.firstChild, "2020-01-01", input.firstClassId); await page.getByRole("button", { name: "내 자녀 추가" }).click(); await fillChild(page, 2, input.secondChild, "2021-01-01", input.secondClassId);
+  await enterConsentReview(page); await acceptGuardianConsents(page);
 }
 
 // A/B: before test-owned synthetic groups exist, random group capabilities stay closed.
@@ -102,7 +104,7 @@ test.describe("Phase 20 group sibling boundary", () => {
       await fillPublicSiblingSubmission(stalePage, { guardian, payer, firstChild, secondChild, firstClassId: first!.id, secondClassId: removed!.id });
       await page.getByLabel(editLabel(removed!)).uncheck(); await page.getByRole("button", { name: "구성 저장" }).click();
       await expect.poll(async () => (await prisma.reservationApplicationGroup.findUnique({ where: { id: createdGroupId! }, select: { classes: { select: { classScheduleId: true } } } }))?.classes.map((item) => item.classScheduleId).sort()).toEqual(initialClassIds.slice().sort());
-      await stalePage.getByRole("button", { name: "신청하기" }).click(); await expect(stalePage.getByRole("alert")).toBeVisible(); expect(await stalePage.getByRole("alert").count().then(Boolean)).toBe(true);
+      await stalePage.getByRole("button", { name: "신청서 제출" }).click(); await expect(stalePage.getByRole("alert")).toBeVisible(); expect(await stalePage.getByRole("alert").count().then(Boolean)).toBe(true);
       expect(await prisma.reservationApplication.count({ where: { submission: { groupId: createdGroupId } } })).toBe(0); await stalePage.close();
 
       await page.getByRole("button", { name: "접수 중지" }).click(); await expect(page.getByText("중지된 그룹입니다. 새 링크를 발급하면 다시 접수합니다.")).toBeVisible();
@@ -125,10 +127,9 @@ test.describe("Phase 20 group sibling boundary", () => {
       await loginAsAdmin(page); await page.goto(`/reservation-applications/submissions/${submission.id}`);
       await page.locator('input[name="amount"]').fill("22000"); await page.locator('input[name="payerName"]').fill(payer); await page.locator('input[name="depositedAt"]').fill(pastKstDateTimeLocal());
       await page.getByRole("button", { name: "실제 입금 기록" }).click(); await expect(page.getByText("현재 가용 입금액 22,000원", { exact: true })).toBeVisible();
-      for (const checkbox of await page.getByLabel("확정", { exact: true }).all()) await checkbox.check();
       const firstCandidate = page.getByLabel(`${firstChild} 확정 대상`); const secondCandidate = page.getByLabel(`${secondChild} 확정 대상`);
-      expect((await firstCandidate.inputValue() === "NEW") && (await secondCandidate.inputValue() === "NEW")).toBe(true);
-      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: submission.applications.map((application) => application.id), childNames: [firstChild, secondChild], ownedCounts: async () => {
+      expect((await firstCandidate.inputValue() === "") && (await secondCandidate.inputValue() === "")).toBe(true);
+      await confirmSelectedApplications(page, { prisma, submissionId: submission.id, applicationIds: submission.applications.map((application) => application.id), childNames: [firstChild, secondChild], childChoices: Object.fromEntries(submission.applications.map((application) => [application.id, "NEW"])), ownedCounts: async () => {
         assertPreviewE2eRunnerProof({ proofPath: process.env.PREVIEW_E2E_RUNNER_PROOF_PATH, proof: process.env.PREVIEW_E2E_RUNNER_PROOF });
         const environment = { ...process.env, VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: process.env.PREVIEW_E2E_DEPLOYMENT_SHA };
         const signed = parseAndVerifySignedPreviewRun(process.env.PREVIEW_E2E_PHASE20_SIGNED_RUN ?? null, environment);

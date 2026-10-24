@@ -3,18 +3,18 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadEnvConfig } from "@next/env";
+import {readPreviewLocalEnvironment,PREVIEW_RUNNER_ENV_KEYS,PREVIEW_MOCK_ENV_KEYS,previewPrismaEnvironment} from "@/lib/e2e/preview-environment";
 import { readKeys } from "@/lib/ai-consultations/crypto";
 import { readLimits } from "@/server/ai-consultations/ledger";
 import { assertDeploymentMatchesRepository, readPreviewE2eConfiguration } from "@/lib/e2e/preview-runner";
 
 import { assertApprovedPreviewUrl } from "@/lib/e2e/preview-safety";
 
-export const PHASE21_RUNNER_ENV_KEYS = ["DATABASE_URL","DIRECT_URL","ADMIN_EMAIL","ADMIN_PASSWORD","VERCEL_AUTOMATION_BYPASS_SECRET","PREVIEW_E2E_HANDSHAKE_SECRET","PREVIEW_E2E_SUPABASE_PROJECT_REF","PRODUCTION_E2E_SUPABASE_PROJECT_REF","PREVIEW_E2E_DB_RUNTIME_IDENTITY_SHA256","PLAYWRIGHT_BASE_URL","PREVIEW_E2E_ALLOWED_BASE_URLS","PREVIEW_E2E_DEPLOYMENT_SHA"] as const;
-export const PHASE21_AI_ENV_KEYS = ["AI_ENCRYPTION_KEYS","AI_ENCRYPTION_ACTIVE","AI_HMAC_KEYS","AI_HMAC_ACTIVE","AI_MOCK_REQUEST_SECRET","AI_MOCK_LIMITS"] as const;
+export const PHASE21_RUNNER_ENV_KEYS = PREVIEW_RUNNER_ENV_KEYS;
+export const PHASE21_AI_ENV_KEYS = PREVIEW_MOCK_ENV_KEYS;
 const remoteKeys = ["DATABASE_URL","DIRECT_URL","PREVIEW_E2E_HANDSHAKE_SECRET","PREVIEW_E2E_SUPABASE_PROJECT_REF","PRODUCTION_E2E_SUPABASE_PROJECT_REF","PREVIEW_E2E_DB_RUNTIME_IDENTITY_SHA256",...PHASE21_AI_ENV_KEYS] as const;
 export function assertPhase21ValidationBranch(branch:string) {
-  if (!["feature/phase21-preview-validation","feature/phase21-kakao-ai-consultation"].includes(branch)) throw new Error("P21_ENV_BRANCH_DENIED");
+  if (!["feature/phase21-preview-validation","feature/phase21-kakao-ai-consultation","feature/phase21-ai-service"].includes(branch)) throw new Error("P21_ENV_BRANCH_DENIED");
 }
 export function createPhase21MockKeys() {
   const fresh=()=>randomBytes(32).toString("base64");
@@ -42,11 +42,7 @@ export function stampPhase21DeploymentContent(content:string,url:string,sha:stri
 }
 function explicitLocal(directory:string) {
   if (!path.isAbsolute(directory) || !existsSync(path.join(directory,".env.local"))) throw new Error("P21_ENV_SOURCE_DENIED");
-  // Read parsed file values directly, so inherited shell values never replace this source.
-  const loaded=loadEnvConfig(directory,true,{info:()=>{},error:()=>{}},true);
-  const local=loaded.loadedEnvFiles.find(file=>file.path===".env.local")?.env;
-  if (!local) throw new Error("P21_ENV_SOURCE_DENIED");
-  return local;
+  return readPreviewLocalEnvironment(directory);
 }
 function assertTarget(environment:NodeJS.ProcessEnv) {
   const config=readPreviewE2eConfiguration(environment);
@@ -60,7 +56,7 @@ function cliPath() {
 }
 async function capturedVercel(args:string[],input?:string) {
   return new Promise<string>((resolve,reject)=>{
-    const child=execFile(process.execPath,[cliPath(),...args],{cwd:process.cwd(),timeout:60000,maxBuffer:1024*1024},(error,stdout)=>error?reject(new Error("P21_ENV_VERCEL_FAILED")):resolve(stdout));
+    const child=execFile(process.execPath,[cliPath(),...args],{cwd:process.cwd(),timeout:60000,maxBuffer:1024*1024,env:Object.fromEntries(Object.entries(previewPrismaEnvironment("",process.env)).filter(([key])=>key!=="DATABASE_URL"&&key!=="DIRECT_URL")) as NodeJS.ProcessEnv},(error,stdout)=>error?reject(new Error("P21_ENV_VERCEL_FAILED")):resolve(stdout));
     child.stdin?.end(input ?? "");
   });
 }
@@ -72,7 +68,7 @@ async function main() {
   const approvedSource=explicitLocal(source);
   const localPath=path.resolve(".env.local");
   const existing=existsSync(localPath);
-  const current=existing?explicitLocal(process.cwd()):{};
+  const current:NodeJS.ProcessEnv=existing?explicitLocal(process.cwd()):{} as NodeJS.ProcessEnv;
   const desired:NodeJS.ProcessEnv={NODE_ENV:"development",...Object.fromEntries(PHASE21_RUNNER_ENV_KEYS.map(key=>[key,approvedSource[key]]))};
   if (existing) {
     for (const key of PHASE21_RUNNER_ENV_KEYS) {

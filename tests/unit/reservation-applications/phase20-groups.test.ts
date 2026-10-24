@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { LinkRevisionConflictError } from "@/server/reservation-applications/groups";
 import { ApplicationClosedError, ApplicationLinkClassClosedError } from "@/lib/reservation-applications/errors";
 import { groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
 import { issueApplicationGroupLinkCore, issueCompanionInviteCore, stopApplicationGroupCore, submitApplicationGroupCore, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 
-const submission = groupSubmissionSchema.parse({ guardianName: "보호자", guardianPhone: "010-1234-5678", guardianRelationship: "MOTHER", declaredPayerName: "입금자", children: [{ classScheduleId: "class-1", childName: "아이", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED", programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true, photoShareConsent: false, photoMarketingConsent: false }] });
+const submission = groupSubmissionSchema.parse({ reviewedPriceProof: "synthetic-test-proof", consentVersion: "2026-09-30-r3", guardianName: "보호자", guardianPhone: "010-1234-5678", guardianRelationship: "MOTHER", declaredPayerName: "입금자", children: [{ classScheduleId: "class-1", childName: "아이", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED", programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true, photoShareConsent: false, photoMarketingConsent: false }] });
 
 function queryText(query: unknown): string {
   if (Array.isArray(query)) return query.join("");
@@ -90,14 +91,15 @@ describe("Phase 20 application groups", () => {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([{ id: "locked" }]),
       classSchedule: { findMany: vi.fn().mockResolvedValue([{ id: "class-1", status: "SCHEDULED", startsAt: new Date("2026-11-01"), applicationPrice: 10_000 }]) },
-      reservationApplicationGroup: { updateMany, findUnique: vi.fn()
-        .mockResolvedValueOnce({ classes: [{ classScheduleId: "class-1" }] })
+      reservationApplicationGroup: { updateMany, update: vi.fn(), findUnique: vi.fn()
+        .mockResolvedValueOnce({ updatedAt: new Date("2026-10-01"), classes: [{ classScheduleId: "class-1" }] })
         .mockResolvedValueOnce({ id: "group-1", isActive: true, classes: [{ classSchedule: { id: "class-1", status: "SCHEDULED", startsAt: new Date("2026-11-01"), applicationPrice: 10_000 } }] }) },
       reservationApplicationGroupClass: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn().mockResolvedValue([{ classScheduleId: "class-1" }]) },
       reservationApplicationLink: { updateMany, create: vi.fn() },
     };
     const client = { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx) } as never;
     await updateApplicationGroupCore(client, { groupId: "group-1", classScheduleIds: ["class-1"], now: new Date("2026-10-01") });
+    expect(tx.reservationApplicationGroup.update).toHaveBeenCalledWith({ where: { id: "group-1" }, data: { updatedAt: new Date("2026-10-01T00:00:00.001Z") } });
     await issueApplicationGroupLinkCore(client, { groupId: "group-1", actorUserId: "admin-1", now: new Date("2026-10-01"), generateToken: () => "x".repeat(64) });
     await stopApplicationGroupCore(client, { groupId: "group-1" });
     expect(tx.reservationApplicationLink.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ groupId: "group-1", isActive: true }), data: { isActive: false } }));
@@ -112,7 +114,7 @@ describe("Phase 20 application groups", () => {
         .mockResolvedValueOnce([{ id: "group-lock" }])
         .mockResolvedValueOnce([{ id: past.id }, { id: fresh.id }]),
       classSchedule: { findMany: vi.fn().mockResolvedValue([past, fresh]) },
-      reservationApplicationGroup: { findUnique: vi.fn().mockResolvedValue({ classes: [{ classScheduleId: past.id }] }) },
+      reservationApplicationGroup: { update: vi.fn(), findUnique: vi.fn().mockResolvedValue({ updatedAt: new Date("2026-10-01"), classes: [{ classScheduleId: past.id }] }) },
       reservationApplicationGroupClass: { deleteMany: vi.fn(), createMany: vi.fn() },
     };
     const client = { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx) } as never;
@@ -130,4 +132,13 @@ describe("Phase 20 application groups", () => {
     await expect(updateApplicationGroupCore(newIneligibleClient, { groupId: "group-1", classScheduleIds: [past.id], now: new Date("2026-10-01") })).rejects.toBeInstanceOf(ApplicationLinkClassClosedError);
     expect(newIneligibleTx.reservationApplicationGroupClass.deleteMany).not.toHaveBeenCalled();
   });
+});
+
+
+it("rejects stale composition before membership writes and leaves capability state separate", async () => {
+  const writes = vi.fn();
+  const tx = { $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }]), reservationApplicationGroup: { findUnique: vi.fn().mockResolvedValue({ id: "group-1", isActive: true, classes: [{ classScheduleId: "class-1" }], links: [{ id: "link-1", isActive: true }] }) }, reservationApplicationGroupClass: { deleteMany: writes, createMany: writes }, reservationApplicationLink: { updateMany: writes } };
+  const client = { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx) } as never;
+  await expect(updateApplicationGroupCore(client, { groupId: "group-1", classScheduleIds: ["class-1"], revision: "a".repeat(64), now: new Date() })).rejects.toBeInstanceOf(LinkRevisionConflictError);
+  expect(writes).not.toHaveBeenCalled();
 });

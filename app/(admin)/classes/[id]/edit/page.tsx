@@ -59,6 +59,7 @@ export default async function EditClassPage({ params }: EditClassPageProps) {
           endTime: formatKstTime(classDetail.endsAt),
           location: classDetail.location,
           capacity: String(classDetail.capacity),
+          applicationPriceRevision: classDetail.updatedAt.toISOString(),
           applicationPrice: classDetail.applicationPrice ? String(classDetail.applicationPrice) : "",
           teacherIds: currentTeacherIds,
           memo: classDetail.memo ?? "",

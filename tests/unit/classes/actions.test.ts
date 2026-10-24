@@ -18,6 +18,7 @@ const transactionMock = vi.fn();
 const txMock = {
   $queryRaw: (...args: unknown[]) => queryRawMock(...args),
   classSchedule: {
+    findUnique: async () => ({ updatedAt: new Date(0) }),
     create: (...args: unknown[]) => classCreateMock(...args),
     createManyAndReturn: (...args: unknown[]) => classCreateManyAndReturnMock(...args),
     findMany: (...args: unknown[]) => classFindManyMock(...args),
@@ -484,11 +485,11 @@ describe("updateClass application price authority", () => {
   it("allows an ADMIN to set and clear the application price", async () => {
     requireAdminMock.mockResolvedValue({ user: { role: "ADMIN" } });
 
-    await expect(updateClass("class-1", {}, validFormData({ applicationPrice: "20000" }))).rejects.toThrow("REDIRECT");
+    await expect(updateClass("class-1", {}, validFormData({ applicationPrice: "20000", applicationPriceBaseline: "10000", applicationPriceRevision: "2026-10-20T00:00:00.000Z" }))).rejects.toThrow("REDIRECT");
     expect(classUpdateManyMock.mock.calls[0]![0].data.applicationPrice).toBe(20_000);
 
-    await expect(updateClass("class-1", {}, validFormData({ applicationPrice: "" }))).rejects.toThrow("REDIRECT");
-    expect(classUpdateManyMock.mock.calls[1]![0].data.applicationPrice).toBeNull();
+    await expect(updateClass("class-1", {}, validFormData({ applicationPrice: "", applicationPriceBaseline: "20000", applicationPriceRevision: "2026-10-20T00:00:00.001Z" }))).rejects.toThrow("REDIRECT");
+    expect(classUpdateManyMock.mock.calls[2]![0].data.applicationPrice).toBeNull();
   });
 
   it("rejects a MANAGER-supplied application price before any update", async () => {

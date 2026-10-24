@@ -1,5 +1,6 @@
 "use server";
 
+import { mapLegacyApplicationFieldErrors } from "@/lib/reservation-applications/field-errors";
 import { prisma } from "@/lib/db/prisma";
 import { readFormString } from "@/lib/forms/form-data";
 import { APPLICATION_CONSENT_CONTENT } from "@/lib/reservation-applications/consent-content";
@@ -119,7 +120,11 @@ export async function submitReservationApplication(
     refundTerms: formData.get("refundTerms"),
   });
   if (!parsed.success) {
-    return { errors: parsed.error.flatten().fieldErrors, values };
+    const errors: Partial<Record<ReservationApplicationFormFieldKey, string[]>> = {};
+    for (const [path, message] of Object.entries(mapLegacyApplicationFieldErrors(parsed.error.issues))) {
+      errors[path as ReservationApplicationFormFieldKey] = [message];
+    }
+    return { errors, values };
   }
 
   try {

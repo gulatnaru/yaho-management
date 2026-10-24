@@ -1,9 +1,14 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { APPLICATION_CONSENT_CONTENT, isConsentContentReady } from "@/lib/reservation-applications/consent-content";
+import { isReservationApplicationSettingsReady } from "./settings";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { canIssueApplicationLink } from "@/lib/reservation-applications/availability";
 import { ApplicationClosedError, ApplicationLinkClassClosedError, ApplicationLinkNotFoundError } from "@/lib/reservation-applications/errors";
-import { hashApplicationCapabilityToken, generateApplicationCapabilityToken } from "@/lib/reservation-applications/token";
-import type { z } from "zod";
-import { reservationApplicationSettingsSchema, type groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
+import { hashApplicationCapabilityToken, generateApplicationCapabilityToken, isWellFormedApplicationLinkToken } from "@/lib/reservation-applications/token";
+import { reservationApplicationSettingsSchema, groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
+
+import { applicationReviewScope, issueApplicationPriceReview, authenticateApplicationPriceReview, isApplicationPriceReviewExpired, ApplicationPriceReviewExpiredError, ApplicationPriceChangedError, ApplicationAlreadySubmittedError, type ApplicationPriceReview } from "./price-review";
 
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
@@ -79,7 +84,7 @@ export async function createApplicationGroupCore(
 /** Editing membership only affects future submissions; existing submitted quotes and classes remain immutable. */
 export async function updateApplicationGroupCore(
   client: GroupClient,
-  input: { groupId: string; classScheduleIds: string[]; now: Date },
+  input: { groupId: string; classScheduleIds: string[]; now: Date; revision?: string },
 ): Promise<void> {
   const ids = [...new Set(input.classScheduleIds)].sort();
   if (ids.length === 0 || ids.length !== input.classScheduleIds.length) throw new ApplicationLinkNotFoundError();
@@ -87,9 +92,13 @@ export async function updateApplicationGroupCore(
     await lockGroup(tx, input.groupId);
     const group = await tx.reservationApplicationGroup.findUnique({
       where: { id: input.groupId },
-      select: { classes: { select: { classScheduleId: true } } },
+      select: { updatedAt: true, classes: { select: { classScheduleId: true } } },
     });
     if (!group) throw new ApplicationLinkNotFoundError();
+    if (input.revision) {
+      const current = await tx.reservationApplicationGroup.findUnique({ where: { id: input.groupId }, select: GROUP_REVISION_SELECT });
+      if (!current || linkRevision(current) !== input.revision) throw new LinkRevisionConflictError();
+    }
     const existingIds = group.classes.map((item) => item.classScheduleId);
     const existingSet = new Set(existingIds);
     const lockedIds = [...new Set([...existingIds, ...ids])].sort();
@@ -103,6 +112,9 @@ export async function updateApplicationGroupCore(
     }
     await tx.reservationApplicationGroupClass.deleteMany({ where: { groupId: input.groupId } });
     await tx.reservationApplicationGroupClass.createMany({ data: ids.map((classScheduleId) => ({ groupId: input.groupId, classScheduleId })) });
+    // Membership rows can return to the same set. Advance the parent revision so
+    // an old confirmation cannot become valid again after remove/re-add (ABA).
+    await tx.reservationApplicationGroup.update({ where: { id: input.groupId }, data: { updatedAt: new Date(Math.max(input.now.getTime(), group.updatedAt.getTime() + 1)) } });
   }, TX_OPTIONS);
 }
 
@@ -142,70 +154,114 @@ export async function issueApplicationGroupLinkCore(
 
 type GroupSubmitClient = Pick<PrismaClient, "reservationApplicationLink" | "$transaction">;
 
+/** Read-only review and final save use exactly the same authorization and lock hierarchy. */
+async function lockPublicApplicationScope(tx: Prisma.TransactionClient, input: { token?: string; companionToken?: string; now: Date; classScheduleIds: string[] }) {
+  if ((!input.token && !input.companionToken) || (input.token && !isWellFormedApplicationLinkToken(input.token)) || (input.companionToken && !isWellFormedApplicationLinkToken(input.companionToken))) throw new ApplicationClosedError();
+  const tokenHash = input.token ? hashApplicationCapabilityToken(input.token) : undefined;
+  const link = tokenHash ? await tx.reservationApplicationLink.findUnique({
+    where: { tokenHash },
+    select: {
+      id: true,
+      isActive: true,
+      group: {
+        select: {
+          id: true, isActive: true, syntheticRunId: true,
+          classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } },
+        },
+      },
+    },
+  }) : null;
+  // An invite proves only companionship in this group. It never provides a child,
+  // guardian, or consent record from the issuer.
+  const invite = input.companionToken
+    ? await tx.companionInvite.findFirst({
+        where: {
+          tokenHash: hashApplicationCapabilityToken(input.companionToken),
+          revokedAt: null,
+          expiresAt: { gt: input.now },
+        },
+        select: { id: true, companionGroupId: true, group: { select: { id: true, isActive: true, syntheticRunId: true, classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } } } } },
+      })
+    : null;
+  if (input.companionToken && !invite) throw new ApplicationClosedError();
+  let group = link?.group ?? invite?.group;
+  if (!group?.isActive || (tokenHash && !link?.isActive) || (link && invite && link.group?.id !== invite.group.id)) throw new ApplicationClosedError();
+  // All writers that affect a public submission use this lock hierarchy:
+  // Group -> Link/invite -> Class -> Device -> Child. The scoped re-reads below
+  // make a concurrent stop, membership edit, revocation, price edit, or purge fail closed.
+  await lockGroup(tx, group.id);
+  if (link) await tx.$queryRaw`SELECT "id" FROM "ReservationApplicationLink" WHERE "id" = ${link.id} FOR UPDATE`;
+  if (invite) await tx.$queryRaw`SELECT "id" FROM "CompanionInvite" WHERE "id" = ${invite.id} FOR UPDATE`;
+  const lockedLink = tokenHash ? await tx.reservationApplicationLink.findUnique({ where: { tokenHash }, select: { isActive: true, group: { select: { id: true, isActive: true, syntheticRunId: true } } } }) : null;
+  const lockedInvite = input.companionToken ? await tx.companionInvite.findFirst({ where: { tokenHash: hashApplicationCapabilityToken(input.companionToken), revokedAt: null, expiresAt: { gt: input.now } }, select: { companionGroupId: true, group: { select: { id: true, isActive: true, syntheticRunId: true } } } }) : null;
+  if ((tokenHash && !lockedLink?.isActive) || (input.companionToken && !lockedInvite) || !lockedLink?.group?.isActive && !lockedInvite?.group?.isActive || (lockedLink?.group && lockedInvite?.group && lockedLink.group.id !== lockedInvite.group.id)) throw new ApplicationClosedError();
+  if (process.env.VERCEL_ENV === "production" && (lockedLink?.group?.syntheticRunId || lockedInvite?.group?.syntheticRunId)) throw new ApplicationClosedError();
+  const groupId = lockedLink?.group?.id ?? lockedInvite?.group?.id;
+  if (!groupId || groupId !== group.id) throw new ApplicationClosedError();
+  const membership = await tx.reservationApplicationGroupClass.findMany({ where: { groupId }, select: { classScheduleId: true } });
+  const memberIds = membership.map((row) => row.classScheduleId).sort();
+  await lockClassSchedules(tx, memberIds);
+  const currentSchedules = await tx.classSchedule.findMany({ where: { id: { in: memberIds } }, select: { id: true, status: true, startsAt: true, applicationPrice: true } });
+  if (currentSchedules.length !== memberIds.length) throw new ApplicationClosedError();
+  group = { ...group, id: groupId, isActive: true, classes: currentSchedules.map((classSchedule) => ({ classSchedule })) };
+  const schedules = new Map(group.classes.map(({ classSchedule }) => [classSchedule.id, classSchedule]));
+  if (input.classScheduleIds.some((classScheduleId) => {
+    const schedule = schedules.get(classScheduleId);
+    return !schedule || !canIssueApplicationLink(schedule, input.now) || !schedule.applicationPrice || schedule.applicationPrice <= 0;
+  })) throw new ApplicationClosedError();
+
+  return { group, schedules, invite };
+}
+
+/** No family writes, seat holds or reservations happen during review. */
+export async function recheckApplicationGroupPricesCore(client: GroupSubmitClient, input: { token?: string; companionToken?: string; classScheduleIds: string[]; reviewedPriceProof?: string; now: Date }): Promise<ApplicationPriceReview & { priceReviewExpired?: boolean }> {
+  const ids = z.array(z.string().min(1).max(200)).min(1).max(10).parse(input.classScheduleIds);
+  const scope = applicationReviewScope(input);
+  const previous = input.reviewedPriceProof ? authenticateApplicationPriceReview(input.reviewedPriceProof, scope, input.now) : undefined;
+  return client.$transaction(async (tx) => {
+    const { schedules } = await lockPublicApplicationScope(tx, { ...input, classScheduleIds: ids });
+    // Never renew an operation whose original submission may already have committed.
+    if (previous && await tx.reservationApplicationSubmission.findUnique({ where: { id: `phase8_${previous.operation}` }, select: { id: true } })) throw new ApplicationAlreadySubmittedError();
+    const prices = [...new Set(ids)].sort().map((classScheduleId) => ({ classScheduleId, amount: schedules.get(classScheduleId)!.applicationPrice! }));
+    return { ...issueApplicationPriceReview({ scope, prices, now: input.now, operation: previous?.operation }), priceReviewExpired: previous ? isApplicationPriceReviewExpired(previous, input.now) : false };
+  }, TX_OPTIONS);
+}
+
 /**
  * Atomically writes one guardian submission and its independent applications. The class id is
  * verified against the group membership while the submitted quote is snapshotted from the locked schedule.
  */
 export async function submitApplicationGroupCore(
   client: GroupSubmitClient,
-  input: { token?: string; companionToken?: string; previousDeviceTokenHash?: string; data: GroupSubmission; consentVersion: string; now: Date; configReady: boolean; completionTokenHash: string; completionExpiresAt: Date; deviceTokenHash: string; deviceExpiresAt: Date },
-): Promise<{ submissionId: string; applicationIds: string[] }> {
+  input: { token?: string; companionToken?: string; previousDeviceTokenHash?: string; previousCompletionTokenHash?: string; data: GroupSubmission; consentVersion: string; now: Date; configReady: boolean; completionTokenHash: string; completionExpiresAt: Date; deviceTokenHash: string; deviceExpiresAt: Date },
+): Promise<{ submissionId: string; applicationIds: string[]; replayed?: boolean }> {
   if (!input.configReady) throw new ApplicationClosedError();
   if (!input.token && !input.companionToken) throw new ApplicationClosedError();
-  const tokenHash = input.token ? hashApplicationCapabilityToken(input.token) : undefined;
+  const data = groupSubmissionSchema.parse(input.data);
+  if (input.consentVersion !== APPLICATION_CONSENT_CONTENT.version || data.consentVersion !== APPLICATION_CONSENT_CONTENT.version) throw new ApplicationClosedError();
+  const scope = applicationReviewScope(input);
+  const review = authenticateApplicationPriceReview(data.reviewedPriceProof, scope, input.now);
+  const assignedIds = [...new Set(data.children.map((child) => child.classScheduleId))].sort();
+  if (review.prices.length !== assignedIds.length || assignedIds.some((id) => !review.prices.some((row) => row.classScheduleId === id))) throw new ApplicationClosedError();
   return client.$transaction(async (tx) => {
-    const link = tokenHash ? await tx.reservationApplicationLink.findUnique({
-      where: { tokenHash },
-      select: {
-        id: true,
-        isActive: true,
-        group: {
-          select: {
-            id: true, isActive: true,
-            classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } },
-          },
-        },
-      },
-    }) : null;
-    // An invite proves only companionship in this group. It never provides a child,
-    // guardian, or consent record from the issuer.
-    const invite = input.companionToken
-      ? await tx.companionInvite.findFirst({
-          where: {
-            tokenHash: hashApplicationCapabilityToken(input.companionToken),
-            revokedAt: null,
-            expiresAt: { gt: input.now },
-          },
-          select: { id: true, companionGroupId: true, group: { select: { id: true, isActive: true, classes: { select: { classSchedule: { select: { id: true, status: true, startsAt: true, applicationPrice: true } } } } } } },
-        })
-      : null;
-    if (input.companionToken && !invite) throw new ApplicationClosedError();
-    let group = link?.group ?? invite?.group;
-    if (!group?.isActive || (tokenHash && !link?.isActive) || (link && invite && link.group?.id !== invite.group.id)) throw new ApplicationClosedError();
-    // All writers that affect a public submission use this lock hierarchy:
-    // Group -> Link/invite -> Class -> Device -> Child. The scoped re-reads below
-    // make a concurrent stop, membership edit, revocation, price edit, or purge fail closed.
-    await lockGroup(tx, group.id);
-    if (link) await tx.$queryRaw`SELECT "id" FROM "ReservationApplicationLink" WHERE "id" = ${link.id} FOR UPDATE`;
-    if (invite) await tx.$queryRaw`SELECT "id" FROM "CompanionInvite" WHERE "id" = ${invite.id} FOR UPDATE`;
-    const lockedLink = tokenHash ? await tx.reservationApplicationLink.findUnique({ where: { tokenHash }, select: { isActive: true, group: { select: { id: true, isActive: true } } } }) : null;
-    const lockedInvite = input.companionToken ? await tx.companionInvite.findFirst({ where: { tokenHash: hashApplicationCapabilityToken(input.companionToken), revokedAt: null, expiresAt: { gt: input.now } }, select: { companionGroupId: true, group: { select: { id: true, isActive: true } } } }) : null;
-    if ((tokenHash && !lockedLink?.isActive) || (input.companionToken && !lockedInvite) || !lockedLink?.group?.isActive && !lockedInvite?.group?.isActive || (lockedLink?.group && lockedInvite?.group && lockedLink.group.id !== lockedInvite.group.id)) throw new ApplicationClosedError();
-    const groupId = lockedLink?.group?.id ?? lockedInvite?.group?.id;
-    if (!groupId || groupId !== group.id) throw new ApplicationClosedError();
-    const membership = await tx.reservationApplicationGroupClass.findMany({ where: { groupId }, select: { classScheduleId: true } });
-    const memberIds = membership.map((row) => row.classScheduleId).sort();
-    await lockClassSchedules(tx, memberIds);
-    const currentSchedules = await tx.classSchedule.findMany({ where: { id: { in: memberIds } }, select: { id: true, status: true, startsAt: true, applicationPrice: true } });
-    if (currentSchedules.length !== memberIds.length) throw new ApplicationClosedError();
-    group = { ...group, id: groupId, isActive: true, classes: currentSchedules.map((classSchedule) => ({ classSchedule })) };
-    const schedules = new Map(group.classes.map(({ classSchedule }) => [classSchedule.id, classSchedule]));
-    if (input.data.children.some((child) => {
-      const schedule = schedules.get(child.classScheduleId);
-      return !schedule || !canIssueApplicationLink(schedule, input.now) || !schedule.applicationPrice;
-    })) throw new ApplicationClosedError();
+    const { group, schedules, invite } = await lockPublicApplicationScope(tx, { ...input, classScheduleIds: assignedIds });
+    // A signed operation gets one durable parent ID. Group serialization makes concurrent
+    // retries observe the committed parent; the primary key is an additional DB backstop.
+    const submissionId = `phase8_${review.operation}`;
+    const prior = await tx.reservationApplicationSubmission.findUnique({ where: { id: submissionId }, select: { id: true, completionTokenHash: true, completionExpiresAt: true, personalDataPurgedAt: true } });
+    if (prior) {
+      if (input.previousCompletionTokenHash && prior.completionTokenHash === input.previousCompletionTokenHash && !prior.personalDataPurgedAt && prior.completionExpiresAt && prior.completionExpiresAt > input.now) return { submissionId: prior.id, applicationIds: [], replayed: true };
+      throw new ApplicationAlreadySubmittedError();
+    }
+    const prices = assignedIds.map((classScheduleId) => ({ classScheduleId, amount: schedules.get(classScheduleId)!.applicationPrice! }));
+    if (isApplicationPriceReviewExpired(review, input.now)) {
+      throw new ApplicationPriceReviewExpiredError(issueApplicationPriceReview({ scope, prices, now: input.now, operation: review.operation }));
+    }
+    if (prices.some((current) => review.prices.find((row) => row.classScheduleId === current.classScheduleId)?.amount !== current.amount)) {
+      throw new ApplicationPriceChangedError(issueApplicationPriceReview({ scope, prices, now: input.now, operation: review.operation }));
+    }
 
-    const requestedIds = input.data.children.flatMap((child) => child.requestedChildId ? [child.requestedChildId] : []);
+    const requestedIds = data.children.flatMap((child) => child.requestedChildId ? [child.requestedChildId] : []);
     let priorDevice: { id: string; children: Array<{ childId: string; child: { name: string; birthDate: Date | null; gender: string; guardianName: string | null; guardianPhone: string | null } }> } | null = null;
     let currentGrantedChildren: Array<{ id: string; name: string; birthDate: Date | null; gender: string; guardianName: string | null; guardianPhone: string | null }> = [];
     let sameGuardianDevice = false;
@@ -220,14 +276,14 @@ export async function submitApplicationGroupCore(
         },
       });
       const owner = (priorDevice as typeof priorDevice & { submissions?: Array<{ submission: { guardianName: string | null; guardianPhone: string | null; guardianRelationship: string | null } }> } | null)?.submissions?.[0]?.submission;
-      sameGuardianDevice = Boolean(owner && owner.guardianName === input.data.guardianName && owner.guardianPhone === input.data.guardianPhone && owner.guardianRelationship === input.data.guardianRelationship);
+      sameGuardianDevice = Boolean(owner && owner.guardianName === data.guardianName && owner.guardianPhone === data.guardianPhone && owner.guardianRelationship === data.guardianRelationship);
       const grantedIds = priorDevice?.children.map((row) => row.childId).sort() ?? [];
       if (grantedIds.length > 0) {
         await tx.$queryRaw`SELECT "id" FROM "Child" WHERE "id" IN (${Prisma.join(grantedIds)}) ORDER BY "id" FOR SHARE`;
         currentGrantedChildren = await tx.child.findMany({ where: { id: { in: grantedIds }, isActive: true, personalDataPurgedAt: null }, select: { id: true, name: true, birthDate: true, gender: true, guardianName: true, guardianPhone: true } });
       }
       if (requestedIds.length > 0) {
-        const requested = new Map(input.data.children.filter((child) => child.requestedChildId).map((child) => [child.requestedChildId!, child]));
+        const requested = new Map(data.children.filter((child) => child.requestedChildId).map((child) => [child.requestedChildId!, child]));
         const granted = currentGrantedChildren.filter((child) => requested.has(child.id));
         const exactIdentity = granted.every((row) => {
           const submitted = requested.get(row.id);
@@ -241,11 +297,12 @@ export async function submitApplicationGroupCore(
 
     const submission = await tx.reservationApplicationSubmission.create({
       data: {
+        id: submissionId,
         groupId: group.id,
-        guardianName: input.data.guardianName,
-        guardianPhone: input.data.guardianPhone,
-        guardianRelationship: input.data.guardianRelationship,
-        declaredPayerName: input.data.declaredPayerName,
+        guardianName: data.guardianName,
+        guardianPhone: data.guardianPhone,
+        guardianRelationship: data.guardianRelationship,
+        declaredPayerName: data.declaredPayerName,
         submittedAt: input.now,
         completionTokenHash: input.completionTokenHash,
         completionExpiresAt: input.completionExpiresAt,
@@ -263,7 +320,7 @@ export async function submitApplicationGroupCore(
       await tx.companionGroupMember.create({ data: { companionGroupId: invite.companionGroupId, submissionId: submission.id } });
     }
     const applicationIds: string[] = [];
-    for (const child of input.data.children) {
+    for (const child of data.children) {
       const quote = schedules.get(child.classScheduleId)!.applicationPrice!;
       const application = await tx.reservationApplication.create({
         data: {
@@ -350,4 +407,104 @@ export async function revokeCompanionInviteCore(
 
 export function isUniqueConstraint(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+
+export class LinkOperationConflictError extends Error {}
+export class LinkRevisionConflictError extends Error {}
+export class LinkSettingsNotReadyError extends Error {}
+
+export const classLinkOperationSchema = z.object({
+  operationId: z.string().uuid(),
+  kind: z.enum(["single", "compose", "issue", "replace", "resume", "stop"]),
+  groupId: z.string().min(1).max(200).optional(),
+  classScheduleIds: z.array(z.string().min(1).max(200)).min(1).max(100),
+  revisions: z.record(z.string().min(1).max(200), z.string().regex(/^[a-f0-9]{64}$/)),
+  groupRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().superRefine((value, ctx) => {
+  const ids = new Set(value.classScheduleIds);
+  if (ids.size !== value.classScheduleIds.length || Object.keys(value.revisions).length !== ids.size || [...ids].some((id) => !value.revisions[id])) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "scope" });
+  if ((value.kind === "single" || value.kind === "compose") ? Boolean(value.groupId) || (value.kind === "single" && ids.size !== 1) : !value.groupId || !value.groupRevision) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "intent" });
+});
+export type ClassLinkOperation = z.infer<typeof classLinkOperationSchema>;
+export type ClassLinkReceipt = { groupId: string; linkId?: string; token?: string; replayed: boolean; active: boolean };
+export function linkRevision(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+
+export const GROUP_REVISION_SELECT = {
+  id: true, isActive: true, updatedAt: true,
+  classes: { select: { classScheduleId: true }, orderBy: { classScheduleId: "asc" as const } },
+  links: { select: { id: true, isActive: true, updatedAt: true }, orderBy: { id: "asc" as const } },
+} as const;
+
+/** Includes class/price changes, direct links, membership and every related group URL. No capability is read. */
+export async function readClassLinkRevision(tx: Pick<Prisma.TransactionClient, "classSchedule" | "reservationApplicationLink" | "reservationApplicationGroup">, classScheduleId: string): Promise<string> {
+  const schedule = await tx.classSchedule.findUnique({ where: { id: classScheduleId }, select: { id: true, updatedAt: true, applicationPrice: true, status: true, startsAt: true } });
+  if (!schedule) throw new ApplicationLinkNotFoundError();
+  const links = await tx.reservationApplicationLink.findMany({ where: { classScheduleId }, select: { id: true, isActive: true, updatedAt: true }, orderBy: { id: "asc" } });
+  const groups = await tx.reservationApplicationGroup.findMany({ where: { OR: [{ classes: { some: { classScheduleId } } }, { upgradedLegacyClassScheduleId: classScheduleId }] }, select: GROUP_REVISION_SELECT, orderBy: { id: "asc" } });
+  return linkRevision({ schedule, links, groups });
+}
+
+/** Namespace encodes actor + operation; the suffix commits immutable intent even after membership edits. */
+export function classLinkOperationIdentity(actorUserId: string, input: ClassLinkOperation) {
+  const prefix = `ux2_${linkRevision([actorUserId, input.operationId])}_`;
+  const digest = linkRevision({ kind: input.kind, groupId: input.groupId ?? null, classScheduleIds: [...input.classScheduleIds].sort(), revisions: Object.entries(input.revisions).sort(([a], [b]) => a.localeCompare(b)), groupRevision: input.groupRevision ?? null });
+  return { prefix, id: `${prefix}${digest}` };
+}
+
+/** One transaction for group, membership and first hash. Issuance replays return metadata only.
+ * STOP has no durable operation receipt: even the same Operation-ID/revision retry can conflict.
+ * This is CAS safety, not same-request/same-result idempotence. Never refresh a retry's revision;
+ * reconcile metadata after response loss and require a fresh explicit intent for another change.
+ * A frozen stop cannot stop a newer resumed/replaced link or reactivate any old link.
+ */
+export async function issueClassLinkOperationCore(client: Pick<PrismaClient, "$transaction">, input: ClassLinkOperation & { actorUserId: string; now: Date; generateToken?: () => string }): Promise<ClassLinkReceipt> {
+  const intent = classLinkOperationSchema.parse({ operationId: input.operationId, kind: input.kind, groupId: input.groupId, classScheduleIds: input.classScheduleIds, revisions: input.revisions, groupRevision: input.groupRevision });
+  const identity = classLinkOperationIdentity(input.actorUserId, intent);
+  const ids = [...intent.classScheduleIds].sort();
+  return client.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity.prefix}, 0))`;
+    const priorGroup = await tx.reservationApplicationGroup.findFirst({ where: { id: { startsWith: identity.prefix } }, select: { id: true } });
+    const priorLink = await tx.reservationApplicationLink.findFirst({ where: { id: { startsWith: identity.prefix } }, select: { id: true, groupId: true, isActive: true } });
+    if (priorGroup && priorGroup.id !== identity.id || priorLink && priorLink.id !== identity.id) throw new LinkOperationConflictError();
+    const isNew = intent.kind === "single" || intent.kind === "compose";
+    const groupId = isNew ? identity.id : intent.groupId!;
+    if (isNew && priorGroup || !isNew && priorLink) {
+      await lockGroup(tx, groupId);
+      const current = await tx.reservationApplicationGroup.findUnique({ where: { id: groupId }, select: { isActive: true } });
+      // The initial lookup preceded the Group lock. Replacement/stop may have
+      // completed while this transaction waited, so reconcile from locked state.
+      const link = await tx.reservationApplicationLink.findUnique({ where: { id: identity.id }, select: { id: true, isActive: true } });
+      return { groupId, linkId: link?.id, replayed: true, active: Boolean(current?.isActive && link?.isActive) };
+    }
+    if (isNew) {
+      // A fresh unreferenced Group is created first; no existing Group is locked after classes.
+      await tx.reservationApplicationGroup.create({ data: { id: groupId, createdById: input.actorUserId }, select: { id: true } });
+    } else {
+      await lockGroup(tx, groupId);
+      const group = await tx.reservationApplicationGroup.findUnique({ where: { id: groupId }, select: GROUP_REVISION_SELECT });
+      if (!group || linkRevision(group) !== intent.groupRevision || JSON.stringify(group.classes.map((row) => row.classScheduleId).sort()) !== JSON.stringify(ids)) throw new LinkRevisionConflictError();
+      const hasActive = group.isActive && group.links.some((row) => row.isActive);
+      if (intent.kind === "replace" && !hasActive || intent.kind === "issue" && group.links.length > 0 || intent.kind === "resume" && hasActive) throw new LinkRevisionConflictError();
+    }
+    await lockClassSchedules(tx, ids);
+    for (const id of ids) if (await readClassLinkRevision(tx, id) !== intent.revisions[id]) throw new LinkRevisionConflictError();
+    if (intent.kind === "stop") {
+      await tx.reservationApplicationGroup.update({ where: { id: groupId }, data: { isActive: false } });
+      await tx.reservationApplicationLink.updateMany({ where: { groupId, isActive: true }, data: { isActive: false } });
+      return { groupId, replayed: false, active: false };
+    }
+    const schedules = await tx.classSchedule.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, startsAt: true, applicationPrice: true } });
+    if (schedules.length !== ids.length || schedules.some((row) => !canIssueApplicationLink(row, input.now) || !row.applicationPrice || row.applicationPrice <= 0)) throw new ApplicationLinkClassClosedError();
+    const settings = await tx.reservationApplicationSettings.findUnique({ where: { id: 1 } });
+    if (!settings || !isReservationApplicationSettingsReady(settings) || !isConsentContentReady(process.env.VERCEL_ENV)) throw new LinkSettingsNotReadyError();
+    if (isNew) await tx.reservationApplicationGroupClass.createMany({ data: ids.map((classScheduleId) => ({ groupId, classScheduleId })) });
+    else {
+      await tx.reservationApplicationGroup.update({ where: { id: groupId }, data: { isActive: true } });
+      await tx.reservationApplicationLink.updateMany({ where: { groupId, isActive: true }, data: { isActive: false } });
+    }
+    const token = (input.generateToken ?? generateApplicationCapabilityToken)();
+    await tx.reservationApplicationLink.create({ data: { id: identity.id, groupId, tokenHash: hashApplicationCapabilityToken(token), isActive: true, issuedAt: input.now, issuedById: input.actorUserId } });
+    return { groupId, linkId: identity.id, token, replayed: false, active: true };
+  }, TX_OPTIONS);
 }

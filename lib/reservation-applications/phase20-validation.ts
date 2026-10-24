@@ -60,7 +60,7 @@ export const groupCreateSchema = z.object({
 });
 
 const childSchema = z.object({
-  classScheduleId: z.string().trim().min(1),
+  classScheduleId: z.string().trim().min(1).max(200),
   requestedChildId: z.string().trim().min(1).optional(),
   childName: requiredText("아이 이름을 입력해주세요", 50),
   childBirthDate: z.string().refine(isCalendarDate, "유효한 날짜가 아닙니다").refine((value) => new Date(`${value}T00:00:00.000Z`).getTime() <= Date.now(), "미래 날짜는 입력할 수 없습니다"),
@@ -75,6 +75,8 @@ const childSchema = z.object({
 });
 
 export const groupSubmissionSchema = z.object({
+  reviewedPriceProof: z.string().min(1).max(10000),
+  consentVersion: z.string().min(1).max(100),
   guardianName: requiredText("보호자 이름을 입력해주세요", 50),
   guardianPhone: z.string().trim().regex(phoneRegex, "전화번호 형식이 올바르지 않습니다 (숫자, 하이픈만 가능)").refine((value) => value.replace(/[^0-9]/g, "").length >= MIN_PHONE_DIGIT_COUNT, "전화번호는 숫자를 9자 이상 포함해야 합니다"),
   guardianRelationship: z.nativeEnum(GuardianRelationship),
@@ -109,6 +111,9 @@ export const submissionConfirmationSchema = z.object({
       classScheduleId: z.string().trim().min(1),
       childChoice: z.string().trim().min(1),
       selectionFingerprint: z.string().trim().min(2).max(5_000),
+      classState: z.string().min(1).max(1000).optional(),
+      capacity: z.number().int().nonnegative().optional(),
+      reservedCount: z.number().int().nonnegative().optional(),
     }).optional(),
   }).refine((choice) => Boolean(choice.childId) !== Boolean(choice.newChild), "아이 선택이 필요합니다")).min(1).max(10)
     .refine((choices) => new Set(choices.map((choice) => choice.applicationId)).size === choices.length, "아이별 신청은 한 번만 선택할 수 있습니다"),

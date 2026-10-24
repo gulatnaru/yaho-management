@@ -1,0 +1,152 @@
+name: Integrated browser UX E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "server/**"
+      - "prisma/**"
+      - "tests/**"
+      - "scripts/ci/**"
+      - "tsconfig.json"
+      - "auth.ts"
+      - "package*.json"
+      - "playwright.ux.config.ts"
+      - ".github/workflows/e2e-ux.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [desktop-chromium, mobile-webkit-360, mobile-webkit-390, tablet-webkit-768]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: yaho_e2e
+          POSTGRES_USER: yaho_e2e
+          POSTGRES_PASSWORD: ci-synthetic-e2e
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U yaho_e2e -d yaho_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://yaho_e2e:ci-synthetic-e2e@127.0.0.1:55432/yaho_e2e
+      DIRECT_URL: postgresql://yaho_e2e:ci-synthetic-e2e@127.0.0.1:55432/yaho_e2e
+      AUTH_TRUST_HOST: "true"
+      AUTH_URL: http://127.0.0.1:3000
+      NEXTAUTH_URL: http://127.0.0.1:3000
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+      UX_PROJECT: ${{ matrix.project }}
+      UX_MANIFEST_PATH: test-results/ux-runtime/manifest.json
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate ephemeral Auth.js secret
+        run: |
+          node <<'NODE'
+          const { randomBytes } = require('node:crypto');
+          const { appendFileSync } = require('node:fs');
+          const value = randomBytes(48).toString('hex');
+          process.stdout.write('::add-mask::' + value + '\n');
+          appendFileSync(process.env.GITHUB_ENV, 'AUTH_SECRET=' + value + '\n');
+          NODE
+      - name: Prisma generate
+        run: npm run prisma:generate
+      - name: Install browser binaries (no APT)
+        timeout-minutes: 10
+        run: |
+          if [ "${{ matrix.project }}" = "desktop-chromium" ]; then
+            npx playwright install chromium
+          else
+            npx playwright install chromium webkit
+          fi
+      - name: Smoke check required browser engines
+        id: browser-smoke
+        continue-on-error: true
+        timeout-minutes: 3
+        run: node --import tsx scripts/ci/playwright-browser-smoke.ts
+      - name: Install system dependencies after failed browser smoke
+        if: steps.browser-smoke.outcome == 'failure'
+        timeout-minutes: 10
+        run: |
+          if [ "${{ matrix.project }}" = "desktop-chromium" ]; then
+            npx playwright install --with-deps chromium
+          else
+            npx playwright install --with-deps chromium webkit
+          fi
+      - name: Recheck required browser engines after system dependencies
+        if: steps.browser-smoke.outcome == 'failure'
+        timeout-minutes: 3
+        run: node --import tsx scripts/ci/playwright-browser-smoke.ts
+      - name: Verify PostgreSQL
+        run: npx tsx scripts/ci/verify-e2e-db.ts
+      - name: Prepare ephemeral database roles
+        run: npx tsx scripts/ci/prepare-e2e-db.ts
+      - name: Apply migrations to ephemeral database
+        run: npx prisma migrate deploy
+      - name: Seed isolated synthetic fixtures and real accounts
+        run: npx tsx tests/e2e/support/ux-cli.ts seed
+      - name: Typecheck and lint
+        run: |
+          npx tsc --noEmit
+          npm run lint
+      - name: Build application (before any server starts)
+        run: |
+          if pgrep -f '[n]ext dev' >/dev/null; then
+            echo "Unexpected dev server: refusing shared-cache build."
+            exit 1
+          fi
+          npm run build
+      - name: Start production-built loopback application
+        run: |
+          npm run start -- --hostname 127.0.0.1 > /tmp/yaho-ux-app.log 2>&1 &
+          echo "$!" > /tmp/yaho-ux-app.pid
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:3000/login > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "Loopback application did not become ready (server logs withheld)."
+          exit 1
+      - name: Real login and required password changes
+        run: npx tsx tests/e2e/support/ux-cli.ts auth
+      - name: Execute every UX spec with strict skip accounting
+        run: npx tsx tests/e2e/support/ux-cli.ts run
+      - name: Upload synthetic test-result diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-diagnostics-${{ matrix.project }}-${{ github.run_attempt }}
+          path: |
+            test-results/ux-diagnostics/results.json
+            test-results/ux-diagnostics/statuses.json
+          retention-days: 3
+          if-no-files-found: warn
+      - name: Stop app and remove credentials, auth states and browser output
+        if: always()
+        run: |
+          if [ -f /tmp/yaho-ux-app.pid ]; then kill "$(cat /tmp/yaho-ux-app.pid)" 2>/dev/null || true; fi
+          rm -rf test-results playwright-report
+          rm -f /tmp/yaho-ux-app.log /tmp/yaho-ux-app.pid
+    # Only allowlisted, scrubbed synthetic assertion/status JSON is uploaded.
+    # Runtime/auth, browser output, app logs, traces and page content stay ephemeral.

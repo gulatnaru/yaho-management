@@ -24,7 +24,7 @@ describe("Phase 20 quoted price and capability validation", () => {
 
   it("requires guardian and current consent per submitted child", () => {
     const result = groupSubmissionSchema.safeParse({
-      guardianName: "테스트 보호자", guardianPhone: "010-1234-5678", guardianRelationship: "MOTHER", declaredPayerName: "테스트입금자",
+      reviewedPriceProof: "signed-review", consentVersion: "current", guardianName: "테스트 보호자", guardianPhone: "010-1234-5678", guardianRelationship: "MOTHER", declaredPayerName: "테스트입금자",
       children: [{ classScheduleId: "class-1", childName: "테스트 아이", childBirthDate: "2020-01-01", childGender: "UNSPECIFIED", programTerms: true, privacyConsent: true, legalGuardianConfirmation: true, refundTerms: true, photoShareConsent: false, photoMarketingConsent: false }],
     });
     expect(result.success).toBe(true);

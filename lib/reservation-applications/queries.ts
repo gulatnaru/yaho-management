@@ -1,4 +1,6 @@
 import { Prisma } from "@prisma/client";
+import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { countPendingApplicationFamilies, findPossibleDuplicateApplicationIds } from "./family-queries";
 import { prisma } from "@/lib/db/prisma";
 import { rankChildCandidates, type ApplicationChildCandidate, type ChildCandidateRow } from "./candidates";
 import { findDuplicateApplicationIds } from "./duplicates";
@@ -76,6 +78,7 @@ export async function listReservationApplications({
   status: ApplicationListStatus;
   page: number;
 }) {
+  await requireAdminPrincipal();
   const where = buildApplicationListWhere(status);
   const [records, total] = await Promise.all([
     prisma.reservationApplication.findMany({
@@ -87,8 +90,8 @@ export async function listReservationApplications({
     }),
     prisma.reservationApplication.count({ where }),
   ]);
-  const duplicateIds = await findDuplicateIdsForClasses(records.map((record) => record.classScheduleId));
 
+  const duplicateIds = await findPossibleDuplicateApplicationIds(records.map((record) => record.id));
   const applications: ApplicationListRow[] = records.map((record) => ({
     ...record,
     isPossibleDuplicate: duplicateIds.has(record.id),
@@ -103,10 +106,10 @@ export async function listReservationApplications({
 }
 
 export async function countPendingReservationApplications(): Promise<number> {
-  return prisma.reservationApplication.count({ where: { status: "SUBMITTED" } });
+  return (await countPendingApplicationFamilies()).families;
 }
 
-const APPLICATION_DETAIL_SELECT = {
+export const APPLICATION_DETAIL_SELECT = {
   id: true,
   submissionId: true,
   status: true,
@@ -127,6 +130,7 @@ const APPLICATION_DETAIL_SELECT = {
   classScheduleId: true,
   childId: true,
   reservationId: true,
+  reservation: { select: { paymentItem: { select: { paymentId: true } } } },
   guardianRelationship: true,
   programTermsAcknowledged: true,
   legalGuardianConfirmed: true,
@@ -154,6 +158,7 @@ export type ApplicationDetail = Prisma.ReservationApplicationGetPayload<{
 }> & { isPossibleDuplicate: boolean };
 
 export async function getReservationApplicationDetail(id: string): Promise<ApplicationDetail | null> {
+  await requireAdminPrincipal();
   const application = await prisma.reservationApplication.findUnique({
     where: { id },
     select: APPLICATION_DETAIL_SELECT,
@@ -219,9 +224,5 @@ export async function getApplicationRetention(application: {
   });
 }
 
-export async function getApplicationLinkForClass(classScheduleId: string) {
-  return prisma.reservationApplicationLink.findFirst({
-    where: { OR: [{ classScheduleId }, { group: { classes: { some: { classScheduleId } } } }] },
-    select: { token: true, groupId: true, isActive: true, issuedAt: true, issuedBy: { select: { name: true } } },
-  });
-}
+// Compatibility name now returns the complete authorized inventory.
+export { getClassApplicationLinks as getApplicationLinkForClass } from "./link-queries";
