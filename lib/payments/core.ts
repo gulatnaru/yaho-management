@@ -109,7 +109,18 @@ type LockedPaymentItem = {
 
 export async function createRefundCore(client: PrismaClient, input: CreateRefundCoreInput) {
   return client.$transaction(async (tx) => {
-    // ADR-007: 동일 PaymentItem 환불 요청을 직렬화한다. 예약 상태는 ADR-039에 따라
+    // Serialize refunds for all items of one Payment before locking the target item.
+    // paymentId is immutable in the production write paths; revalidate it under lock.
+    const [target] = await tx.$queryRaw<Array<{ paymentId: string }>>`
+      SELECT "paymentId" FROM "PaymentItem" WHERE "id" = ${input.paymentItemId}
+    `;
+    if (!target) throw new PaymentItemNotFoundError();
+    const [payment] = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "Payment" WHERE "id" = ${target.paymentId} FOR UPDATE
+    `;
+    if (!payment) throw new PaymentItemNotFoundError();
+
+    // ADR-007: 최신 항목 누계로 환불 상한을 검증한다. 예약 상태는 ADR-039에 따라
     // 환불 자격 조건으로 사용하지 않고, NO_SHOW 상세 사유 검증에만 사용한다.
     const [item] = await tx.$queryRaw<LockedPaymentItem[]>`
       SELECT pi."id", pi."paymentId", pi."paidAmount", pi."refundedAmount",
@@ -119,7 +130,7 @@ export async function createRefundCore(client: PrismaClient, input: CreateRefund
       WHERE pi."id" = ${input.paymentItemId}
       FOR UPDATE OF pi
     `;
-    if (!item) throw new PaymentItemNotFoundError();
+    if (!item || item.paymentId !== target.paymentId) throw new PaymentItemNotFoundError();
 
     const detail = input.reasonDetail?.trim() || "";
     // ADR-033에 따라 NO_SHOW가 CANCELLED로 바뀌어도 attendance=ABSENT 이력은 보존된다.
