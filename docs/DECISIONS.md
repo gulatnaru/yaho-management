@@ -628,3 +628,17 @@
 - Context: OBS-01의 미지수 query-event 총수는 유한한 quiet interval만으로 전달 완료를 증명할 수 없다. 기존 PLAN 7의 SQL 분류 금지 때문에 이전 ATTRIBUTION 수정은 calibration 뒤 primary 실행을 UNPROVEN으로 차단했다.
 - Decision: 이벤트 query 문자열을 메모리 안에서 정확한 세 상수 `BEGIN`, `COMMIT`, `ROLLBACK`와 동등 비교하는 것만 허용한다. 목적은 해당 트랜잭션의 결과와 일치하는 종료 명령의 전달을 event-stream 완료 fence로 사용하는 것뿐이다. pinned Prisma 6.19.3 / engine c2990dca591cba766e3b7ef5d9e8a84796e47ab7의 source 기본 경로는 이 대문자 문자열을 그대로 전달하므로 normalization하지 않는다. prefix/substring/일반 statement 분류, 원문 보관·로그·진단/리포트 포함·원문 hash 출력은 금지한다. 불일치 문자열은 비교 후 폐기한다.
 - Consequences: primary와 독립 client별 race 창은 BEGIN 및 결과에 맞는 COMMIT/ROLLBACK 전달과 기존 count quiescence를 모두 확인해야 완료된다. fence 누락·순서/결과 불일치·종료 뒤 stray callback은 INVALID로 남는다. 기존 bootstrap/calibration 정확한 총수·asymmetric probe·수명 guard·출력/환경/불변식 경계는 유지한다. 이 예외는 일반 SQL 관찰, 실DB 실행/CI trigger, stage/commit/push/merge 승인이 아니다. 실제 PostgreSQL 확인은 NOT RUN이며 source 근거·로컬 검증은 `docs/OBS-01-PERF-RESULTS.md`의 이번 fence 기록에 남긴다.
+
+## ADR-066: 6E 개인정보 보관·파기 정책 방향 승인 (거래 필드·B그룹 방향 및 C02 분리 원칙에 한정)
+
+- Status: Accepted — 정책 방향 및 설계 원칙에 한정한다. 세부 보관 기간·기산점·파기 자격·구현은 미승인이다.
+- Date: 2026-10-24
+- Source: 사용자(운영자) 결정 — Round 6 운영자 결정 반영 (2026-10-24), Iteration 6E 결정 라운드 R1–R6 (`docs/ITERATION-6E-DECISION-R1~R6.md`, 체크포인트 커밋 `276ba98`) 및 운영자 검토자료 (`docs/ITERATION-6E-OPERATOR-REVIEW.md`).
+- Context: R6 집계는 A 0 / B 9 / C 18, 구현 가능 0 / 전문가 검토 필요 15 / 보류 12이다. 본 ADR은 그중 방향 수준에서 확정된 사항만을 기록하며, 기간·기산점·파기 자격·구현에 대한 승인이 아니다.
+- Decision:
+  - (1) Round 1 거래 개인정보 6건 방향 승인: F01 `Payment.payerName`, F02 `Payment.memo`, F03 `Refund.reasonDetail`, F04 `ApplicationDeposit.payerName`, F05 `ApplicationReturn.reason`, F07 `Submission.declaredPayerName`. 각 목적 종료 사건(대사 완료, 반환 이행 완료, 환불·실제 분쟁 종결 등) 후 해당 필드 NULL 방향과, 필수 증빙임이 확인된 최소 범위를 제한 보관한다는 조건부 예외 원칙을 승인한다. 기간·기산점은 미승인이며, S 선후 및 K04 재시도 계약과의 관계도 미결정이다.
+  - (2) Round 6 B그룹 9건 방향 승인: 묶음 7건 F50/F51/F53/F54/F57(공용 본문: 비개인 내용 유지, 확인된 만료 개인 부분만 제거, 전체 NULL은 본문 전체 목적·예외 종료 입증 때만 후보, 한 고객 파기로 타인 내용 삭제 금지) 및 K02/K03(접근 만료·철회와 DB 저장 종료의 분리, TTL을 저장기간으로 승인하지 않음), 독립 2건 F56(강사 연락처: 연락·인수인계 목적 종료 후 phone NULL 방향) 및 K04(멱등키·원장 유지, 파기 후 기존 receipt는 읽기 전용 확인, 원문 기반 write-replay 종료; 키 삭제·회전·비교 완화·새 비교용 hash 제외). 각 항목의 기간·기산점·실행 범위·책임자는 미승인이다.
+  - (3) C02 설계 원칙 채택: 기존 S(전체 파기 후 NULL)와 개별 필드별 목적 종료를 구분한다. S 선후·부분 처리 단위는 미결정 상태로 두며, 현행 실행 로직 변경은 미승인이다.
+- Explicitly NOT approved: C그룹 18건, 모든 세부 보관 기간·기산점, 파기 자격·실행, 구현 착수, S 선후, K04 실제 재시도 계약(키 필요 보관기간·조회 창·결과 불명/미발견 처리·신규 금융행위 입력 계약), 법적 적용 근거, 백업·복제·복구 처리, 과거자료 고지 처리. 방향 승인은 실행 가능한 만료일이나 파기 허가를 만들지 않는다.
+- Compatibility: ADR-057/058/060의 기존 실행 정책(확정 고객 5년 보관, C5/A1/S 범위, 잠금 순서, 금융 불변식 `D = A + P + R + T`)을 변경하거나 소급 대체하지 않는다. 과거 ADR 기록은 삭제하거나 다시 쓰지 않는다. 본 ADR은 `docs/ITERATION-6E-OPERATOR-REVIEW.md`의 운영자 결정 7건(공용 묶음·K02/K03 분리·F56·K04 독립 승인, C 18건 보류, C02 원칙, 구현 승인 0건)과 일치한다. R1–R6 원문 6건은 수정하지 않는다.
+- Consequences: 다음 단계는 전문가 확인 → B 방향 최종 확정 → C 개별 결정 → PLAN 정책 확정 단계 진입 검토 순서이며, 그전까지 코드·스키마·테스트 변경, 실제 파기, DB 접근, migration, scheduler, PR merge, Production 작업은 금지한다.
