@@ -323,7 +323,11 @@ test.describe("C11 real-browser recovery (server integration evidence is separat
       await expect(page.getByTestId("deposit-transaction-form").getByRole("status")).toContainText("저장 기록 확인됨");
       const before = await recoverySnapshot(db, fixture); expect(before.deposits).toHaveLength(1); expect(before.reservations).toHaveLength(0); expect(blockedReads).toBeGreaterThan(0);
       const retry = page.getByRole("button", { name: "최신 서버 상태 다시 조회", exact: true }); await expect(retry).toBeEnabled();
-      await retry.click(); await expect(page.getByTestId("workflow-status")).toContainText("갱신 실패");
+      const blockedReadsBeforeRetry = blockedReads;
+      await retry.click();
+      await expect.poll(() => blockedReads).toBeGreaterThan(blockedReadsBeforeRetry);
+      await expect(retry).toBeEnabled();
+      await expect(page.getByTestId("workflow-status")).toContainText("갱신 실패");
       await expect(page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled();
       failReads = false; await expect(retry).toBeEnabled(); await retry.click();
       await expectRecoveryAmounts(page, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
