@@ -11,6 +11,17 @@ const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 export class InsufficientApplicationDepositError extends Error {}
 export class ApplicationReturnAmountExceededError extends Error {}
 export class ApplicationPaymentAlreadyExistsError extends Error {}
+export class SuspectedDuplicateApplicationDepositError extends Error {
+  readonly code = "suspected-duplicate-deposit";
+
+  constructor(
+    public readonly submissionId: string,
+    public readonly candidateDepositIds: readonly string[],
+  ) {
+    super("suspected duplicate application deposit");
+    this.name = "SuspectedDuplicateApplicationDepositError";
+  }
+}
 export class ApplicationSubmissionOverbookingConfirmationError extends Error {
   constructor(
     public readonly applicationId: string,
@@ -200,6 +211,14 @@ export async function recordApplicationDepositCore(
         const ledger = await ledgerForSubmission(tx, input.submissionId);
         return { depositId: prior.id, availableAmount: checkedAvailableDepositAmount(ledger) };
       }
+    }
+    const candidates = await tx.applicationDeposit.findMany({
+      where: { submissionId: input.submissionId, amount: input.amount, payerName: input.payerName, depositedAt: input.depositedAt },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    if (candidates.length > 0) {
+      throw new SuspectedDuplicateApplicationDepositError(input.submissionId, candidates.map((candidate) => candidate.id));
     }
     const deposit = await tx.applicationDeposit.create({
       data: { submissionId: input.submissionId, amount: input.amount, payerName: input.payerName, depositedAt: input.depositedAt, confirmedAt: input.now, confirmedById: input.actorUserId, idempotencyKey: input.idempotencyKey ?? null },

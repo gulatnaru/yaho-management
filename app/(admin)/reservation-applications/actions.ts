@@ -40,7 +40,7 @@ import { issueApplicationLinkCore, stopApplicationLinkCore, upgradeLegacyApplica
 import { classLinkOperationSchema, issueClassLinkOperationCore, LinkOperationConflictError, LinkRevisionConflictError, LinkSettingsNotReadyError, type ClassLinkReceipt, updateApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { reservationApplicationSettingsSchema, groupCreateSchema, submissionConfirmationSchema } from "@/lib/reservation-applications/phase20-validation";
 import { getReservationApplicationSettings, importLegacyReservationApplicationSettingsCore, isReservationApplicationSettingsReady, saveReservationApplicationSettingsCore } from "@/server/reservation-applications/settings";
-import { ApplicationPaymentAlreadyExistsError, InsufficientApplicationDepositError, ApplicationReturnAmountExceededError, ApplicationSubmissionOverbookingConfirmationError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
+import { ApplicationPaymentAlreadyExistsError, InsufficientApplicationDepositError, ApplicationReturnAmountExceededError, ApplicationSubmissionOverbookingConfirmationError, SuspectedDuplicateApplicationDepositError, closeApplicationWithReturnCore, confirmApplicationSubmissionCore, recordApplicationDepositCore, recordApplicationReturnCore } from "@/server/reservation-applications/finance";
 import { depositInputSchema, returnInputSchema } from "@/lib/reservation-applications/phase20-validation";
 import {
   closeReservationApplicationCore,
@@ -152,7 +152,7 @@ export type WorkflowActionResult = {
   status: "success" | "failure" | "result-unknown";
   error?: string;
   errors?: Record<string, string[]>;
-  code?: "not-found";
+  code?: "not-found" | "suspected-duplicate-deposit";
   receiptId?: string;
   submissionId?: string;
   applicationIds?: string[];
@@ -238,6 +238,12 @@ export async function recordApplicationDeposit(submissionId: string, formData: F
       return result.depositId;
     }, { maxWait: 10000, timeout: 20000 });
   } catch (error) {
+    if (error instanceof SuspectedDuplicateApplicationDepositError) {
+      return {
+        status: "failure", code: error.code, submissionId: error.submissionId,
+        error: `동일한 신청·금액·입금자명·입금일시의 입금 기록이 있어 새 기록을 저장하지 않았습니다. 기존 입금 기록과 은행 거래를 확인해주세요. 일치 후보 ${error.candidateDepositIds.length}건: ${error.candidateDepositIds.join(", ")}. 가족 상세: /reservation-applications/submissions/${error.submissionId}. 정상 별도 입금으로 확인되어도 별도 절차가 필요합니다.`,
+      };
+    }
     return { status: error instanceof WorkflowLedgerUnavailable || error instanceof WorkflowConflict || error instanceof InsufficientApplicationDepositError || error instanceof ApplicationReturnAmountExceededError || error instanceof ApplicationNotPendingError ? "failure" : "result-unknown", error: error instanceof WorkflowLedgerUnavailable ? "원장을 검증할 수 없어 처리를 차단했습니다. 최신 서버 기록을 확인해주세요." : error instanceof WorkflowConflict ? "같은 거래 식별자의 대상·금액·입금자·일시를 변경할 수 없습니다." : "입금 저장 결과를 확인해주세요. 결과 조회 전에는 다시 기록하지 마세요." };
   }
   // Invalidation is advisory; only a separate successful authoritative read proves freshness.

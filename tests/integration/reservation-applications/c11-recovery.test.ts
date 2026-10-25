@@ -367,6 +367,63 @@ describe.sequential("C11 server-side recovery evidence on real PostgreSQL 16", (
     await noConfirmation(f);
   });
 
+  cell("D4-a / suspected duplicate rejection preserves every stored row and the ledger", async (f) => {
+    await rejectSibling(f);
+    const first = await recordApplicationDeposit(f.id, deposit());
+    expect(first.status).toBe("success");
+    const before = await snapshot(f), beforeLedger = await ledger(f), newKey = crypto.randomUUID();
+    const result = await recordApplicationDeposit(f.id, deposit(100_000, newKey));
+    expect(result).toMatchObject({ status: "failure", code: "suspected-duplicate-deposit", submissionId: f.id });
+    expect(result.receiptId).toBeUndefined();
+    expect(result.error).toContain(first.receiptId);
+    expect(result.error).toContain(`/reservation-applications/submissions/${f.id}`);
+    expect(result.error).toContain("은행 거래를 확인");
+    expect(result.error).not.toContain("합성 실제 입금자");
+    expect(result.error).not.toContain(newKey);
+    expect(await lookupWorkflowReceipt("deposit", f.id, newKey)).toMatchObject({ status: "failure", code: "not-found" });
+    expect(await snapshot(f)).toEqual(before);
+    expect(await ledger(f)).toEqual(beforeLedger);
+    await noConfirmation(f);
+  });
+
+  cell("D4-b / independent clients with distinct new keys and identical input record only one Deposit", async (f) => {
+    await rejectSibling(f);
+    const keys = [crypto.randomUUID(), crypto.randomUUID()];
+    expect(keys[0]).not.toBe(keys[1]);
+    let request = 0;
+    const results = await concurrentActions(f, () => recordApplicationDeposit(f.id, deposit(100_000, keys[request++]!)));
+    expect(results.filter((result) => result.status === "success")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "failure")).toHaveLength(1);
+    const rejectedIndex = results.findIndex((result) => result.status === "failure");
+    expect(results[rejectedIndex]).toMatchObject({ code: "suspected-duplicate-deposit", submissionId: f.id });
+    expect(results[rejectedIndex]!.receiptId).toBeUndefined();
+    const state = await snapshot(f), winner = results.find((result) => result.status === "success")!;
+    expect(state.deposits).toHaveLength(1); expect(state.allocations).toHaveLength(1); expect(state.obligations).toHaveLength(1);
+    expect(state.deposits[0]!.id).toBe(winner.receiptId);
+    expect(state.deposits[0]!.idempotencyKey).toBe(keys[1 - rejectedIndex]);
+    expect(await lookupWorkflowReceipt("deposit", f.id, keys[rejectedIndex]!)).toMatchObject({ status: "failure", code: "not-found" });
+    expect(await ledger(f)).toMatchObject({ D: 100_000, A: 40_000, P: 0, R: 60_000, T: 0 });
+    await noConfirmation(f);
+  });
+
+  cell("D4-c / a genuine separate bank deposit with the same four fields remains on hold", async (f) => {
+    await rejectSibling(f);
+    const firstKey = crypto.randomUUID(), separateKey = crypto.randomUUID();
+    expect(firstKey).not.toBe(separateKey);
+    expect((await recordApplicationDeposit(f.id, deposit(100_000, firstKey))).status).toBe("success");
+    const before = await snapshot(f), beforeLedger = await ledger(f);
+    // 보수적 보류 정책: 두 별도 합성 은행 사건의 네 필드가 같아도 동일 사건으로 확정하지 않는다.
+    // 별도 입금임이 확인된 상황도 이번 일반 등록 경로에서는 보류하며 별도 절차가 필요하다.
+    const result = await recordApplicationDeposit(f.id, deposit(100_000, separateKey));
+    expect(result).toMatchObject({ status: "failure", code: "suspected-duplicate-deposit" });
+    expect(result.receiptId).toBeUndefined();
+    expect(result.error).toContain("정상 별도 입금으로 확인되어도 별도 절차가 필요");
+    expect(await lookupWorkflowReceipt("deposit", f.id, separateKey)).toMatchObject({ status: "failure", code: "not-found" });
+    expect(await snapshot(f)).toEqual(before);
+    expect(await ledger(f)).toEqual(beforeLedger);
+    await noConfirmation(f);
+  });
+
   cell("D5 / S1,S6 two independent clients contending on one key create one Deposit", async (f) => {
     await rejectSibling(f); const key = crypto.randomUUID();
     const results = await concurrentActions(f, () => recordApplicationDeposit(f.id, deposit(100_000, key)));
