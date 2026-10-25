@@ -4,6 +4,7 @@ import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { assertFamilyLedger } from "./support/integrated-ux-invariants";
 import { applicationPrivateValues, assertApplicationNotFound } from "./support/application-denial";
+import { createRecoveryFamily, expectRecoveryAmounts, expectRecoveryDuplicate, freshRecoveryContext, prepareRecoveryDeposit, prepareRecoveryReturn, recoveryPath, recoverySnapshot, rejectRecoverySibling, saveRecoveryDeposit } from "./support/c11-recovery";
 
 // Each writing test requires its own pristine synthetic fixture, supplied by the
 // CI fixture runner. Admission never accepts a Preview or Production database.
@@ -209,3 +210,198 @@ for (const role of ["MANAGER", "TEACHER"] as const) {
     });
   });
 }
+
+test.describe("C11 real-browser recovery (server integration evidence is separate)", () => {
+  test.use({ storageState: adminState });
+
+  test("S1 committed deposit response loss → reload loses key → new-key D4 rejection preserves allocation", async ({ page }) => {
+    const db = new PrismaClient(); let posts = 0; let lost = false;
+    try {
+      const fixture = await createRecoveryFamily(db);
+      await page.goto(recoveryPath(fixture));
+      const key = await prepareRecoveryDeposit(page, 100000);
+      await page.route(`**${recoveryPath(fixture)}`, async (route) => {
+        if (route.request().method() !== "POST" || !route.request().headers()["next-action"]) return route.continue();
+        if (++posts !== 2) return route.continue(); // Read-only lookup, then the save.
+        await route.fetch();
+        expect(await db.applicationDeposit.count({ where: { submissionId: fixture.submissionId, idempotencyKey: key } })).toBe(1);
+        lost = true; await route.abort("failed"); // Commit completed; browser never receives its response.
+      });
+      await page.getByRole("button", { name: "실제 입금 기록", exact: true }).click();
+      await expect(page.getByTestId("workflow-status")).toContainText("결과 불명확"); expect(lost).toBe(true);
+      await page.unrouteAll({ behavior: "wait" }); await page.reload();
+      await expect(page.getByTestId("deposit-transaction-form").locator('input[name="idempotencyKey"]')).toHaveValue("");
+      await page.getByText("실제 입금 및 배정 거래 내역 (1건)", { exact: true }).click();
+      const deposit = await db.applicationDeposit.findFirstOrThrow({ where: { submissionId: fixture.submissionId } });
+      await expect(page.getByTestId("detail-ledger")).toContainText(`입금 기록 ${deposit.id}`);
+      await rejectRecoverySibling(page, db, fixture);
+      const before = await recoverySnapshot(db, fixture);
+      expect(before.deposits).toHaveLength(1); expect(before.allocations).toHaveLength(1);
+      expect(before.allocations[0]).toMatchObject({ amount: 60000, paymentMappingId: null });
+      const newKey = await prepareRecoveryDeposit(page, 100000); expect(newKey).not.toBe(key);
+      await page.getByRole("button", { name: "실제 입금 기록", exact: true }).click();
+      await expectRecoveryDuplicate(page, deposit.id);
+      expect(await recoverySnapshot(db, fixture)).toEqual(before);
+      await expectRecoveryAmounts(page, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+      await assertFamilyLedger(db, fixture.submissionId, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+    } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
+  });
+
+  test("S2 return commits while response is pending → actual context close → new ADMIN context reads history before a distinct partial return", async ({ browser }, info) => {
+    const db = new PrismaClient();
+    const original = await freshRecoveryContext(browser, info);
+    let release = () => {}; let committed = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const saved = new Promise<void>((resolve) => { committed = resolve; });
+    let routeFailure: unknown; let posts = 0;
+    try {
+      const fixture = await createRecoveryFamily(db); const page = await original.newPage(); await page.goto(recoveryPath(fixture));
+      await saveRecoveryDeposit(page, 100000); const obligation = await rejectRecoverySibling(page, db, fixture);
+      const key = await prepareRecoveryReturn(page, obligation.id, 20000, "합성 C11 최초 부분 반환");
+      await page.route(`**${recoveryPath(fixture)}`, async (route) => {
+        if (route.request().method() !== "POST" || !route.request().headers()["next-action"]) return route.continue();
+        if (++posts !== 2) return route.continue();
+        try {
+          await route.fetch();
+          expect(await db.applicationReturn.count({ where: { returnObligationId: obligation.id, idempotencyKey: key } })).toBe(1);
+        } catch (error) { routeFailure = error; }
+        committed(); await held; // No abort: closing the real context ends the pending browser request.
+      });
+      await page.getByTestId(`return-obligation-${obligation.id}`).getByRole("button", { name: "반환 이체 기록", exact: true }).click();
+      await saved; expect(routeFailure).toBeUndefined();
+      await original.close(); release();
+      const reopened = await freshRecoveryContext(browser, info);
+      try {
+        const recovered = await reopened.newPage(); await recovered.goto(recoveryPath(fixture));
+        const before = await recoverySnapshot(db, fixture);
+        expect(before.returns).toHaveLength(1); expect(before.obligations[0]).toMatchObject({ amount: 60000, returnedAmount: 20000, resolvedAt: null });
+        await expectRecoveryAmounts(recovered, { D: 100000, A: 40000, P: 0, R: 40000, T: 20000 });
+        await recovered.getByRole("link", { name: "전체 반환 대상 보기", exact: true }).click();
+        const card = recovered.getByTestId(`return-obligation-${obligation.id}`);
+        await expect(card.locator('input[name="idempotencyKey"]')).toHaveValue("");
+        await card.getByText("반환 내역 펼치기 (1건)", { exact: true }).click();
+        await expect(card).toContainText(`반환 기록 ${before.returns[0].id}`); await expect(card).toContainText("합성 C11 최초 부분 반환");
+        await expect(card.getByTestId("return-obligation-remaining")).toHaveText("40,000원");
+        expect(await recoverySnapshot(db, fixture)).toEqual(before); // Navigation did not replay the old return.
+        // Separate bank event, different amount/date/reason. This is not a duplicate-retry test.
+        const nextKey = await prepareRecoveryReturn(recovered, obligation.id, 10000, "합성 C11 별도 두번째 부분 반환", "2026-01-02T09:30"); expect(nextKey).not.toBe(key);
+        await card.getByRole("button", { name: "반환 이체 기록", exact: true }).click();
+        await expect(card.getByTestId("return-obligation-remaining")).toHaveText("30,000원");
+        await card.getByRole("link", { name: "가족 신청 상세", exact: true }).click();
+        await expectRecoveryAmounts(recovered, { D: 100000, A: 40000, P: 0, R: 30000, T: 30000 });
+        const after = await recoverySnapshot(db, fixture); expect(after.returns).toHaveLength(2);
+        expect(after.returns.find((row) => row.id === before.returns[0].id)).toEqual(before.returns[0]);
+        expect(after.allocations).toEqual(before.allocations);
+        await assertFamilyLedger(db, fixture.submissionId, { D: 100000, A: 40000, P: 0, R: 30000, T: 30000 });
+      } finally { await reopened.close(); }
+    } finally { release(); await original.close(); await db.$disconnect(); }
+  });
+
+  test("S4 committed save with failed authoritative reads hides stale balance and success, disables selected confirmation until read recovery", async ({ page }) => {
+    const db = new PrismaClient(); let posts = 0; let blockedReads = 0; let failReads = true;
+    try {
+      const fixture = await createRecoveryFamily(db); await page.goto(recoveryPath(fixture));
+      const selected = page.getByTestId(`confirmation-${fixture.firstApplicationId}`);
+      await selected.getByRole("checkbox").check(); await selected.getByRole("combobox").selectOption("NEW");
+      const key = await prepareRecoveryDeposit(page, 100000);
+      await page.route(`**${recoveryPath(fixture)}`, async (route) => {
+        if (route.request().method() !== "POST" || !route.request().headers()["next-action"]) return route.continue();
+        if (++posts < 3 || !failReads) return route.continue();
+        // lookup and save were sent normally. Fault injection applies only after a committed receipt exists.
+        expect(await db.applicationDeposit.count({ where: { submissionId: fixture.submissionId, idempotencyKey: key } })).toBe(1);
+        blockedReads++; await route.abort("failed");
+      });
+      await page.getByRole("button", { name: "실제 입금 기록", exact: true }).click();
+      await expect(page.getByTestId("workflow-status")).toContainText("갱신 실패");
+      await expect(page.getByTestId("workflow-status")).not.toContainText("저장 결과와 최신 서버 원장을 확인했습니다");
+      await expect(page.getByTestId("detail-ledger")).toContainText("최신 원장 금액을 표시할 수 없습니다");
+      await expect(page.getByTestId("detail-ledger").locator("dd")).toHaveCount(0);
+      await expect(page.getByTestId("deposit-transaction-form").getByRole("button", { name: "새 입금 거래 시작", exact: true })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled();
+      await expect(page.getByTestId("confirmation-amounts")).toContainText("검증 필요");
+      // This acknowledges the committed receipt only; it must not claim a verified latest ledger.
+      await expect(page.getByTestId("deposit-transaction-form").getByRole("status")).toContainText("저장 기록 확인됨");
+      const before = await recoverySnapshot(db, fixture); expect(before.deposits).toHaveLength(1); expect(before.reservations).toHaveLength(0); expect(blockedReads).toBeGreaterThan(0);
+      const retry = page.getByRole("button", { name: "최신 서버 상태 다시 조회", exact: true }); await expect(retry).toBeEnabled();
+      await retry.click(); await expect(page.getByTestId("workflow-status")).toContainText("갱신 실패");
+      await expect(page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true })).toBeDisabled();
+      failReads = false; await expect(retry).toBeEnabled(); await retry.click();
+      await expectRecoveryAmounts(page, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
+      await expect(page.getByTestId("workflow-status")).toContainText("최신 서버 상태를 다시 확인했습니다");
+      expect(await recoverySnapshot(db, fixture)).toEqual(before);
+      await assertFamilyLedger(db, fixture.submissionId, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
+    } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
+  });
+
+  test("S5 keyless context follows detail/return links through similar receipts; unsent request not-found is never rollback proof", async ({ page, browser }, info) => {
+    const db = new PrismaClient(); let posts = 0; let unsent = false;
+    try {
+      const fixture = await createRecoveryFamily(db); await page.goto(recoveryPath(fixture));
+      await saveRecoveryDeposit(page, 50000);
+      await prepareRecoveryDeposit(page, 50000, "2026-01-02T09:30");
+      await page.getByRole("button", { name: "실제 입금 기록", exact: true }).click();
+      await expectRecoveryAmounts(page, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
+      const obligation = await rejectRecoverySibling(page, db, fixture);
+      const key = await prepareRecoveryDeposit(page, 10000, "2026-01-03T09:30");
+      await page.route(`**${recoveryPath(fixture)}`, async (route) => {
+        if (route.request().method() !== "POST" || !route.request().headers()["next-action"]) return route.continue();
+        if (++posts !== 2) return route.continue();
+        unsent = true; await route.abort("failed"); // No fetch: this save never reaches the server.
+      });
+      await page.getByRole("button", { name: "실제 입금 기록", exact: true }).click();
+      await expect(page.getByTestId("workflow-status")).toContainText("결과 불명확"); expect(unsent).toBe(true);
+      await page.unrouteAll({ behavior: "wait" });
+      await page.getByTestId("deposit-transaction-form").getByRole("button", { name: "저장 결과 조회", exact: true }).click();
+      await expect(page.getByTestId("deposit-transaction-form").getByRole("alert")).toContainText("저장 기록이 없습니다.");
+      await expect(page.getByTestId("workflow-status")).toContainText("저장 기록을 아직 찾지 못했습니다");
+      await expect(page.getByTestId("workflow-status")).toContainText("결과 불명확");
+      await expect(page.getByTestId("workflow-status")).not.toContainText(/롤백|저장 성공|최신 서버 원장을 확인했습니다/);
+      await expect(page.getByTestId("detail-ledger")).toContainText("최신 원장 금액을 표시할 수 없습니다");
+      await expect(page.getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
+      expect(await db.applicationDeposit.count({ where: { idempotencyKey: key } })).toBe(0);
+      const before = await recoverySnapshot(db, fixture); const context = await freshRecoveryContext(browser, info);
+      try {
+        const recovered = await context.newPage(); await recovered.goto(recoveryPath(fixture));
+        await expect(recovered.getByTestId("deposit-transaction-form").locator('input[name="idempotencyKey"]')).toHaveValue("");
+        await expect(recovered.getByTestId(`confirmation-${fixture.firstApplicationId}`).getByRole("checkbox")).not.toBeChecked();
+        await recovered.getByText("실제 입금 및 배정 거래 내역 (2건)", { exact: true }).click();
+        for (const receipt of before.deposits) await expect(recovered.getByTestId("detail-ledger")).toContainText(`입금 기록 ${receipt.id}`);
+        await expect(recovered.getByTestId("deposit-transaction-form").getByRole("status")).toHaveCount(0);
+        await expect(recovered.getByTestId("workflow-status")).not.toContainText(/저장 결과와|원래 요청.*성공|롤백/);
+        await recovered.getByRole("link", { name: "전체 반환 대상 보기", exact: true }).click();
+        const card = recovered.getByTestId(`return-obligation-${obligation.id}`);
+        await card.getByText("반환 내역 펼치기 (0건)", { exact: true }).click(); await expect(card).toContainText("완료 반환 기록 없음");
+        await card.getByRole("link", { name: "가족 신청 상세", exact: true }).click();
+        await expectRecoveryAmounts(recovered, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+        expect(await recoverySnapshot(db, fixture)).toEqual(before);
+        await assertFamilyLedger(db, fixture.submissionId, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+      } finally { await context.close(); }
+    } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
+  });
+
+  test("S6 real UI double click then reconnect/manual identical deposit is rejected without a second financial row", async ({ page, browser }, info) => {
+    const db = new PrismaClient();
+    try {
+      const fixture = await createRecoveryFamily(db); await page.goto(recoveryPath(fixture));
+      const key = await prepareRecoveryDeposit(page, 100000);
+      // Real browser input, not two API requests or two evaluate() submissions.
+      await page.getByRole("button", { name: "실제 입금 기록", exact: true }).dblclick();
+      await expectRecoveryAmounts(page, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
+      expect(await db.applicationDeposit.count({ where: { submissionId: fixture.submissionId } })).toBe(1);
+      await rejectRecoverySibling(page, db, fixture);
+      const before = await recoverySnapshot(db, fixture);
+      expect(before.deposits).toHaveLength(1); expect(before.allocations).toHaveLength(1); expect(before.allocations[0].amount).toBe(60000);
+      const context = await freshRecoveryContext(browser, info);
+      try {
+        const recovered = await context.newPage(); await recovered.goto(recoveryPath(fixture));
+        await expect(recovered.getByTestId("deposit-transaction-form").locator('input[name="idempotencyKey"]')).toHaveValue("");
+        const nextKey = await prepareRecoveryDeposit(recovered, 100000); expect(nextKey).not.toBe(key);
+        await recovered.getByRole("button", { name: "실제 입금 기록", exact: true }).click();
+        await expectRecoveryDuplicate(recovered, before.deposits[0].id);
+        expect(await recoverySnapshot(db, fixture)).toEqual(before);
+        await expectRecoveryAmounts(recovered, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+        await assertFamilyLedger(db, fixture.submissionId, { D: 100000, A: 40000, P: 0, R: 60000, T: 0 });
+      } finally { await context.close(); }
+    } finally { await db.$disconnect(); }
+  });
+});

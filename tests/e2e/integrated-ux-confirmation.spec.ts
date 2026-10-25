@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { z } from "zod";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 import { assertFamilyLedger } from "./support/integrated-ux-invariants";
+import { createRecoveryFamily, expectRecoveryAmounts, freshRecoveryContext, recoveryPath, recoverySnapshot, saveRecoveryDeposit } from "./support/c11-recovery";
 
 // Requires run-owned local synthetic fixtures. Never admits Preview or a remote database.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_E2E_LOCAL_ONLY");
@@ -150,5 +151,64 @@ test.describe("Phase 6 explicit selected atomic confirmation", () => {
       expect(await db.reservationApplication.findUniqueOrThrow({ where: { id: sibling.id } })).toEqual(sibling);
       await assertFamilyLedger(db, fixture!.submissionId, { D: 100000, A: 100000, P: 0, R: 0, T: 0 });
     } finally { await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
+  });
+});
+
+test.describe("C11 real-browser selected confirmation recovery", () => {
+  test.use({ storageState: state });
+  test("S3 selected confirmation commits before response loss → fresh context loses selection and verifies actual links without replay", async ({ page, browser }, info) => {
+    const db = new PrismaClient(); let intercepted = false; let confirmationWrites = 0; let confirmationAction = "";
+    try {
+      const fixture = await createRecoveryFamily(db); await page.goto(recoveryPath(fixture));
+      await saveRecoveryDeposit(page, 100000);
+      const first = page.getByTestId(`confirmation-${fixture.firstApplicationId}`);
+      await first.getByRole("checkbox").check(); await first.getByRole("combobox").selectOption("NEW");
+      await first.getByRole("textbox").fill("합성 C11 확정 메모");
+      const sibling = page.getByTestId(`confirmation-${fixture.secondApplicationId}`);
+      await sibling.getByRole("textbox").fill("합성 C11 사라질 미선택 초안");
+      const before = await recoverySnapshot(db, fixture);
+      await page.route(`**${recoveryPath(fixture)}`, async (route) => {
+        if (route.request().method() !== "POST" || !route.request().headers()["next-action"] || intercepted) return route.continue();
+        intercepted = true; confirmationWrites++; confirmationAction = route.request().headers()["next-action"];
+        await route.fetch();
+        // Independently prove this is a committed confirmation, not a failed request before save.
+        expect(await db.reservationApplicationPaymentMapping.count({ where: { applicationId: fixture.firstApplicationId } })).toBe(1);
+        await route.abort("failed");
+      });
+      await page.getByRole("button", { name: "선택한 아이 1명 예약 확정", exact: true }).click();
+      await expect(page.getByTestId("workflow-status")).toContainText("결과 불명확"); expect(intercepted).toBe(true);
+      const committed = await recoverySnapshot(db, fixture);
+      expect(committed.reservations).toHaveLength(1); expect(committed.payments).toHaveLength(1); expect(committed.items).toHaveLength(1); expect(committed.mappings).toHaveLength(1);
+      const application = committed.applications.find((row) => row.id === fixture.firstApplicationId)!;
+      expect(application).toMatchObject({ status: "CONFIRMED", reservationId: committed.reservations[0].id, childId: committed.reservations[0].childId, quotedAmount: 40000, requestNote: "합성 C11 원본 요청" });
+      expect(committed.reservations[0]).toMatchObject({ memo: "합성 C11 확정 메모", status: "RESERVED" });
+      expect(committed.items[0]).toMatchObject({ reservationId: application.reservationId, paymentId: committed.payments[0].id, amount: 40000, paidAmount: 40000, refundedAmount: 0 });
+      expect(committed.payments[0]).toMatchObject({ totalAmount: 40000, method: "TRANSFER", status: "PAID" });
+      expect(committed.mappings[0]).toMatchObject({ applicationId: application.id, paymentItemId: committed.items[0].id });
+      expect(committed.applications.find((row) => row.id === fixture.secondApplicationId)).toEqual(before.applications.find((row) => row.id === fixture.secondApplicationId));
+      expect(committed.deposits).toEqual(before.deposits);
+      await page.unrouteAll({ behavior: "wait" }); await page.close(); // Discard all original selection/memo state.
+      const context = await freshRecoveryContext(browser, info);
+      try {
+        const recovered = await context.newPage();
+        await recovered.route(`**${recoveryPath(fixture)}`, (route) => {
+          if (route.request().method() === "POST" && route.request().headers()["next-action"] === confirmationAction) confirmationWrites++;
+          return route.continue();
+        });
+        await recovered.goto(recoveryPath(fixture));
+        await expect(recovered.getByTestId(`confirmation-${fixture.firstApplicationId}`)).toHaveCount(0);
+        const remaining = recovered.getByTestId(`confirmation-${fixture.secondApplicationId}`);
+        await expect(remaining.getByRole("checkbox")).not.toBeChecked(); await expect(remaining.getByRole("textbox")).toHaveValue("");
+        await expect(recovered.getByTestId("deposit-transaction-form").locator('input[name="idempotencyKey"]')).toHaveValue("");
+        await expect(recovered.getByRole("button", { name: "선택한 아이 0명 예약 확정", exact: true })).toBeDisabled();
+        await expectRecoveryAmounts(recovered, { D: 100000, A: 60000, P: 40000, R: 0, T: 0 });
+        await expect(recovered.getByRole("link", { name: "연결된 예약 상세", exact: true })).toHaveAttribute("href", `/reservations/${application.reservationId}`);
+        await expect(recovered.getByRole("link", { name: "연결된 결제 상세", exact: true })).toHaveAttribute("href", `/payments/${committed.payments[0].id}`);
+        await recovered.getByRole("link", { name: "연결된 예약 상세", exact: true }).click(); await expect(recovered).toHaveURL(`/reservations/${application.reservationId}`);
+        await recovered.goBack(); await recovered.getByRole("link", { name: "연결된 결제 상세", exact: true }).click(); await expect(recovered).toHaveURL(`/payments/${committed.payments[0].id}`);
+        expect(confirmationWrites).toBe(1); expect(await recoverySnapshot(db, fixture)).toEqual(committed);
+        await assertFamilyLedger(db, fixture.submissionId, { D: 100000, A: 60000, P: 40000, R: 0, T: 0 });
+      } finally { await context.close(); }
+    } finally { if (!page.isClosed()) await page.unrouteAll({ behavior: "wait" }); await db.$disconnect(); }
   });
 });
