@@ -274,7 +274,7 @@ async function precommitHold(f: Fixture, table: "ReturnObligation" | "Reservatio
     await waitOnRow(observer, workerPid, holderPid, table);
     await whileBlocked();
     if (rollback) {
-      const [termination] = await observer.$queryRaw<Array<{ terminated: boolean }>>`SELECT pg_terminate_backend(${workerPid}) AS terminated`;
+      const [termination] = await observer.$queryRaw<Array<{ terminated: boolean }>>`SELECT pg_terminate_backend(${workerPid}::int) AS terminated`;
       expect(termination?.terminated).toBe(true);
       // Resolve the original action before releasing the test holder. No absence lookup is used
       // as rollback evidence: caller must compare a fresh full snapshot after this drain.
