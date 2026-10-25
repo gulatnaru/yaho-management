@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // Read-only inventory must precede mutation suites, even in focused runs.
-export const uxSpecOrder = ["family-list", "class-links", "family-detail", "ledger", "confirmation", "completion", "guardian", "full-journey"] as const;
+export const uxSpecOrder = ["family-list", "class-links", "family-detail", "ledger", "confirmation", "completion", "guardian", "full-journey", "c11-residual-risk"] as const;
 export const uxSpecBasenames = uxSpecOrder.map((spec) => `integrated-ux-${spec}`);
 export const uxSelectionSchema = z.object({
   selectedSpecs: z.array(z.string().refine((name) => uxSpecBasenames.includes(name))).min(1),
