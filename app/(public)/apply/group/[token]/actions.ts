@@ -4,6 +4,8 @@ import { z } from "zod";
 import { cookies } from "next/headers";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/db/prisma";
+import { emitReservationEvent } from "@/lib/kakao/events";
+import { LogNotificationProvider } from "@/lib/kakao/notify";
 import { APPLICATION_CONSENT_CONTENT, isConsentContentReady } from "@/lib/reservation-applications/consent-content";
 import type { ApplicationConsentKey } from "@/lib/reservation-applications/consent-content";
 import { COMPLETION_COOKIE_NAME, COMPLETION_TTL_MS } from "@/lib/reservation-applications/completion";
@@ -103,6 +105,7 @@ export async function submitApplicationGroupWithCompanion(token: string | undefi
   const completionToken = generateApplicationCapabilityToken();
   const deviceToken = generateApplicationCapabilityToken();
   const jar = await cookies();
+  let submissionId: string;
   try {
     const result = await submitApplicationGroupCore(prisma, {
       token, companionToken, previousCompletionTokenHash: jar.get(COMPLETION_COOKIE_NAME)?.value ? hashApplicationCapabilityToken(jar.get(COMPLETION_COOKIE_NAME)!.value) : undefined, previousDeviceTokenHash: jar.get("yaho_application_device")?.value ? hashApplicationCapabilityToken(jar.get("yaho_application_device")!.value) : undefined, data: parsed.data, consentVersion: APPLICATION_CONSENT_CONTENT.version, now, configReady: true,
@@ -110,6 +113,7 @@ export async function submitApplicationGroupWithCompanion(token: string | undefi
       deviceTokenHash: hashApplicationCapabilityToken(deviceToken), deviceExpiresAt: new Date(now.getTime() + APPLICATION_DEVICE_TTL_MS),
     });
     if (result.replayed) return { submitted: true };
+    submissionId = result.submissionId;
   } catch (error) {
     if (error instanceof ApplicationPriceReviewExpiredError && error.priceReview) return { error: "참가비 확인 시간이 만료되었습니다. 최신 금액을 다시 확인한 뒤 직접 제출해주세요.", priceReviewExpired: true, priceReview: error.priceReview, fieldErrors: { reviewedPriceProof: "최신 참가비를 다시 확인해주세요" } };
     if (error instanceof ApplicationPriceChangedError) return { error: "신청 금액이 변경되었습니다. 변경된 금액을 확인한 뒤 다시 제출해주세요.", priceChanged: true, priceReview: error.priceReview, fieldErrors: { reviewedPriceProof: "변경된 신청 금액을 다시 확인해주세요" } };
@@ -119,5 +123,8 @@ export async function submitApplicationGroupWithCompanion(token: string | undefi
   }
   jar.set(COMPLETION_COOKIE_NAME, completionToken, { httpOnly: true, secure: true, sameSite: "lax", path: "/apply", maxAge: Math.floor(COMPLETION_TTL_MS / 1000) });
   jar.set("yaho_application_device", deviceToken, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: Math.floor(APPLICATION_DEVICE_TTL_MS / 1000) });
-  return { submitted: true };
+  const success: GroupSubmissionState = { submitted: true };
+  // Core transaction committed; validation, failures and replay have already returned.
+  await emitReservationEvent(new LogNotificationProvider(), { kind: "application.received", entityId: submissionId, occasion: "created", audience: "admin" });
+  return success;
 }

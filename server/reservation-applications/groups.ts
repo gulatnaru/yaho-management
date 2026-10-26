@@ -7,6 +7,7 @@ import { canIssueApplicationLink } from "@/lib/reservation-applications/availabi
 import { ApplicationClosedError, ApplicationLinkClassClosedError, ApplicationLinkNotFoundError } from "@/lib/reservation-applications/errors";
 import { hashApplicationCapabilityToken, generateApplicationCapabilityToken, isWellFormedApplicationLinkToken } from "@/lib/reservation-applications/token";
 import { reservationApplicationSettingsSchema, groupSubmissionSchema } from "@/lib/reservation-applications/phase20-validation";
+import { insertApplicationReceivedOutbox } from "@/lib/kakao/outbox-tx";
 
 import { applicationReviewScope, issueApplicationPriceReview, authenticateApplicationPriceReview, isApplicationPriceReviewExpired, ApplicationPriceReviewExpiredError, ApplicationPriceChangedError, ApplicationAlreadySubmittedError, type ApplicationPriceReview } from "./price-review";
 
@@ -348,6 +349,7 @@ export async function submitApplicationGroupCore(
       });
       applicationIds.push(application.id);
     }
+    await insertApplicationReceivedOutbox(tx, { submissionId: submission.id, now: input.now });
     return { submissionId: submission.id, applicationIds };
   }, TX_OPTIONS);
 }

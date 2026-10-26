@@ -1189,3 +1189,35 @@ model AiServiceReconciliation {
   @@unique([environment, reference])
   @@index([environment, month])
 }
+
+enum NotificationOutboxStatus {
+  pending
+  processing
+  sent
+  skipped
+  failed
+}
+
+// Minimal metadata only: no names, phones, amounts, customer tokens, URLs or financial
+// details. Global dedupeKey uniqueness prevents a second row on repeated enqueue.
+model NotificationOutbox {
+  id String @id @default(cuid())
+  eventKind String
+  entityId String
+  dedupeKey String @unique
+  audience String
+  occurredAt DateTime
+  status NotificationOutboxStatus @default(pending)
+  attemptCount Int @default(0)
+  // provider_unconfigured | provider_error; provider_timeout/invalid_payload reserved.
+  lastErrorCode String?
+  providerId String? // Reserved; null in foundation phase.
+  providerRef String? // Reserved future message ID; null in foundation phase.
+  nextRetryAt DateTime?
+  claimToken String?
+  leaseExpiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, nextRetryAt])
+  @@index([status, leaseExpiresAt])
+}
