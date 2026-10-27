@@ -3,7 +3,11 @@
 # Target: Preview Supabase project ONLY, verified by parsed project ref before any DB touch.
 # Secrets referenced by NAME only (values never printed, never stored in this file):
 #   PREVIEW_DIRECT_URL   - Preview Direct/Session-pooler connection string
-#   PREVIEW_PROJECT_REF  - expected Preview project ref (must be created before dispatch)
+#   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
+# Verification is decided by command exit code only: DO blocks raise on mismatch.
+# The Preview runtime role is unconfirmed from this connection, so no runtime-role
+# claim is made here; the later C smoke test proves it (app writes via its own
+# runtime connection).
 # Application code, schema, and migration files are NOT part of this workflow;
 # the migrate run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
 # DO NOT MERGE without an explicit merge decision (see PR description).
@@ -112,45 +116,38 @@ jobs:
           set -euo pipefail
           # Never print DATABASE_URL or DIRECT_URL.
           # A) Connection + failed-migration + outbox-absent check (read-only).
-          # Distinguishes: connection failure / failed rows / already-applied.
+          # Decided by exit code only: the DO block raises on any mismatch,
+          # so success means all conditions hold. No result rows are parsed.
+          # The error text is used only to label the abort, never to pass.
           set +e
-          CHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
-          SELECT
-            CASE WHEN COUNT(*) FILTER (WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) = 0 THEN 'FAILED_CHECK_OK' ELSE 'FAILED_CHECK_BAD' END AS failed_check,
-            CASE WHEN COUNT(*) FILTER (WHERE migration_name = '20261026090000_notification_outbox') = 0 THEN 'OUTBOX_ABSENT_OK' ELSE 'OUTBOX_ABSENT_BAD' END AS outbox_check
-          FROM "_prisma_migrations";
+          PRECHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) THEN
+              RAISE EXCEPTION 'failed or incomplete migration exists';
+            END IF;
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox') THEN
+              RAISE EXCEPTION 'outbox migration already applied (not pending)';
+            END IF;
+          END $$;
           SQL
           )"
-          CHECK_EXIT=$?
+          PRECHECK_EXIT=$?
           set -e
-          if [ "$CHECK_EXIT" -ne 0 ]; then
-            echo "ABORT: cannot connect or query migration history (connection failure)"
+          if [ "$PRECHECK_EXIT" -ne 0 ]; then
+            case "$PRECHECK_OUTPUT" in
+              *'failed or incomplete migration exists'*)
+                echo "ABORT: failed or incomplete migration exists"
+                ;;
+              *'outbox migration already applied'*)
+                echo "ABORT: outbox migration already applied (not pending)"
+                ;;
+              *)
+                echo "ABORT: cannot connect or query migration history (connection failure)"
+                ;;
+            esac
             exit 1
           fi
-          case "$CHECK_OUTPUT" in
-            *FAILED_CHECK_BAD*)
-              echo "ABORT: failed or incomplete migration exists"
-              exit 1
-              ;;
-            *FAILED_CHECK_OK*)
-              ;;
-            *)
-              echo "ABORT: migration history check output unverifiable"
-              exit 1
-              ;;
-          esac
-          case "$CHECK_OUTPUT" in
-            *OUTBOX_ABSENT_BAD*)
-              echo "ABORT: outbox migration already applied (not pending)"
-              exit 1
-              ;;
-            *OUTBOX_ABSENT_OK*)
-              ;;
-            *)
-              echo "ABORT: migration history check output unverifiable"
-              exit 1
-              ;;
-          esac
           # B) Prisma-native pending check (content-based; robust to exit-code semantics).
           STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
           if ! echo "$STATUS_BEFORE" | grep -q '20261026090000_notification_outbox'; then
@@ -164,40 +161,53 @@ jobs:
           fi
           npx prisma migrate deploy --schema prisma/schema.prisma
           npx prisma migrate status --schema prisma/schema.prisma
-      - name: Post-apply verification (asserted by actual values)
+      - name: Post-apply verification (DO block, exit code decides)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
           DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
         run: |
           set -euo pipefail
-          set +e
-          VERIFY_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
-          SELECT
-            (SELECT CASE WHEN COUNT(*) = 1 THEN 'TABLE_OK' ELSE 'TABLE_BAD' END FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox') AS table_check,
-            (SELECT CASE WHEN COUNT(*) = 1 THEN 'ENUM_OK' ELSE 'ENUM_BAD' END FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public') AS enum_check,
-            (SELECT CASE WHEN COUNT(*) = 3 THEN 'INDEX_OK' ELSE 'INDEX_BAD' END FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx')) AS index_check,
-            (SELECT CASE WHEN COUNT(*) = 1 AND BOOL_OR(relrowsecurity) THEN 'RLS_OK' ELSE 'RLS_BAD' END FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public') AS rls_check,
-            (SELECT CASE WHEN COUNT(*) = 0 THEN 'POLICY_OK' ELSE 'POLICY_BAD' END FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox') AS policy_check,
-            (SELECT CASE WHEN COUNT(*) = 1 THEN 'HISTORY_OK' ELSE 'HISTORY_BAD' END FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL) AS history_check,
-            (SELECT CASE WHEN has_table_privilege('postgres', '"NotificationOutbox"', 'INSERT, SELECT, UPDATE, DELETE') THEN 'PRIV_OWNER_OK' ELSE 'PRIV_OWNER_BAD' END) AS priv_owner_check,
-            (SELECT CASE WHEN NOT has_table_privilege('anon', '"NotificationOutbox"', 'INSERT, SELECT, UPDATE, DELETE') THEN 'PRIV_ANON_OK' ELSE 'PRIV_ANON_BAD' END) AS priv_anon_check,
-            (SELECT CASE WHEN NOT has_table_privilege('authenticated', '"NotificationOutbox"', 'INSERT, SELECT, UPDATE, DELETE') THEN 'PRIV_AUTH_OK' ELSE 'PRIV_AUTH_BAD' END) AS priv_auth_check;
+          # Decided by exit code only: the DO block raises on any mismatch.
+          # Each privilege is checked individually. No result rows are parsed.
+          # NOTE: the Preview runtime role is NOT verified here (its identity
+          # is unconfirmed from this connection), so no runtime-role claim is
+          # made by this step; the later C smoke test proves it, because the
+          # app writes via its own runtime connection.
+          if ! npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          DO $$
+          DECLARE
+            v_count integer;
+            v_rls boolean;
+            v_priv text;
+          BEGIN
+            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: table'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: enum'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx');
+            IF v_count <> 3 THEN RAISE EXCEPTION 'verification failed: indexes'; END IF;
+            SELECT BOOL_OR(relrowsecurity) INTO v_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public';
+            IF v_rls IS NOT TRUE THEN RAISE EXCEPTION 'verification failed: RLS'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: policies'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: history'; END IF;
+            FOREACH v_priv IN ARRAY ARRAY['INSERT', 'SELECT', 'UPDATE', 'DELETE'] LOOP
+              IF NOT has_table_privilege('postgres', '"NotificationOutbox"', v_priv) THEN
+                RAISE EXCEPTION 'verification failed: postgres %', v_priv;
+              END IF;
+              IF has_table_privilege('anon', '"NotificationOutbox"', v_priv) THEN
+                RAISE EXCEPTION 'verification failed: anon %', v_priv;
+              END IF;
+              IF has_table_privilege('authenticated', '"NotificationOutbox"', v_priv) THEN
+                RAISE EXCEPTION 'verification failed: authenticated %', v_priv;
+              END IF;
+            END LOOP;
+          END $$;
           SQL
-          )"
-          VERIFY_EXIT=$?
-          set -e
-          if [ "$VERIFY_EXIT" -ne 0 ]; then
-            echo "ABORT: post-apply verification query failed"
+          then
+            echo "ABORT: post-apply verification failed (see command error above)"
             exit 1
           fi
-          for TOKEN in TABLE_OK ENUM_OK INDEX_OK RLS_OK POLICY_OK HISTORY_OK PRIV_OWNER_OK PRIV_ANON_OK PRIV_AUTH_OK; do
-            case "$VERIFY_OUTPUT" in
-              *"$TOKEN"*)
-                ;;
-              *)
-                echo "ABORT: post-apply verification failed: $TOKEN missing"
-                exit 1
-                ;;
-            esac
-          done
           echo "Post-apply verification passed: table, enum, indexes, RLS, policies, history, privileges"
+          echo "Runtime-role privilege: NOT claimed here (role unconfirmed); proven by the later C smoke test"
