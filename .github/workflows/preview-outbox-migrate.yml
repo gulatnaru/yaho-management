@@ -1,0 +1,213 @@
+# Preview-only official Prisma migrate deploy for the NotificationOutbox migration.
+# Manual execution ONLY (workflow_dispatch). Never auto-triggered.
+# Target: Preview Supabase project ONLY, verified by parsed project ref before any DB touch.
+# Secrets referenced by NAME only (values never printed, never stored in this file):
+#   PREVIEW_DIRECT_URL   - Preview Direct/Session-pooler connection string
+#   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
+# Verification is decided by command exit code only: DO blocks raise on mismatch.
+# The Preview runtime role is unconfirmed from this connection, so no runtime-role
+# claim is made here; the later C smoke test proves it (app writes via its own
+# runtime connection).
+# Application code, schema, and migration files are NOT part of this workflow;
+# the migrate run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
+# DO NOT MERGE without an explicit merge decision (see PR description).
+
+name: preview-outbox-migrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target Supabase project name (must be yaho-preview)"
+        required: true
+        default: "yaho-preview"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "1337a195af87e3ecbaf4eaffccc259516bbf25e0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Pre-connection target guard (Preview only, no DB touch)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          EXPECTED_REF: ${{ secrets.PREVIEW_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL, EXPECTED_REF, or any parsed value.
+          # GitHub masks registered secrets in logs; this script echoes none of them.
+          # 1) Dispatcher must declare the target project name.
+          if [ "${{ inputs.target }}" != "yaho-preview" ]; then
+            echo "ABORT: target input is not yaho-preview"
+            exit 1
+          fi
+          # 2) Parse host, port, and username from the URL (no DB touch).
+          URL_NO_SCHEME="${DATABASE_URL#*://}"
+          USERINFO="${URL_NO_SCHEME%%@*}"
+          USERNAME="${USERINFO%%:*}"
+          HOSTPORT="${URL_NO_SCHEME##*@}"
+          HOST="${HOSTPORT%%:*}"
+          PORT="${HOSTPORT##*:}"
+          PORT="${PORT%%/*}"
+          # 3) Port must be 5432: Direct or Session pooler only.
+          # Transaction pooler (6543) is incompatible with migrate deploy.
+          if [ "$PORT" != "5432" ]; then
+            echo "ABORT: port is not 5432 (Direct/Session only; Transaction pooler excluded)"
+            exit 1
+          fi
+          # 4) Parse the project ref from the direct hostname and/or pooler username.
+          # Substring matching is NOT used: the actual parsed hostname/username is compared.
+          REF_FROM_HOST=""
+          REF_FROM_USER=""
+          case "$HOST" in
+            db.*.supabase.co)
+              REF_FROM_HOST="${HOST#db.}"
+              REF_FROM_HOST="${REF_FROM_HOST%.supabase.co}"
+              ;;
+            *.pooler.supabase.com)
+              ;;
+            *)
+              echo "ABORT: host is not a Supabase direct or pooler host"
+              exit 1
+              ;;
+          esac
+          case "$USERNAME" in
+            postgres.*)
+              REF_FROM_USER="${USERNAME#postgres.}"
+              ;;
+            postgres)
+              ;;
+            *)
+              echo "ABORT: username is not a Supabase postgres user"
+              exit 1
+              ;;
+          esac
+          if [ -n "$REF_FROM_HOST" ] && [ -n "$REF_FROM_USER" ] && [ "$REF_FROM_HOST" != "$REF_FROM_USER" ]; then
+            echo "ABORT: inconsistent project ref between host and username"
+            exit 1
+          fi
+          PARSED_REF="${REF_FROM_HOST:-$REF_FROM_USER}"
+          if [ -z "$PARSED_REF" ]; then
+            echo "ABORT: cannot parse project ref from connection URL"
+            exit 1
+          fi
+          # 5) Accept ONLY the approved Preview project ref; everything else
+          # (including the Production project) is rejected by construction.
+          # A missing EXPECTED_REF also aborts here (empty never equals a ref).
+          if [ "$PARSED_REF" != "$EXPECTED_REF" ]; then
+            echo "ABORT: target project ref mismatch (not the approved Preview project)"
+            exit 1
+          fi
+          echo "Pre-connection guard passed: target yaho-preview, Preview project ref match, port 5432"
+      - name: Status check + official migrate deploy (Preview only)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL or DIRECT_URL.
+          # A) Connection + failed-migration + outbox-absent check (read-only).
+          # Decided by exit code only: the DO block raises on any mismatch,
+          # so success means all conditions hold. No result rows are parsed.
+          # The error text is used only to label the abort, never to pass.
+          set +e
+          PRECHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) THEN
+              RAISE EXCEPTION 'failed or incomplete migration exists';
+            END IF;
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox') THEN
+              RAISE EXCEPTION 'outbox migration already applied (not pending)';
+            END IF;
+          END $$;
+          SQL
+          )"
+          PRECHECK_EXIT=$?
+          set -e
+          if [ "$PRECHECK_EXIT" -ne 0 ]; then
+            case "$PRECHECK_OUTPUT" in
+              *'failed or incomplete migration exists'*)
+                echo "ABORT: failed or incomplete migration exists"
+                ;;
+              *'outbox migration already applied'*)
+                echo "ABORT: outbox migration already applied (not pending)"
+                ;;
+              *)
+                echo "ABORT: cannot connect or query migration history (connection failure)"
+                ;;
+            esac
+            exit 1
+          fi
+          # B) Prisma-native pending check (content-based; robust to exit-code semantics).
+          STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
+          if ! echo "$STATUS_BEFORE" | grep -q '20261026090000_notification_outbox'; then
+            echo "ABORT: outbox migration is not listed as pending (history mismatch)"
+            exit 1
+          fi
+          PENDING="$(echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true)"
+          if [ "$PENDING" != "20261026090000_notification_outbox" ]; then
+            echo "ABORT: pending is not exactly the outbox migration (multiple pending or format mismatch)"
+            exit 1
+          fi
+          npx prisma migrate deploy --schema prisma/schema.prisma
+          npx prisma migrate status --schema prisma/schema.prisma
+      - name: Post-apply verification (DO block, exit code decides)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          # Decided by exit code only: the DO block raises on any mismatch.
+          # Each privilege is checked individually. No result rows are parsed.
+          # NOTE: the Preview runtime role is NOT verified here (its identity
+          # is unconfirmed from this connection), so no runtime-role claim is
+          # made by this step; the later C smoke test proves it, because the
+          # app writes via its own runtime connection.
+          if ! npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          DO $$
+          DECLARE
+            v_count integer;
+            v_rls boolean;
+            v_priv text;
+          BEGIN
+            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: table'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: enum'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx');
+            IF v_count <> 3 THEN RAISE EXCEPTION 'verification failed: indexes'; END IF;
+            SELECT BOOL_OR(relrowsecurity) INTO v_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public';
+            IF v_rls IS NOT TRUE THEN RAISE EXCEPTION 'verification failed: RLS'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: policies'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: history'; END IF;
+            FOREACH v_priv IN ARRAY ARRAY['INSERT', 'SELECT', 'UPDATE', 'DELETE'] LOOP
+              IF NOT has_table_privilege('postgres', '"NotificationOutbox"', v_priv) THEN
+                RAISE EXCEPTION 'verification failed: postgres %', v_priv;
+              END IF;
+              IF has_table_privilege('anon', '"NotificationOutbox"', v_priv) THEN
+                RAISE EXCEPTION 'verification failed: anon %', v_priv;
+              END IF;
+              IF has_table_privilege('authenticated', '"NotificationOutbox"', v_priv) THEN
+                RAISE EXCEPTION 'verification failed: authenticated %', v_priv;
+              END IF;
+            END LOOP;
+          END $$;
+          SQL
+          then
+            echo "ABORT: post-apply verification failed (see command error above)"
+            exit 1
+          fi
+          echo "Post-apply verification passed: table, enum, indexes, RLS, policies, history, privileges"
+          echo "Runtime-role privilege: NOT claimed here (role unconfirmed); proven by the later C smoke test"
