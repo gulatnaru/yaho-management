@@ -1,10 +1,11 @@
 # Preview-only official Prisma migrate deploy for the NotificationOutbox migration.
 # Manual execution ONLY (workflow_dispatch). Never auto-triggered.
-# Target: Preview Supabase project ONLY, via the PREVIEW_DIRECT_URL secret.
-# The secret itself is created by the user in the GitHub web console;
-# this file contains only the secret NAME, never a value.
+# Target: Preview Supabase project ONLY, verified by parsed project ref before any DB touch.
+# Secrets referenced by NAME only (values never printed, never stored in this file):
+#   PREVIEW_DIRECT_URL   - Preview Direct/Session-pooler connection string
+#   PREVIEW_PROJECT_REF  - expected Preview project ref (must be created before dispatch)
 # Application code, schema, and migration files are NOT part of this workflow;
-# the migrate run checks out the verified branch test/kakao-outbox-pg.
+# the migrate run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
 # DO NOT MERGE without an explicit merge decision (see PR description).
 
 name: preview-outbox-migrate
@@ -27,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: test/kakao-outbox-pg
+          ref: "1337a195af87e3ecbaf4eaffccc259516bbf25e0"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -35,65 +36,168 @@ jobs:
       - name: Pre-connection target guard (Preview only, no DB touch)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          EXPECTED_REF: ${{ secrets.PREVIEW_PROJECT_REF }}
         run: |
           set -euo pipefail
-          # Never print DATABASE_URL. GitHub masks registered secrets in logs.
+          # Never print DATABASE_URL, EXPECTED_REF, or any parsed value.
+          # GitHub masks registered secrets in logs; this script echoes none of them.
           # 1) Dispatcher must declare the target project name.
           if [ "${{ inputs.target }}" != "yaho-preview" ]; then
             echo "ABORT: target input is not yaho-preview"
             exit 1
           fi
-          # 2) URL must be a Supabase host (sanity check, value never printed).
-          case "$DATABASE_URL" in
-            *".supabase.co"*) ;;
-            *) echo "ABORT: URL host is not a Supabase host"; exit 1 ;;
-          esac
-          # 3) Port must be 5432: Direct or Session pooler only.
-          # Transaction pooler (6543) is incompatible with migrate deploy.
-          HOSTPORT="${DATABASE_URL##*@}"
+          # 2) Parse host, port, and username from the URL (no DB touch).
+          URL_NO_SCHEME="${DATABASE_URL#*://}"
+          USERINFO="${URL_NO_SCHEME%%@*}"
+          USERNAME="${USERINFO%%:*}"
+          HOSTPORT="${URL_NO_SCHEME##*@}"
+          HOST="${HOSTPORT%%:*}"
           PORT="${HOSTPORT##*:}"
           PORT="${PORT%%/*}"
+          # 3) Port must be 5432: Direct or Session pooler only.
+          # Transaction pooler (6543) is incompatible with migrate deploy.
           if [ "$PORT" != "5432" ]; then
             echo "ABORT: port is not 5432 (Direct/Session only; Transaction pooler excluded)"
             exit 1
           fi
-          echo "Pre-connection guard passed: target yaho-preview, Supabase host, port 5432"
-      - name: Guard + official migrate deploy (Preview only)
+          # 4) Parse the project ref from the direct hostname and/or pooler username.
+          # Substring matching is NOT used: the actual parsed hostname/username is compared.
+          REF_FROM_HOST=""
+          REF_FROM_USER=""
+          case "$HOST" in
+            db.*.supabase.co)
+              REF_FROM_HOST="${HOST#db.}"
+              REF_FROM_HOST="${REF_FROM_HOST%.supabase.co}"
+              ;;
+            *.pooler.supabase.com)
+              ;;
+            *)
+              echo "ABORT: host is not a Supabase direct or pooler host"
+              exit 1
+              ;;
+          esac
+          case "$USERNAME" in
+            postgres.*)
+              REF_FROM_USER="${USERNAME#postgres.}"
+              ;;
+            postgres)
+              ;;
+            *)
+              echo "ABORT: username is not a Supabase postgres user"
+              exit 1
+              ;;
+          esac
+          if [ -n "$REF_FROM_HOST" ] && [ -n "$REF_FROM_USER" ] && [ "$REF_FROM_HOST" != "$REF_FROM_USER" ]; then
+            echo "ABORT: inconsistent project ref between host and username"
+            exit 1
+          fi
+          PARSED_REF="${REF_FROM_HOST:-$REF_FROM_USER}"
+          if [ -z "$PARSED_REF" ]; then
+            echo "ABORT: cannot parse project ref from connection URL"
+            exit 1
+          fi
+          # 5) Accept ONLY the approved Preview project ref; everything else
+          # (including the Production project) is rejected by construction.
+          # A missing EXPECTED_REF also aborts here (empty never equals a ref).
+          if [ "$PARSED_REF" != "$EXPECTED_REF" ]; then
+            echo "ABORT: target project ref mismatch (not the approved Preview project)"
+            exit 1
+          fi
+          echo "Pre-connection guard passed: target yaho-preview, Preview project ref match, port 5432"
+      - name: Status check + official migrate deploy (Preview only)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
           DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
         run: |
           set -euo pipefail
-          # Never print DATABASE_URL or DIRECT_URL. GitHub masks registered
-          # secrets in logs, and this script never echoes them.
-          # Guard: pending must be exactly the outbox migration, nothing else.
+          # Never print DATABASE_URL or DIRECT_URL.
+          # A) Connection + failed-migration + outbox-absent check (read-only).
+          # Distinguishes: connection failure / failed rows / already-applied.
+          set +e
+          CHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          SELECT
+            CASE WHEN COUNT(*) FILTER (WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) = 0 THEN 'FAILED_CHECK_OK' ELSE 'FAILED_CHECK_BAD' END AS failed_check,
+            CASE WHEN COUNT(*) FILTER (WHERE migration_name = '20261026090000_notification_outbox') = 0 THEN 'OUTBOX_ABSENT_OK' ELSE 'OUTBOX_ABSENT_BAD' END AS outbox_check
+          FROM "_prisma_migrations";
+          SQL
+          )"
+          CHECK_EXIT=$?
+          set -e
+          if [ "$CHECK_EXIT" -ne 0 ]; then
+            echo "ABORT: cannot connect or query migration history (connection failure)"
+            exit 1
+          fi
+          case "$CHECK_OUTPUT" in
+            *FAILED_CHECK_BAD*)
+              echo "ABORT: failed or incomplete migration exists"
+              exit 1
+              ;;
+            *FAILED_CHECK_OK*)
+              ;;
+            *)
+              echo "ABORT: migration history check output unverifiable"
+              exit 1
+              ;;
+          esac
+          case "$CHECK_OUTPUT" in
+            *OUTBOX_ABSENT_BAD*)
+              echo "ABORT: outbox migration already applied (not pending)"
+              exit 1
+              ;;
+            *OUTBOX_ABSENT_OK*)
+              ;;
+            *)
+              echo "ABORT: migration history check output unverifiable"
+              exit 1
+              ;;
+          esac
+          # B) Prisma-native pending check (content-based; robust to exit-code semantics).
           STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
+          if ! echo "$STATUS_BEFORE" | grep -q '20261026090000_notification_outbox'; then
+            echo "ABORT: outbox migration is not listed as pending (history mismatch)"
+            exit 1
+          fi
           PENDING="$(echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true)"
           if [ "$PENDING" != "20261026090000_notification_outbox" ]; then
-            echo "ABORT: pending is not exactly the outbox migration"
-            echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true
+            echo "ABORT: pending is not exactly the outbox migration (multiple pending or format mismatch)"
             exit 1
           fi
           npx prisma migrate deploy --schema prisma/schema.prisma
           npx prisma migrate status --schema prisma/schema.prisma
-      - name: Post-apply read-only verification
+      - name: Post-apply verification (asserted by actual values)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
           DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
         run: |
           set -euo pipefail
-          npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
-          SELECT table_name FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
-          SELECT typname FROM pg_type WHERE typname = 'NotificationOutboxStatus';
-          SELECT indexname FROM pg_indexes
-            WHERE schemaname = 'public' AND tablename = 'NotificationOutbox'
-            ORDER BY indexname;
-          SELECT relname, relrowsecurity FROM pg_class
-            WHERE relname = 'NotificationOutbox';
-          SELECT policyname, roles FROM pg_policies
-            WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
-          SELECT migration_name, finished_at, rolled_back_at
-            FROM "_prisma_migrations"
-            WHERE migration_name = '20261026090000_notification_outbox';
+          set +e
+          VERIFY_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          SELECT
+            (SELECT CASE WHEN COUNT(*) = 1 THEN 'TABLE_OK' ELSE 'TABLE_BAD' END FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox') AS table_check,
+            (SELECT CASE WHEN COUNT(*) = 1 THEN 'ENUM_OK' ELSE 'ENUM_BAD' END FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public') AS enum_check,
+            (SELECT CASE WHEN COUNT(*) = 3 THEN 'INDEX_OK' ELSE 'INDEX_BAD' END FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx')) AS index_check,
+            (SELECT CASE WHEN COUNT(*) = 1 AND BOOL_OR(relrowsecurity) THEN 'RLS_OK' ELSE 'RLS_BAD' END FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public') AS rls_check,
+            (SELECT CASE WHEN COUNT(*) = 0 THEN 'POLICY_OK' ELSE 'POLICY_BAD' END FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox') AS policy_check,
+            (SELECT CASE WHEN COUNT(*) = 1 THEN 'HISTORY_OK' ELSE 'HISTORY_BAD' END FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL) AS history_check,
+            (SELECT CASE WHEN has_table_privilege('postgres', '"NotificationOutbox"', 'INSERT, SELECT, UPDATE, DELETE') THEN 'PRIV_OWNER_OK' ELSE 'PRIV_OWNER_BAD' END) AS priv_owner_check,
+            (SELECT CASE WHEN NOT has_table_privilege('anon', '"NotificationOutbox"', 'INSERT, SELECT, UPDATE, DELETE') THEN 'PRIV_ANON_OK' ELSE 'PRIV_ANON_BAD' END) AS priv_anon_check,
+            (SELECT CASE WHEN NOT has_table_privilege('authenticated', '"NotificationOutbox"', 'INSERT, SELECT, UPDATE, DELETE') THEN 'PRIV_AUTH_OK' ELSE 'PRIV_AUTH_BAD' END) AS priv_auth_check;
           SQL
+          )"
+          VERIFY_EXIT=$?
+          set -e
+          if [ "$VERIFY_EXIT" -ne 0 ]; then
+            echo "ABORT: post-apply verification query failed"
+            exit 1
+          fi
+          for TOKEN in TABLE_OK ENUM_OK INDEX_OK RLS_OK POLICY_OK HISTORY_OK PRIV_OWNER_OK PRIV_ANON_OK PRIV_AUTH_OK; do
+            case "$VERIFY_OUTPUT" in
+              *"$TOKEN"*)
+                ;;
+              *)
+                echo "ABORT: post-apply verification failed: $TOKEN missing"
+                exit 1
+                ;;
+            esac
+          done
+          echo "Post-apply verification passed: table, enum, indexes, RLS, policies, history, privileges"
