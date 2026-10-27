@@ -1,0 +1,99 @@
+# Preview-only official Prisma migrate deploy for the NotificationOutbox migration.
+# Manual execution ONLY (workflow_dispatch). Never auto-triggered.
+# Target: Preview Supabase project ONLY, via the PREVIEW_DIRECT_URL secret.
+# The secret itself is created by the user in the GitHub web console;
+# this file contains only the secret NAME, never a value.
+# Application code, schema, and migration files are NOT part of this workflow;
+# the migrate run checks out the verified branch test/kakao-outbox-pg.
+# DO NOT MERGE without an explicit merge decision (see PR description).
+
+name: preview-outbox-migrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target Supabase project name (must be yaho-preview)"
+        required: true
+        default: "yaho-preview"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/kakao-outbox-pg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Pre-connection target guard (Preview only, no DB touch)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL. GitHub masks registered secrets in logs.
+          # 1) Dispatcher must declare the target project name.
+          if [ "${{ inputs.target }}" != "yaho-preview" ]; then
+            echo "ABORT: target input is not yaho-preview"
+            exit 1
+          fi
+          # 2) URL must be a Supabase host (sanity check, value never printed).
+          case "$DATABASE_URL" in
+            *".supabase.co"*) ;;
+            *) echo "ABORT: URL host is not a Supabase host"; exit 1 ;;
+          esac
+          # 3) Port must be 5432: Direct or Session pooler only.
+          # Transaction pooler (6543) is incompatible with migrate deploy.
+          HOSTPORT="${DATABASE_URL##*@}"
+          PORT="${HOSTPORT##*:}"
+          PORT="${PORT%%/*}"
+          if [ "$PORT" != "5432" ]; then
+            echo "ABORT: port is not 5432 (Direct/Session only; Transaction pooler excluded)"
+            exit 1
+          fi
+          echo "Pre-connection guard passed: target yaho-preview, Supabase host, port 5432"
+      - name: Guard + official migrate deploy (Preview only)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL or DIRECT_URL. GitHub masks registered
+          # secrets in logs, and this script never echoes them.
+          # Guard: pending must be exactly the outbox migration, nothing else.
+          STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
+          PENDING="$(echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true)"
+          if [ "$PENDING" != "20261026090000_notification_outbox" ]; then
+            echo "ABORT: pending is not exactly the outbox migration"
+            echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true
+            exit 1
+          fi
+          npx prisma migrate deploy --schema prisma/schema.prisma
+          npx prisma migrate status --schema prisma/schema.prisma
+      - name: Post-apply read-only verification
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
+          SELECT typname FROM pg_type WHERE typname = 'NotificationOutboxStatus';
+          SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = 'NotificationOutbox'
+            ORDER BY indexname;
+          SELECT relname, relrowsecurity FROM pg_class
+            WHERE relname = 'NotificationOutbox';
+          SELECT policyname, roles FROM pg_policies
+            WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
+          SELECT migration_name, finished_at, rolled_back_at
+            FROM "_prisma_migrations"
+            WHERE migration_name = '20261026090000_notification_outbox';
+          SQL
