@@ -1,0 +1,186 @@
+# Read-only Preview connection diagnostic. NEVER deploys migrations.
+# Manual execution ONLY (workflow_dispatch). This file contains NO migrate
+# deploy step by construction: a successful run proves connectivity only and
+# cannot apply any migration.
+# Target: Preview Supabase project ONLY, verified by parsed project ref
+# before any DB touch (same guard as preview-outbox-migrate).
+# Secrets referenced by NAME only (values never printed, never stored here):
+#   PREVIEW_DIRECT_URL   - Preview connection string (Session pooler expected)
+#   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
+# Failures print Prisma error codes only (P1000/P1001/P1002/P1003), never the
+# connection string, password, or raw command output.
+# Application code, schema, and migration files are NOT part of this workflow;
+# the diagnose run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
+# DO NOT MERGE without an explicit merge decision (see PR description).
+
+name: preview-outbox-diagnose
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target Supabase project name (must be yaho-preview)"
+        required: true
+        default: "yaho-preview"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "1337a195af87e3ecbaf4eaffccc259516bbf25e0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Pre-connection target guard (Preview only, no DB touch)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          EXPECTED_REF: ${{ secrets.PREVIEW_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL, EXPECTED_REF, or any parsed value.
+          # GitHub masks registered secrets in logs; this script echoes none of them.
+          # 1) Dispatcher must declare the target project name.
+          if [ "${{ inputs.target }}" != "yaho-preview" ]; then
+            echo "ABORT: target input is not yaho-preview"
+            exit 1
+          fi
+          # 2) Parse host, port, and username from the URL (no DB touch).
+          URL_NO_SCHEME="${DATABASE_URL#*://}"
+          USERINFO="${URL_NO_SCHEME%%@*}"
+          USERNAME="${USERINFO%%:*}"
+          HOSTPORT="${URL_NO_SCHEME##*@}"
+          HOST="${HOSTPORT%%:*}"
+          PORT="${HOSTPORT##*:}"
+          PORT="${PORT%%/*}"
+          # 3) Port must be 5432: Direct or Session pooler only.
+          # Transaction pooler (6543) is incompatible with migrate deploy.
+          if [ "$PORT" != "5432" ]; then
+            echo "ABORT: port is not 5432 (Direct/Session only; Transaction pooler excluded)"
+            exit 1
+          fi
+          # 4) Parse the project ref from the direct hostname and/or pooler username.
+          # Substring matching is NOT used: the actual parsed hostname/username is compared.
+          REF_FROM_HOST=""
+          REF_FROM_USER=""
+          case "$HOST" in
+            db.*.supabase.co)
+              REF_FROM_HOST="${HOST#db.}"
+              REF_FROM_HOST="${REF_FROM_HOST%.supabase.co}"
+              ;;
+            *.pooler.supabase.com)
+              ;;
+            *)
+              echo "ABORT: host is not a Supabase direct or pooler host"
+              exit 1
+              ;;
+          esac
+          case "$USERNAME" in
+            postgres.*)
+              REF_FROM_USER="${USERNAME#postgres.}"
+              ;;
+            postgres)
+              ;;
+            *)
+              echo "ABORT: username is not a Supabase postgres user"
+              exit 1
+              ;;
+          esac
+          if [ -n "$REF_FROM_HOST" ] && [ -n "$REF_FROM_USER" ] && [ "$REF_FROM_HOST" != "$REF_FROM_USER" ]; then
+            echo "ABORT: inconsistent project ref between host and username"
+            exit 1
+          fi
+          PARSED_REF="${REF_FROM_HOST:-$REF_FROM_USER}"
+          if [ -z "$PARSED_REF" ]; then
+            echo "ABORT: cannot parse project ref from connection URL"
+            exit 1
+          fi
+          # 5) Accept ONLY the approved Preview project ref; everything else
+          # (including the Production project) is rejected by construction.
+          # A missing EXPECTED_REF also aborts here (empty never equals a ref).
+          if [ "$PARSED_REF" != "$EXPECTED_REF" ]; then
+            echo "ABORT: target project ref mismatch (not the approved Preview project)"
+            exit 1
+          fi
+          echo "Pre-connection guard passed: target yaho-preview, Preview project ref match, port 5432"
+      - name: Connectivity probe (read-only, SELECT 1 only)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL or DIRECT_URL. SELECT 1 only: this step
+          # separates "cannot connect at all" from "DO-block/SQL failure".
+          # Prisma db execute reports success/failure by exit code only.
+          set +e
+          PROBE_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          SELECT 1;
+          SQL
+          )"
+          PROBE_EXIT=$?
+          set -e
+          if [ "$PROBE_EXIT" -ne 0 ]; then
+            PROBE_CODE="$(echo "$PROBE_OUTPUT" | grep -oE 'P[0-9]{4}' | head -n 1 || true)"
+            case "$PROBE_CODE" in
+              P1000) echo "ABORT: database authentication failed (P1000)" ;;
+              P1001) echo "ABORT: cannot reach database server (P1001)" ;;
+              P1002) echo "ABORT: database connection timed out (P1002)" ;;
+              P1003) echo "ABORT: database does not exist (P1003)" ;;
+              *) echo "ABORT: connectivity probe failed without a Prisma connection error code (CLI, engine, or driver error)" ;;
+            esac
+            exit 1
+          fi
+          echo "Connectivity probe passed: database reachable"
+      - name: History precheck classification (read-only DO block)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          # Never print DATABASE_URL or DIRECT_URL.
+          # Same read-only DO checks as the migrate workflow's precheck, but
+          # this job STOPS here: no migrate deploy step follows, by design.
+          # Decided by exit code only: the DO block raises on any mismatch.
+          set +e
+          PRECHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) THEN
+              RAISE EXCEPTION 'failed or incomplete migration exists';
+            END IF;
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox') THEN
+              RAISE EXCEPTION 'outbox migration already applied (not pending)';
+            END IF;
+          END $$;
+          SQL
+          )"
+          PRECHECK_EXIT=$?
+          set -e
+          if [ "$PRECHECK_EXIT" -ne 0 ]; then
+            case "$PRECHECK_OUTPUT" in
+              *'failed or incomplete migration exists'*)
+                echo "ABORT: failed or incomplete migration exists"
+                ;;
+              *'outbox migration already applied'*)
+                echo "ABORT: outbox migration already applied (not pending)"
+                ;;
+              *)
+                ERR_CODE="$(echo "$PRECHECK_OUTPUT" | grep -oE 'P[0-9]{4}' | head -n 1 || true)"
+                case "$ERR_CODE" in
+                  P1000) echo "ABORT: database authentication failed (P1000)" ;;
+                  P1001) echo "ABORT: cannot reach database server (P1001)" ;;
+                  P1002) echo "ABORT: database connection timed out (P1002)" ;;
+                  P1003) echo "ABORT: database does not exist (P1003)" ;;
+                  *) echo "ABORT: precheck failed without a Prisma connection error code (CLI, engine, or SQL error)" ;;
+                esac
+                ;;
+            esac
+            exit 1
+          fi
+          echo "DIAGNOSTIC PASSED: Preview database reachable, migration history clean, outbox still pending. No migration was applied."
