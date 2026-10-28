@@ -339,6 +339,7 @@ model Program {
   updatedAt       DateTime      @updatedAt
 
   classes ClassSchedule[]
+  aiPublications AiProgramPublication[]
 
   @@index([status])
 }
@@ -378,6 +379,8 @@ model ClassSchedule {
   applications                   ReservationApplication[]
   applicationGroupMemberships    ReservationApplicationGroupClass[]
   upgradedLegacyApplicationGroup ReservationApplicationGroup?       @relation("UpgradedLegacyApplicationGroup")
+
+  aiPublications AiClassPublication[]
 
   @@index([startsAt])
   @@index([status])
@@ -779,6 +782,8 @@ model PreviewE2eRunLease {
   expiresAt     DateTime
   // Non-PII, run-scoped ownership proof retained until cleanup succeeds.
   ownedChildIds Json?
+  // Phase21 synthetic-only fixture ownership; null keeps all existing runs unchanged.
+  aiFixtureManifest Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -921,3 +926,99 @@ model Refund {
 // - 클래스당 Teacher 최소 1명 배정 (원칙은 2명, 2명 미만은 경고만 — ADR-019)
 // - 예약 신청 링크 접수 판정: 링크 활성 + 클래스 SCHEDULED + startsAt 이전 + 허용 환경 + 설정 유효 (ADR-052)
 // - 예약 신청 상태 전이는 SUBMITTED 에서만 가능하고, 확정은 입금 확인이 기록된 신청만 가능 (ADR-053)
+
+// Phase21: isolated synthetic consultation domain. No customer/payment relationships.
+model AiProgramPublication {
+  id String @id @default(cuid())
+  runId String
+  programId String
+  enabled Boolean @default(false)
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+  program Program @relation(fields: [programId], references: [id], onDelete: Restrict)
+  @@unique([runId, programId])
+}
+model AiClassPublication {
+  id String @id @default(cuid())
+  runId String
+  classScheduleId String
+  enabled Boolean @default(false)
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+  classSchedule ClassSchedule @relation(fields: [classScheduleId], references: [id], onDelete: Restrict)
+  @@unique([runId, classScheduleId])
+}
+model AiKnowledgeEntry {
+  id String @id @default(cuid())
+  runId String
+  topic String
+  content String
+  approved Boolean @default(false)
+  version Int @default(1)
+  updatedById String
+  updatedAt DateTime @updatedAt
+  @@unique([runId, topic])
+}
+model AiConsultation {
+  id String @id
+  runId String
+  origin String @default("SYNTHETIC")
+  requestKey String
+  payloadHash String
+  hmacVersion String
+  subjectHashes String[]
+  status String @default("PROCESSING")
+  attempt Int @default(1)
+  dispatched Boolean @default(false)
+  reservedCalls Int
+  reservedCost Int
+  usedCalls Int @default(0)
+  usedCost Int @default(0)
+  quotaBucketIds String[]
+  rawCiphertext String?
+  encryptionVersion String?
+  resultCategory String?
+  createdAt DateTime
+  expiresAt DateTime
+  attemptDeadline DateTime
+  settledAt DateTime?
+  @@unique([runId, requestKey])
+  @@index([runId, expiresAt])
+  @@index([runId, status, attemptDeadline])
+}
+model AiQuotaBucket {
+  id String @id @default(cuid())
+  runId String
+  bucketKey String
+  aliases String[]
+  accepted Int @default(0)
+  reservedCalls Int @default(0)
+  reservedCost Int @default(0)
+  usedCalls Int @default(0)
+  usedCost Int @default(0)
+  expiresAt DateTime
+  @@unique([runId, bucketKey])
+  @@index([runId, expiresAt])
+}
+model AiDailyMetric {
+  id String @id @default(cuid())
+  day DateTime @db.Date
+  category String
+  count Int @default(0)
+  modelCalls Int @default(0)
+  syntheticCost Int @default(0)
+  @@unique([day, category])
+}
+model AiRetentionJob {
+  id String @id @default(cuid())
+  runId String @unique
+  status String @default("IDLE")
+  attempts Int @default(0)
+  deletedCount Int @default(0)
+  lastSuccessAt DateTime?
+  nextRetryAt DateTime?
+  errorCode String?
+  updatedAt DateTime @updatedAt
+}

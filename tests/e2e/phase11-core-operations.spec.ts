@@ -458,8 +458,25 @@ test.describe("Phase 11 핵심 운영 흐름", () => {
         });
         await expect(participantRow).toHaveCount(1);
         await participantRow.getByRole("combobox").selectOption(scenario.attendance);
-        await participantRow.getByRole("button", { name: "출결 기록" }).click();
-        await expect(participantRow.getByRole("status")).toHaveText("저장됨");
+        // Observe only this owned mutation; URLs, headers and response bodies never persist.
+        const observed={seen:false,response:"NO_RESPONSE",completion:"REQUEST_PENDING"};
+        const isOwnedMutation=(request:import("@playwright/test").Request)=>request.method()==="POST" && new URL(request.url()).pathname===new URL(page.url()).pathname;
+        const onRequest=(request:import("@playwright/test").Request)=>{if(isOwnedMutation(request))observed.seen=true;};
+        const onResponse=(response:import("@playwright/test").Response)=>{if(isOwnedMutation(response.request()))observed.response=response.status()>=200&&response.status()<300?"HTTP_2XX":"HTTP_NON2XX";};
+        const onFinished=(request:import("@playwright/test").Request)=>{if(isOwnedMutation(request))observed.completion="REQUEST_FINISHED";};
+        const onFailed=(request:import("@playwright/test").Request)=>{if(isOwnedMutation(request))observed.completion="REQUEST_FAILED";};
+        page.on("request",onRequest);page.on("response",onResponse);page.on("requestfinished",onFinished);page.on("requestfailed",onFailed);
+        try {
+          await participantRow.getByRole("button", { name: "출결 기록" }).click();
+          await expect(participantRow.getByRole("status")).toHaveText("저장됨");
+        } catch {
+          const stored=await prisma.reservation.findUnique({where:{id:reservation.id},select:{status:true,attendance:true}}).catch(()=>null);
+          const status=stored&&["RESERVED","COMPLETED","NO_SHOW","CANCELLED"].includes(stored.status)?stored.status:"UNKNOWN";
+          const attendance=stored?.attendance==null?"NONE":["PRESENT","ABSENT"].includes(stored.attendance)?stored.attendance:"UNKNOWN";
+          throw new Error(["P11_ATTENDANCE_DIAGNOSTIC",observed.seen?"POST_SEEN":"POST_NOT_SEEN",observed.response,observed.completion,status,attendance].join(":"));
+        } finally {
+          page.off("request",onRequest);page.off("response",onResponse);page.off("requestfinished",onFinished);page.off("requestfailed",onFailed);
+        }
         await expect(participantRow.getByText(scenario.uiStatus, { exact: true })).toBeVisible();
 
         const storedReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });

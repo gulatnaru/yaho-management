@@ -10,7 +10,6 @@ import {
   assertDeploymentMatchesRepository,
   assertPreviewIdentityResponse,
   playwrightCliPath,
-  readPreviewE2eConfiguration,
   withPreviewDatabaseLock,
 } from "@/lib/e2e/preview-runner";
 import { PreviewE2eSafetyError } from "@/lib/e2e/preview-safety";
@@ -21,8 +20,12 @@ import {
   type PreviewCleanupClient,
 } from "@/lib/e2e/preview-cleanup";
 import { cleanupPhase20PreviewRun } from "@/lib/e2e/phase20-cleanup";
+import { cleanupPhase21PreviewRun } from "@/lib/e2e/phase21-cleanup";
+import { cleanupPreviewRunPhases } from "@/lib/e2e/preview-cleanup-phases";
 import { previewE2eSafeSummaryPath, writePreviewE2eSafeSummary } from "@/lib/e2e/preview-run-summary";
 import { previewPlaywrightArguments } from "@/lib/e2e/preview-focus";
+import {PREVIEW_NO_COPY_PROMPT} from "@/lib/e2e/preview-artifact-policy";
+import {readPreviewInvocationConfiguration} from "@/lib/e2e/preview-invocation";
 
 let activeSummaryPath: string | undefined;
 let activeSummary: Parameters<typeof writePreviewE2eSafeSummary>[1] | undefined;
@@ -100,8 +103,7 @@ function runPlaywright(
 
 async function main(): Promise<void> {
   loadEnvConfig(process.cwd());
-  previewPlaywrightArguments(process.env.PREVIEW_E2E_FOCUS);
-  const configuration = readPreviewE2eConfiguration();
+  const configuration = readPreviewInvocationConfiguration(process.env);
   activeSummaryPath = previewE2eSafeSummaryPath(configuration.runId);
   // This artifact exists before the child inherits stdout, so a lost terminal
   // result cannot be mistaken for a passing or empty guarded run.
@@ -141,7 +143,7 @@ async function main(): Promise<void> {
     const exitCode = await withPreviewDatabaseLock({
       client: directClient,
       onSessionLost: stopChild,
-      run: () => {
+      run: (lockSession) => {
         proofDirectory = mkdtempSync(path.join(os.tmpdir(), "yaho-preview-e2e-"));
         const proofPath = path.join(proofDirectory, "runner-proof");
         const proof = randomUUID();
@@ -153,7 +155,6 @@ async function main(): Promise<void> {
           issuedAt,
           signature: signPreviewRun(configuration.runId, configuration.deploymentSha, issuedAt, configuration.handshakeSecret),
         });
-        let cleanupSucceeded = false;
         return databaseClient.previewE2eRunLease.create({
           data: { runId: configuration.runId, deploymentSha: configuration.deploymentSha, expiresAt: new Date(issuedAt + 24 * 60 * 1000) },
         }).then(async () => runWithPreviewCleanup({
@@ -165,6 +166,7 @@ async function main(): Promise<void> {
                 {
                   ...process.env,
                   PLAYWRIGHT_PREVIEW_E2E: "1",
+                  PLAYWRIGHT_NO_COPY_PROMPT: PREVIEW_NO_COPY_PROMPT,
                   PLAYWRIGHT_BASE_URL: configuration.baseUrl,
                   YAHO_E2E_RUN_ID: configuration.runId,
                   PREVIEW_E2E_RUNNER_PROOF_PATH: proofPath,
@@ -190,20 +192,21 @@ async function main(): Promise<void> {
             }
           },
           cleanup: async () => {
-            let phase20Error: unknown;
-            try {
-              const phase20 = await cleanupPhase20PreviewRun(databaseClient, configuration.runId);
-              if (phase20.residualGroups !== 0) throw new Error("Phase20 synthetic cleanup left group rows");
-            } catch (error) {
-              // Always attempt marker-root cleanup as well: an interrupted
-              // Phase 20 browser fixture may already have created classes,
-              // children or reservations before the dependent cleanup fails.
-              phase20Error = error;
-            }
-            const legacy = await cleanupPreviewRun(databaseClient as unknown as PreviewCleanupClient, configuration.runId);
-            if (phase20Error) throw phase20Error;
-            cleanupSucceeded = true;
-            updateSafeSummary({ phase: "CLEANUP", cleanup: "PASSED", errorCode: "NONE" });
+            const legacy = await cleanupPreviewRunPhases({
+              phase21: async () => {
+                const report = await cleanupPhase21PreviewRun(databaseClient, {runId: configuration.runId, deploymentSha: configuration.deploymentSha});
+                if (report.residualAiRows || report.residualPrograms || report.residualClasses) throw new Error("Phase21 cleanup left owned rows");
+              },
+              phase20: async () => {
+                const report = await cleanupPhase20PreviewRun(databaseClient, configuration.runId);
+                if (report.residualGroups !== 0) throw new Error("Phase20 synthetic cleanup left group rows");
+              },
+              legacy: () => cleanupPreviewRun(databaseClient as unknown as PreviewCleanupClient, configuration.runId),
+              // Delete ownership in the SAME transaction that holds the global lock.
+              // Session loss/commit failure rolls the lease deletion back.
+              releaseLease: () => lockSession.$queryRaw`DELETE FROM "PreviewE2eRunLease" WHERE "runId"=${configuration.runId} AND "deploymentSha"=${configuration.deploymentSha} RETURNING "id"`,
+            });
+            updateSafeSummary({phase:"CLEANUP",cleanup:"PASSED",errorCode:"NONE"});
             return legacy;
           },
           onCleanupFailure: ({ code, report }) => {
@@ -211,12 +214,7 @@ async function main(): Promise<void> {
             void report;
             updateSafeSummary({ phase: "FAILED", cleanup: "FAILED", errorCode: "PREVIEW_SAFETY_ERROR" });
           },
-        })).finally(async () => {
-          // A failed/interrupted cleanup keeps the narrow lease ownership
-          // proof for a guarded recovery; only a fully successful two-phase
-          // cleanup releases the lease row.
-          if (cleanupSucceeded) await databaseClient.previewE2eRunLease.deleteMany({ where: { runId: configuration.runId } });
-        });
+        }));
       },
     });
     if (exitCode !== 0) {
@@ -229,7 +227,11 @@ async function main(): Promise<void> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     stopChild();
-    if (proofDirectory) rmSync(proofDirectory, { recursive: true, force: true });
+    if (proofDirectory) {
+      const resolved=path.resolve(proofDirectory),temp=path.resolve(os.tmpdir());
+      if(!resolved.startsWith(temp+path.sep)||!path.basename(resolved).startsWith("yaho-preview-e2e-"))throw new Error("PREVIEW_ARTIFACT_PATH_DENIED");
+      rmSync(resolved, { recursive: true, force: true });
+    }
     await Promise.all([databaseClient.$disconnect(), directClient.$disconnect()]);
   }
 }
