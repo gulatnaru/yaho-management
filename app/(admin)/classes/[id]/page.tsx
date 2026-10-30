@@ -54,11 +54,14 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
   const canManage = principal.role !== "TEACHER";
   const [classDetail, reservations, applicationLink] = await Promise.all([
     getClassDetailForPrincipal(id, principal),
-    isAdmin
+    // P1: SUPER_ADMIN은 ADMIN과 동일한 전체 예약 목록을 본다. STAFF는 예약 목록 접근이 없다.
+    isAdmin || principal.role === "SUPER_ADMIN"
       ? listReservationsByClassSchedule(id)
       : principal.role === "MANAGER"
         ? listOperationalReservationsByClassSchedule(id)
-        : listTeacherReservationsByClassSchedule(id, principal),
+        : principal.role === "TEACHER"
+          ? listTeacherReservationsByClassSchedule(id, principal)
+          : Promise.resolve([]),
     // 예약 신청 링크는 ADMIN 전용이다(ADR-053). 다른 역할은 조회하지도 않는다.
     isAdmin ? getApplicationLinkForClass(id) : Promise.resolve(null),
   ]);

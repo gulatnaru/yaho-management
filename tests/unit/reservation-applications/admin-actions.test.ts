@@ -31,6 +31,7 @@ const confirmSubmissionCoreMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminMock(...args),
+  requireAdminOrSuperAdminPrincipal: (...args: unknown[]) => requireAdminMock(...args),
 }));
 vi.mock("@/lib/db/prisma", () => ({ prisma: { reservationApplication: { findUnique: (...args: unknown[]) => applicationLookupMock(...args) } } }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));

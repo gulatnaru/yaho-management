@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDateTime } from "@/lib/classes/datetime";
 import { prisma } from "@/lib/db/prisma";
 import { GroupLinkButton } from "../group-link-button";
@@ -9,7 +9,7 @@ import { GroupEditForm } from "../group-edit-form";
 export const dynamic = "force-dynamic";
 
 export default async function ReservationApplicationGroupPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const { id } = await params;
   const group = await prisma.reservationApplicationGroup.findUnique({ where: { id }, select: { id: true, isActive: true, classes: { select: { classSchedule: { select: { id: true, startsAt: true, status: true, applicationPrice: true, program: { select: { name: true } } } } }, orderBy: { classSchedule: { startsAt: "asc" } } }, links: { where: { isActive: true }, orderBy: { issuedAt: "desc" }, take: 1, select: { issuedAt: true } } } });
   if (!group) notFound();

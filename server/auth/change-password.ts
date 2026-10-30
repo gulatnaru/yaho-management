@@ -4,7 +4,7 @@ import {
   lockAccountMutations,
   type AccountMutationLockClient,
 } from "@/lib/auth/account-lock";
-import { isOperationalRole, isUserRole } from "@/lib/auth/roles";
+import { isUserRole } from "@/lib/auth/roles";
 import type { CurrentPrincipal } from "@/lib/auth/principal";
 import type { ChangeOwnPasswordInput } from "@/lib/validation/auth";
 
@@ -71,7 +71,8 @@ function isLivePasswordRow(row: PasswordUserRow, principal: CurrentPrincipal): b
     return false;
   }
 
-  if (isOperationalRole(row.role)) {
+  // P1: TEACHER가 아닌 모든 역할은 teacherId 연결이 없어야 한다 (위 credentials.ts와 동일 근거).
+  if (row.role !== "TEACHER") {
     return row.teacherId === null;
   }
 

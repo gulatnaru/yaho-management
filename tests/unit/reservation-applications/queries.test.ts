@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/auth/authorization", () => ({ requireAdminPrincipal: vi.fn().mockResolvedValue({ role: "ADMIN" }), requireAdminOrSuperAdminPrincipal: vi.fn().mockResolvedValue({ role: "ADMIN" }), }));
+
 const applicationFindMany = vi.fn();
 const applicationFindUnique = vi.fn();
 const applicationCount = vi.fn();

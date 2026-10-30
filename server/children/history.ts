@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { requireAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
 import {
   CHILD_HISTORY_PAGE_SIZE,
   MAX_CHILD_HISTORY_PAGE,
@@ -115,7 +115,7 @@ export async function listChildUpcomingReservations(
   childId: string,
   now: Date,
 ): Promise<ChildHistoryItem[]> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   return prisma.reservation.findMany({
     where: buildChildUpcomingWhere(childId, now),
     select: CHILD_HISTORY_ITEM_SELECT,
@@ -146,7 +146,7 @@ export async function listChildPastHistory(
   now: Date,
   page: number,
 ) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const safePage =
     Number.isInteger(page) && page > 0 ? Math.min(page, MAX_CHILD_HISTORY_PAGE) : 1;
   const where = buildChildPastHistoryWhere(childId, now);

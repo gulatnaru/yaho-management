@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDateTime } from "@/lib/classes/datetime";
 import { prisma } from "@/lib/db/prisma";
 import { DepositForm } from "./deposit-form";
@@ -8,7 +8,7 @@ import { SubmissionConfirmationForm } from "./confirmation-form";
 
 export const dynamic = "force-dynamic";
 export default async function ApplicationSubmissionPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireAdminPrincipal(); const { id } = await params;
+  await requireAdminOrSuperAdminPrincipal(); const { id } = await params;
   const submission = await prisma.reservationApplicationSubmission.findUnique({
     where: { id },
     select: {

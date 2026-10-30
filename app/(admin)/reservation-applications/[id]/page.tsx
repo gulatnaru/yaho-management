@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningBanner } from "@/components/ui/warning-banner";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDate, formatKstDateTime, formatKstDateTimeRange } from "@/lib/classes/datetime";
 import { getClassDisplayStatus } from "@/lib/classes/status";
 import {
@@ -46,7 +46,7 @@ function AgreementBadge({ agreed, agreedLabel = "동의", declinedLabel = "미�
 }
 
 export default async function ReservationApplicationDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const { id } = await params;
   const application = await getReservationApplicationDetail(id);
   if (!application) notFound();

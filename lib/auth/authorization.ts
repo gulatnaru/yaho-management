@@ -2,15 +2,25 @@ import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db/prisma";
+import { isOperationalPrincipal } from "@/lib/auth/principal";
 import {
   resolveSessionPrincipal,
   type AdminPrincipal,
   type CurrentPrincipal,
+  type ManagerPrincipal,
   type PrincipalLookupClient,
+  type SuperAdminPrincipal,
 } from "@/lib/auth/principal";
 
-export { isAdmin } from "@/lib/auth/roles";
-export type { AdminPrincipal, CurrentPrincipal, ManagerPrincipal, TeacherPrincipal } from "@/lib/auth/principal";
+export { isAdmin, isOperationalRole, isStaff, isSuperAdmin } from "@/lib/auth/roles";
+export type {
+  AdminPrincipal,
+  CurrentPrincipal,
+  ManagerPrincipal,
+  StaffPrincipal,
+  SuperAdminPrincipal,
+  TeacherPrincipal,
+} from "@/lib/auth/principal";
 
 type ResourceAuthorizationClient = PrincipalLookupClient & {
   classTeacher: {
@@ -60,9 +70,40 @@ export async function requireCurrentPrincipal(): Promise<CurrentPrincipal> {
   return enforcePasswordChange(await requirePasswordChangePrincipal());
 }
 
-export async function requireOperationalPrincipal(): Promise<AdminPrincipal | Extract<CurrentPrincipal, { role: "MANAGER" }>> {
+export async function requireOperationalPrincipal(): Promise<
+  SuperAdminPrincipal | AdminPrincipal | ManagerPrincipal
+> {
   const principal = await requireCurrentPrincipal();
-  if (principal.role === "TEACHER") {
+  // P1: TEACHER 제외 방식이 아니라 명시적 열거 방식이다. STAFF는 이 가드를 통과하지 않는다.
+  if (!isOperationalPrincipal(principal)) {
+    notFound();
+  }
+  return principal;
+}
+
+/** Non-throwing public-route lookup; stale, forced-password and non-operational sessions fail closed. */
+export async function getOptionalOperationalPrincipal(): Promise<
+  SuperAdminPrincipal | AdminPrincipal | ManagerPrincipal | null
+> {
+  try {
+    const principal = await getRequestPrincipal();
+    if (!principal || principal.mustChangePassword) return null;
+    if (!isOperationalPrincipal(principal)) return null;
+    return principal;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * P1 금융·운영 ADMIN 진입점용 가드. requireAdminPrincipal을 전역으로 확장하지 않는다 —
+ * 전역 확장은 계정 관리 API까지 SUPER_ADMIN에게 의도치 않게 개방하기 때문이다.
+ * 계정 관리 진입점은 P2 전환 게이트 전까지 requireAdminPrincipal(ADMIN 전용)을 유지한다.
+ * 메뉴 노출이 이 가드를 대체하지 않으며, 승인·실행 분리 규칙을 우회하는 권한을 부여하지 않는다.
+ */
+export async function requireAdminOrSuperAdminPrincipal(): Promise<SuperAdminPrincipal | AdminPrincipal> {
+  const principal = await requireCurrentPrincipal();
+  if (principal.role !== "SUPER_ADMIN" && principal.role !== "ADMIN") {
     notFound();
   }
   return principal;
@@ -71,6 +112,14 @@ export async function requireOperationalPrincipal(): Promise<AdminPrincipal | Ex
 export async function requireAdminPrincipal(): Promise<AdminPrincipal> {
   const principal = await requireCurrentPrincipal();
   if (principal.role !== "ADMIN") {
+    notFound();
+  }
+  return principal;
+}
+
+export async function requireSuperAdminPrincipal(): Promise<SuperAdminPrincipal> {
+  const principal = await requireCurrentPrincipal();
+  if (principal.role !== "SUPER_ADMIN") {
     notFound();
   }
   return principal;

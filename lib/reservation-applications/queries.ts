@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { rankChildCandidates, type ApplicationChildCandidate, type ChildCandidateRow } from "./candidates";
 import { findDuplicateApplicationIds } from "./duplicates";
@@ -17,7 +18,7 @@ import {
 } from "./retention";
 
 /**
- * ADMIN 전용 예약 신청 조회(ADR-053). 호출하는 page/action 이 requireAdminPrincipal() 을 먼저 통과해야 한다.
+ * ADMIN 전용 예약 신청 조회(ADR-053). 호출하는 page/action 이 requireAdminOrSuperAdminPrincipal() 을 먼저 통과해야 한다.
  * 목록에는 요청사항·생년월일을 싣지 않고 상세에서만 조회한다(최소 노출).
  */
 
@@ -76,6 +77,7 @@ export async function listReservationApplications({
   status: ApplicationListStatus;
   page: number;
 }) {
+  await requireAdminOrSuperAdminPrincipal();
   const where = buildApplicationListWhere(status);
   const [records, total] = await Promise.all([
     prisma.reservationApplication.findMany({
@@ -154,6 +156,7 @@ export type ApplicationDetail = Prisma.ReservationApplicationGetPayload<{
 }> & { isPossibleDuplicate: boolean };
 
 export async function getReservationApplicationDetail(id: string): Promise<ApplicationDetail | null> {
+  await requireAdminOrSuperAdminPrincipal();
   const application = await prisma.reservationApplication.findUnique({
     where: { id },
     select: APPLICATION_DETAIL_SELECT,

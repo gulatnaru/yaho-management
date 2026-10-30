@@ -2,9 +2,11 @@ import { requireAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 
 export const ACCOUNT_ROLE_LABELS = {
+  SUPER_ADMIN: "최고관리자",
   ADMIN: "관리자",
   MANAGER: "준관리자",
   TEACHER: "선생님",
+  STAFF: "직원",
 } as const;
 
 export const ACCOUNT_CHANGE_LABELS = {

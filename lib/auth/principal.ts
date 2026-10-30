@@ -6,8 +6,18 @@ export type AdminPrincipal = PrincipalBase & {
   teacherId: null;
 };
 
+export type SuperAdminPrincipal = PrincipalBase & {
+  role: "SUPER_ADMIN";
+  teacherId: null;
+};
+
 export type ManagerPrincipal = PrincipalBase & {
   role: "MANAGER";
+  teacherId: null;
+};
+
+export type StaffPrincipal = PrincipalBase & {
+  role: "STAFF";
   teacherId: null;
 };
 
@@ -16,7 +26,12 @@ export type TeacherPrincipal = PrincipalBase & {
   teacherId: string;
 };
 
-export type CurrentPrincipal = AdminPrincipal | ManagerPrincipal | TeacherPrincipal;
+export type CurrentPrincipal =
+  | SuperAdminPrincipal
+  | AdminPrincipal
+  | ManagerPrincipal
+  | TeacherPrincipal
+  | StaffPrincipal;
 
 type PrincipalBase = {
   userId: string;
@@ -112,6 +127,16 @@ function toPrincipal(row: PrincipalUserRow, sessionAuthVersion: number): Current
     return { ...base, role: row.role, teacherId: null };
   }
 
+  // STAFF는 로그인·본인 비밀번호 변경 경로를 위해 principal로 해석되지만,
+  // 운영·ADMIN 가드에서는 거부된다 (deny-by-default). TEACHER가 아닌 행은
+  // teacherId·teacher 연결이 없어야 하며, 불일치 행은 fail-closed로 null이다.
+  if (row.role === "STAFF") {
+    if (row.teacherId !== null || row.teacher !== null) {
+      return null;
+    }
+    return { ...base, role: "STAFF", teacherId: null };
+  }
+
   if (
     row.role === "TEACHER" &&
     row.teacherId &&
@@ -122,6 +147,16 @@ function toPrincipal(row: PrincipalUserRow, sessionAuthVersion: number): Current
   }
 
   return null;
+}
+
+/**
+ * 운영 가드 통과 principal 판정. isOperationalRole의 역할 열거를 principal 수준의
+ * 타입 가드로 승격한 것으로, 가드 반환 타입을 좁히는 데 사용한다.
+ */
+export function isOperationalPrincipal(
+  principal: CurrentPrincipal,
+): principal is SuperAdminPrincipal | AdminPrincipal | ManagerPrincipal {
+  return isOperationalRole(principal.role);
 }
 
 /**

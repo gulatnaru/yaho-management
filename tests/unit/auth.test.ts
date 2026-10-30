@@ -22,17 +22,22 @@ describe("isAdmin", () => {
 });
 
 describe("Phase 16 roles", () => {
-  it("accepts exactly ADMIN, MANAGER, and TEACHER", () => {
+  it("accepts exactly SUPER_ADMIN, ADMIN, MANAGER, TEACHER, and STAFF", () => {
+    expect(isUserRole("SUPER_ADMIN")).toBe(true);
     expect(isUserRole("ADMIN")).toBe(true);
     expect(isUserRole("MANAGER")).toBe(true);
     expect(isUserRole("TEACHER")).toBe(true);
+    expect(isUserRole("STAFF")).toBe(true);
     expect(isUserRole("OWNER")).toBe(false);
   });
 
-  it("treats ADMIN and MANAGER as operational roles", () => {
+  it("treats SUPER_ADMIN, ADMIN, and MANAGER as operational roles (explicit enumeration)", () => {
+    expect(isOperationalRole("SUPER_ADMIN")).toBe(true);
     expect(isOperationalRole("ADMIN")).toBe(true);
     expect(isOperationalRole("MANAGER")).toBe(true);
     expect(isOperationalRole("TEACHER")).toBe(false);
+    // P1: STAFF는 열거에 포함되지 않아 deny-by-default다.
+    expect(isOperationalRole("STAFF")).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { formatKstDate } from "@/lib/classes/datetime";
 import { APPLICATION_STATUS_LABEL, PURGED_PERSONAL_DATA_LABEL } from "@/lib/reservation-applications/constants";
@@ -96,7 +96,7 @@ function ChildCandidateTable({ items }: { items: ChildRetentionCandidate[] }) {
  * 마지막 예약 수업일로부터 5년 보관한다. 신청 확정 이력이 없는 기존 고객은 대상이 아니다(ADR-058).
  */
 export default async function ReservationApplicationRetentionPage() {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const scan = await scanPersonalDataRetention(prisma, new Date());
 
   return (

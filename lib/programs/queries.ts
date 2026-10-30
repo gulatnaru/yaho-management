@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { requireAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal, requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import { buildProgramListWhere, type ProgramListStatus } from "@/lib/programs/query-builder";
 
@@ -76,7 +76,7 @@ export async function getProgramOperationalDetail(id: string) {
 }
 
 export async function getProgramAdminDetail(id: string) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   return prisma.program.findUnique({
     where: { id },
     select: PROGRAM_ADMIN_DETAIL_SELECT,

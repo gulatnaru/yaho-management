@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 import type {
   DashboardCalendarDayMetric,
@@ -155,7 +155,7 @@ export function buildTodayRefundsQuery(range: DateRange) {
 }
 
 export async function getTodayFinancialMetrics(range: DateRange): Promise<DashboardFinancialMetrics> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const [paymentFacts, refundFacts] = await Promise.all([
     prisma.$queryRaw<AmountFact[]>(buildTodayPaymentsQuery(range)),
     prisma.$queryRaw<AmountFact[]>(buildTodayRefundsQuery(range)),

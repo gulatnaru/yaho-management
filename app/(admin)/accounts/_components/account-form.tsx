@@ -14,7 +14,9 @@ type TeacherOption = { id: string; name: string };
 export type AccountFormDefaultValues = {
   name: string;
   email: string;
-  role: AccountRole;
+  // P1: SUPER_ADMIN 행도 상세 화면에서 조회되므로 타입에 포함한다.
+  // 단, 일반 수정 경로의 제출은 코어에서 SUPER_ADMIN_FORBIDDEN으로 거부된다 (P2에서 재작업).
+  role: AccountRole | "SUPER_ADMIN";
   teacherId: string;
   isActive: boolean;
 };
@@ -31,6 +33,8 @@ const ROLE_LABELS: Record<AccountRole, string> = {
   ADMIN: "관리자",
   MANAGER: "준관리자",
   TEACHER: "선생님",
+  // P1: 일반 생성 선택지에서 SUPER_ADMIN은 제외된다 (코어에서 서버 강제 거부).
+  STAFF: "직원",
 };
 
 const EMPTY_VALUES: AccountFormDefaultValues = {
@@ -52,7 +56,9 @@ export function AccountForm({
 }: AccountFormProps) {
   const action = mode === "edit" && accountId ? updateAccount.bind(null, accountId) : createAccount;
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
-  const [role, setRole] = useState<AccountRole>(defaultValues.role);
+  // P1: SUPER_ADMIN 행도 조회되므로 state 타입에 포함한다. Select 선택지에는 SUPER_ADMIN이 없어
+  // 일치하는 옵션이 없으면 빈 값으로 표시되며, 제출은 코어에서 SUPER_ADMIN_FORBIDDEN으로 거부된다 (P2 재작업).
+  const [role, setRole] = useState<AccountRole | "SUPER_ADMIN">(defaultValues.role);
 
   const value = <K extends keyof AccountFormDefaultValues>(key: K) =>
     state.values?.[key] ?? defaultValues[key];

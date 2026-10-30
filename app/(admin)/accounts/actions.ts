@@ -73,6 +73,8 @@ function accountMutationMessage(error: AccountMutationError): string {
       return "선택한 선생님을 계정에 연결할 수 없습니다. 활성 상태와 기존 연결을 확인해주세요.";
     case "ACTOR_NOT_ADMIN":
       return "계정 관리 권한을 다시 확인해주세요.";
+    case "SUPER_ADMIN_FORBIDDEN":
+      return "최고관리자 계정은 일반 경로로 생성·변경할 수 없습니다.";
   }
 }
 

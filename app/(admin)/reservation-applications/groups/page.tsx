@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { formatKstDateTime } from "@/lib/classes/datetime";
 import { prisma } from "@/lib/db/prisma";
 import { GroupCreateForm } from "./group-create-form";
@@ -7,7 +7,7 @@ import { GroupCreateForm } from "./group-create-form";
 export const dynamic = "force-dynamic";
 
 export default async function ReservationApplicationGroupsPage() {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const [classes, groups] = await Promise.all([
     prisma.classSchedule.findMany({ where: { status: "SCHEDULED", startsAt: { gt: new Date() } }, orderBy: { startsAt: "asc" }, select: { id: true, startsAt: true, applicationPrice: true, program: { select: { name: true } } } }),
     prisma.reservationApplicationGroup.findMany({ orderBy: { createdAt: "desc" }, take: 50, select: { id: true, isActive: true, createdAt: true, classes: { select: { classSchedule: { select: { startsAt: true, program: { select: { name: true } } } } }, orderBy: { classSchedule: { startsAt: "asc" } } } } }),

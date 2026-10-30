@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ACCOUNT_ROLES = ["ADMIN", "MANAGER", "TEACHER"] as const;
+export const ACCOUNT_ROLES = ["ADMIN", "MANAGER", "TEACHER", "STAFF"] as const;
 export type AccountRole = (typeof ACCOUNT_ROLES)[number];
 
 const emailSchema = z.string().trim().email("올바른 이메일 주소를 입력해주세요").max(320);

@@ -123,13 +123,19 @@ export async function getClassDetail(id: string) {
 }
 
 export async function getClassDetailForPrincipal(id: string, principal: CurrentPrincipal) {
-  if (principal.role === "ADMIN") {
+  // P1: SUPER_ADMIN은 ADMIN과 동일한 전체 상세를 본다 (금융 필드 포함).
+  // STAFF는 운영 상세 접근이 없어 fail-closed로 null을 반환한다 (deny-by-default).
+  if (principal.role === "ADMIN" || principal.role === "SUPER_ADMIN") {
     return getClassDetail(id);
   }
 
   if (principal.role === "MANAGER") {
     const detail = await prisma.classSchedule.findUnique({ where: { id }, select: CLASS_NON_ADMIN_DETAIL_SELECT });
     return detail ? { ...detail, applicationPrice: null } : null;
+  }
+
+  if (principal.role === "STAFF") {
+    return null;
   }
 
   const detail = await prisma.classSchedule.findFirst({

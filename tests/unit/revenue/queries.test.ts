@@ -8,6 +8,7 @@ const requireAdminPrincipalMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+  requireAdminOrSuperAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
 }));
 
 vi.mock("@/lib/db/prisma", () => ({

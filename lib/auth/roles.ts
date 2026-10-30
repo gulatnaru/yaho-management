@@ -1,4 +1,4 @@
-export const USER_ROLES = ["ADMIN", "MANAGER", "TEACHER"] as const;
+export const USER_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEACHER", "STAFF"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -12,6 +12,23 @@ export function isAdmin(user: AuthorizedUser): boolean {
   return user?.role === "ADMIN";
 }
 
-export function isOperationalRole(role: UserRole): role is "ADMIN" | "MANAGER" {
-  return role === "ADMIN" || role === "MANAGER";
+export function isSuperAdmin(user: AuthorizedUser): boolean {
+  return user?.role === "SUPER_ADMIN";
+}
+
+export function isStaff(user: AuthorizedUser): boolean {
+  return user?.role === "STAFF";
+}
+
+/**
+ * P1 운영 가드 통과 역할의 명시적 열거. TEACHER 제외 방식이 아니라 열거 방식이므로
+ * STAFF를 추가하는 것만으로는 운영 접근이 생기지 않으며, STAFF는 deny-by-default다.
+ * 계정 관리 가드(requireAdminPrincipal)는 이 집합과 별개로 ADMIN 전용을 유지한다.
+ */
+export const OPERATIONAL_GUARD_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER"] as const;
+
+export type OperationalGuardRole = (typeof OPERATIONAL_GUARD_ROLES)[number];
+
+export function isOperationalRole(role: UserRole): role is OperationalGuardRole {
+  return (OPERATIONAL_GUARD_ROLES as readonly string[]).includes(role);
 }

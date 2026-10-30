@@ -22,9 +22,11 @@ datasource db {
 // ─────────────────────────────────────────────
 
 enum Role {
+  SUPER_ADMIN
   ADMIN
   MANAGER
   TEACHER
+  STAFF
 }
 
 enum UserAccountChangeType {
@@ -166,7 +168,9 @@ model User {
   email              String   @unique
   name               String
   password           String? // Auth.js Credentials 사용 시. OAuth 도입 시 Account/Session 모델 추가 필요
-  role               Role     @default(ADMIN)
+  // P1 (OQ-4 안 B): 기본값 ADMIN 제거. 신규 계정은 역할을 필수 지정해야 하며,
+  // role 미지정 생성이 최고 권한을 기본 부여하지 않는다.
+  role               Role
   isActive           Boolean  @default(true)
   teacherId          String?  @unique
   mustChangePassword Boolean  @default(false)

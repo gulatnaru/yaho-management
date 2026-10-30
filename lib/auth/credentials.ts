@@ -1,6 +1,6 @@
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/db/prisma";
-import { isOperationalRole, isUserRole } from "@/lib/auth/roles";
+import { isUserRole } from "@/lib/auth/roles";
 import { credentialsSchema } from "@/lib/validation/auth";
 
 // bcrypt cost 12로 미리 생성한 고정 dummy hash다. 존재하지 않거나 password가 없는
@@ -74,7 +74,9 @@ export async function authenticateOperator(
     return null;
   }
 
-  if (isOperationalRole(user.role) && user.teacherId !== null) {
+  // P1: TEACHER가 아닌 모든 역할(SUPER_ADMIN·ADMIN·MANAGER·STAFF)은 teacherId 연결이 없어야 한다.
+  // (이전에는 isOperationalRole이 ADMIN·MANAGER만을 의미했으나, 5종 체계에서는 비-TEACHER 검사가 정확하다.)
+  if (user.role !== "TEACHER" && user.teacherId !== null) {
     return null;
   }
 

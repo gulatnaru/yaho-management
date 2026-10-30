@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { ChildPersonalDataPurgedError } from "@/lib/children/errors";
 import { prisma } from "@/lib/db/prisma";
 import { readFormString } from "@/lib/forms/form-data";
@@ -47,14 +47,14 @@ import {
 
 /**
  * 예약 신청 관리 action 은 모두 ADMIN 전용이다(ADR-053). 입금 확인은 재무정보라 MANAGER 에게 허용하지 않는다.
- * 각 action 이 requireAdminPrincipal() 을 먼저 호출해 MANAGER/TEACHER 의 직접 호출을 차단한다.
+ * 각 action 이 requireAdminOrSuperAdminPrincipal() 을 먼저 호출해 MANAGER/TEACHER 의 직접 호출을 차단한다.
  */
 
 export type ApplicationActionResult = { error?: string };
 
 /** Phase 20 group creation is ADMIN-only and uses the schedule's explicit applicationPrice. */
 export async function createApplicationGroup(formData: FormData): Promise<{ error?: string; groupId?: string }> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   const parsed = groupCreateSchema.safeParse({ classScheduleIds: formData.getAll("classScheduleId") });
   if (!parsed.success) return { error: "하나 이상의 중복되지 않은 클래스를 선택해주세요." };
   try {
@@ -68,7 +68,7 @@ export async function createApplicationGroup(formData: FormData): Promise<{ erro
 }
 
 export async function issueApplicationGroupLink(groupId: string): Promise<{ error?: string; token?: string }> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   try {
     const result = await issueApplicationGroupLinkCore(prisma, { groupId, actorUserId: principal.userId, now: new Date() });
     revalidatePath(`/reservation-applications/groups/${groupId}`);
@@ -81,7 +81,7 @@ export async function issueApplicationGroupLink(groupId: string): Promise<{ erro
 
 /** Membership edits affect only future submissions. Existing submitted quotes remain immutable. */
 export async function updateApplicationGroup(groupId: string, formData: FormData): Promise<{ error?: string }> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const parsed = groupCreateSchema.safeParse({ classScheduleIds: formData.getAll("classScheduleId") });
   if (!parsed.success) return { error: "하나 이상의 중복되지 않은 클래스를 선택해주세요." };
   try {
@@ -97,7 +97,7 @@ export async function updateApplicationGroup(groupId: string, formData: FormData
 
 /** Stopping a group invalidates every issued group capability. */
 export async function stopApplicationGroup(groupId: string): Promise<{ error?: string }> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   try {
     await stopApplicationGroupCore(prisma, { groupId });
     revalidatePath(`/reservation-applications/groups/${groupId}`);
@@ -110,7 +110,7 @@ export async function stopApplicationGroup(groupId: string): Promise<{ error?: s
 }
 
 export async function saveReservationApplicationSettings(formData: FormData): Promise<ApplicationActionResult> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   const parsed = reservationApplicationSettingsSchema.safeParse({
     bankName: formData.get("bankName"), accountNumber: formData.get("accountNumber"), accountHolder: formData.get("accountHolder"),
     blogUrl: formData.get("blogUrl"), instagramUrl: formData.get("instagramUrl"), kakaoChannelUrl: formData.get("kakaoChannelUrl"),
@@ -127,7 +127,7 @@ export async function saveReservationApplicationSettings(formData: FormData): Pr
 }
 
 export async function importLegacyReservationApplicationSettings(): Promise<ApplicationActionResult> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   try {
     const imported = await importLegacyReservationApplicationSettingsCore(prisma, { actorUserId: principal.userId });
     revalidatePath("/reservation-applications/settings");
@@ -140,7 +140,7 @@ export async function importLegacyReservationApplicationSettings(): Promise<Appl
 
 /** Actual bank transactions are ADMIN-only and remain separate from Payment until confirmation. */
 export async function recordApplicationDeposit(submissionId: string, formData: FormData): Promise<{ error?: string; availableAmount?: number }> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   const parsed = depositInputSchema.safeParse({ amount: formData.get("amount"), payerName: formData.get("payerName"), depositedAt: formData.get("depositedAt"), idempotencyKey: formData.get("idempotencyKey") || undefined });
   if (!parsed.success) return { error: "실제 입금액·입금자명·입금일시를 확인해주세요." };
   try {
@@ -155,7 +155,7 @@ export async function recordApplicationDeposit(submissionId: string, formData: F
 }
 
 export async function recordApplicationReturn(obligationId: string, formData: FormData): Promise<{ error?: string; remainingAmount?: number }> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   const parsed = returnInputSchema.safeParse({ amount: formData.get("amount"), reason: formData.get("reason"), returnedAt: formData.get("returnedAt"), idempotencyKey: formData.get("idempotencyKey") });
   if (!parsed.success) return { error: "반환 금액·사유·실제 반환일시를 확인해주세요." };
   try {
@@ -176,7 +176,7 @@ export type SubmissionConfirmationActionResult = {
 };
 
 export async function confirmApplicationSubmission(formData: FormData): Promise<SubmissionConfirmationActionResult> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   let payload: unknown;
   try { payload = JSON.parse(String(formData.get("payload") ?? "")); } catch { return { error: "확정할 아이를 다시 선택해주세요." }; }
   const parsed = submissionConfirmationSchema.safeParse(payload);
@@ -213,7 +213,7 @@ function revalidateApplication(applicationId: string) {
 
 /** 클래스 신청 링크 만들기·재발급(ADR-052). 재발급하면 이전 링크는 즉시 무효가 된다. */
 export async function issueApplicationLink(classScheduleId: string): Promise<ApplicationActionResult> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   try {
     await issueApplicationLinkCore(prisma, { classScheduleId, actorUserId: principal.userId, now: new Date() });
   } catch (error) {
@@ -229,7 +229,7 @@ export async function issueApplicationLink(classScheduleId: string): Promise<App
 }
 
 export async function stopApplicationLink(classScheduleId: string): Promise<ApplicationActionResult> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   try {
     await stopApplicationLinkCore(prisma, { classScheduleId });
   } catch (error) {
@@ -243,7 +243,7 @@ export async function stopApplicationLink(classScheduleId: string): Promise<Appl
 
 /** ADMIN explicitly upgrades a priced legacy class URL while preserving the same raw capability. */
 export async function upgradeLegacyApplicationLink(classScheduleId: string): Promise<{ error?: string; groupId?: string }> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   try {
     const settings = await getReservationApplicationSettings(prisma);
     const result = await upgradeLegacyApplicationLinkCore(prisma, { classScheduleId, actorUserId: principal.userId, now: new Date(), configReady: Boolean(settings && isReservationApplicationSettingsReady(settings)) });
@@ -257,7 +257,7 @@ export async function upgradeLegacyApplicationLink(classScheduleId: string): Pro
 
 /** 입금 확인 기록. Payment 를 만들지 않는다 — 결제는 확정 후 기존 결제 화면에서 등록한다. */
 export async function confirmApplicationDeposit(applicationId: string): Promise<ApplicationActionResult> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   try {
     await confirmApplicationDepositCore(prisma, { applicationId, actorUserId: principal.userId, now: new Date() });
   } catch (error) {
@@ -315,7 +315,7 @@ export async function confirmReservationApplication(
   _previousState: ApplicationConfirmFormState,
   formData: FormData,
 ): Promise<ApplicationConfirmFormState> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   const values = { childChoice: readFormString(formData, "childChoice"), memo: readFormString(formData, "memo") };
 
   const parsed = applicationConfirmSchema.safeParse({
@@ -381,7 +381,7 @@ async function closeApplication(
   status: ApplicationClosingStatus,
   formData: FormData,
 ): Promise<ApplicationResolveFormState> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   const values = { resolutionNote: readFormString(formData, "resolutionNote") };
 
   const parsed = applicationResolutionSchema.safeParse({ resolutionNote: formData.get("resolutionNote") });
@@ -439,7 +439,7 @@ export type PersonalDataPurgeActionResult = {
  * 화면에서 본 목록과 달라도 그 시점에 만료된 대상만 파기한다.
  */
 export async function purgeExpiredPersonalData(): Promise<PersonalDataPurgeActionResult> {
-  const principal = await requireAdminPrincipal();
+  const principal = await requireAdminOrSuperAdminPrincipal();
   let result: PersonalDataPurgeResult;
   try {
     result = await purgeExpiredPersonalDataCore(prisma, { actorUserId: principal.userId, now: new Date() });

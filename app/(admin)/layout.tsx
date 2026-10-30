@@ -24,11 +24,23 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
     ];
   }
 
-  return [
-    ...OPERATIONAL_NAV_ITEMS,
-    ...(principal.role === "ADMIN"
+  // P1 (OQ-11): STAFF는 확정된 업무 범위(P8) 이외 deny-by-default이므로,
+  // 메뉴도 대시보드·비밀번호 변경으로 제한한다 (TEACHER 축소 패턴과 동일 취지).
+  if (principal.role === "STAFF") {
+    return [
+      { href: "/dashboard", label: "대시보드" },
+      { href: "/account/password", label: "비밀번호 변경" },
+    ];
+  }
+
+  // P1 (OQ-11): SUPER_ADMIN은 전체 운영 메뉴를 본다. 단, 메뉴 노출이 권한 이관을 뜻하지 않는다 —
+  // 계정 관리 진입점은 P2 전환 게이트 전까지 ADMIN 전용 가드를 유지하므로,
+  // P1 단계에서 SUPER_ADMIN이 계정 관리를 열면 가드에서 차단된다 (P2에서 해소).
+  const adminMenuItems =
+    principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
       ? [
           // 예약 신청 관리는 ADMIN 전용(ADR-053). 자동 알림 대신 처리 대기 건수를 메뉴에 표시한다.
+          // P1: SUPER_ADMIN도 이 메뉴를 보며, 조회 가드는 requireAdminOrSuperAdminPrincipal로 확장됐다.
           {
             href: "/reservation-applications",
             label: pendingApplicationCount > 0 ? `예약 신청 (${pendingApplicationCount})` : "예약 신청",
@@ -37,15 +49,18 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
           { href: "/revenue", label: "매출 집계" },
           { href: "/accounts", label: "계정 관리" },
         ]
-      : []),
-    { href: "/account/password", label: "비밀번호 변경" },
-  ];
+      : [];
+
+  return [...OPERATIONAL_NAV_ITEMS, ...adminMenuItems, { href: "/account/password", label: "비밀번호 변경" }];
 }
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const principal = await requireCurrentPrincipal();
   const displayName = principal.name || principal.email;
-  const pendingApplicationCount = principal.role === "ADMIN" ? await countPendingReservationApplications() : 0;
+  const pendingApplicationCount =
+    principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
+      ? await countPendingReservationApplications().catch(() => null)
+      : 0;
   const navigationItems = getNavigationItems(principal, pendingApplicationCount);
 
   return (

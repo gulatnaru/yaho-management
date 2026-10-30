@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import {
   parseApplicationListPage,
   parseApplicationListStatus,
@@ -23,7 +23,7 @@ function buildPageHref(status: ApplicationListStatus, page: number) {
 }
 
 export default async function ReservationApplicationsPage({ searchParams }: ReservationApplicationsPageProps) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const resolvedParams = await searchParams;
   const status = parseApplicationListStatus(resolvedParams.status);
   const { applications, total, page, totalPages } = await listReservationApplications({

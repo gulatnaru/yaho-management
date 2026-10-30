@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import {
-  requireAdminPrincipal,
+  requireAdminOrSuperAdminPrincipal,
   requireAssignedClass,
   requireOperationalPrincipal,
   type TeacherPrincipal,
@@ -124,7 +124,7 @@ export type ReservationAdminDetail = Prisma.ReservationGetPayload<{
 export type ReservationDisplayDetail = ReservationAdminDetail | ReservationOperationalDetail;
 
 export async function getReservationDetail(id: string) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   return prisma.reservation.findUnique({
     where: { id },
     select: RESERVATION_DETAIL_SELECT,
@@ -174,7 +174,7 @@ const PARTICIPANT_CHILD_SELECT = {
 } as const;
 
 export async function listReservationsByClassSchedule(classScheduleId: string) {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   return prisma.reservation.findMany({
     where: { classScheduleId },
     select: {

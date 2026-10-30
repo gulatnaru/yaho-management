@@ -9,6 +9,7 @@ const requireAssignedClassMock = vi.fn();
 
 vi.mock("@/lib/auth/authorization", () => ({
   requireAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
+  requireAdminOrSuperAdminPrincipal: (...args: unknown[]) => requireAdminPrincipalMock(...args),
   requireOperationalPrincipal: (...args: unknown[]) => requireOperationalPrincipalMock(...args),
   requireAssignedClass: (...args: unknown[]) => requireAssignedClassMock(...args),
 }));
