@@ -16,6 +16,12 @@ export const ACCOUNT_CHANGE_LABELS = {
   ROLE_CHANGED: "역할 변경",
   ACTIVE_CHANGED: "활성 상태 변경",
   PASSWORD_RESET: "비밀번호 재설정",
+  // P3 초대 수명주기 감사 라벨 (UserAccountChangeType 확장 대응).
+  INVITATION_ISSUED: "초대 발급",
+  INVITATION_ACCEPTED: "초대 수락",
+  INVITATION_EXPIRED: "초대 만료",
+  INVITATION_REVOKED: "초대 해지",
+  INVITATION_RESENT: "초대 재발급",
 } as const;
 
 const ACCOUNT_SUMMARY_SELECT = {

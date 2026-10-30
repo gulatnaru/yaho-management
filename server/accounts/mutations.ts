@@ -144,6 +144,66 @@ export type CreateAccountCoreInput = Omit<AccountCreateInput, "role"> & {
   role: AccountRole | "SUPER_ADMIN";
 };
 
+export type AccountActorAssertion = (
+  tx: Prisma.TransactionClient,
+  principal: CurrentPrincipal,
+) => Promise<void>;
+
+/**
+ * P3: 트랜잭션 내부 계정 생성 (호출자가 트랜잭션 + advisory lock을 소유한다).
+ * P2 경로(createAccountCore)는 이 함수에 assertAccountManagementActor를 넘기고,
+ * P3 초대 발급 경로는 assertInvitationActor를 넘겨 같은 생성·감사 원자성을
+ * 초대 행 생성과 하나의 트랜잭션으로 묶는다. 행위자 판정 이외의 규칙
+ * (SUPER_ADMIN 차단·선생님 연결 검증·비밀번호 없는 강제 비활성·CREATED 감사)은
+ * 두 경로에서 동일하다.
+ */
+export async function createAccountInTransaction(
+  tx: Prisma.TransactionClient,
+  principal: CurrentPrincipal,
+  input: CreateAccountCoreInput,
+  assertActor: AccountActorAssertion,
+): Promise<{ id: string }> {
+  await assertActor(tx, principal);
+  // P1 차단 (스키마·선택지 확장보다 먼저 강제): 일반 생성 경로로 SUPER_ADMIN을 만들 수 없다.
+  // SUPER_ADMIN 생성은 최초 등록 절차(P7)·승격 워크플로(P3-2)로만 허용된다.
+  if (input.role === "SUPER_ADMIN") {
+    throw new AccountMutationError("SUPER_ADMIN_FORBIDDEN");
+  }
+  await validateTeacherLink(tx, input.role, input.teacherId);
+
+  // P2 (OQ-8): 비밀번호 없는 생성은 강제 비활성이다. 호출자가 isActive=true를 넘겨도
+  // 활성화되지 않으며, 임시 비밀번호 전달·이메일 검증 우회 활성화 경로는 만들지 않는다.
+  const isActive = input.passwordHash === null ? false : input.isActive;
+  const mustChangePassword = input.passwordHash !== null;
+
+  const created = await tx.user.create({
+    data: {
+      name: input.name,
+      email: input.email,
+      password: input.passwordHash,
+      role: input.role,
+      isActive,
+      teacherId: input.role === "TEACHER" ? input.teacherId : null,
+      mustChangePassword,
+      authVersion: 1,
+    },
+    select: { id: true },
+  });
+
+  await tx.userAccountChange.create({
+    data: {
+      targetUserId: created.id,
+      actorAdminId: principal.userId,
+      type: "CREATED",
+      nextEmail: input.email,
+      nextRole: input.role,
+      nextIsActive: isActive,
+    },
+  });
+
+  return created;
+}
+
 export async function createAccountCore(
   principal: CurrentPrincipal,
   input: CreateAccountCoreInput,
@@ -151,45 +211,7 @@ export async function createAccountCore(
 ): Promise<{ id: string }> {
   return client.$transaction(async (tx) => {
     await acquireAccountMutationLock(tx);
-    await assertAccountManagementActor(tx, principal);
-    // P1 차단 (스키마·선택지 확장보다 먼저 강제): 일반 생성 경로로 SUPER_ADMIN을 만들 수 없다.
-    // SUPER_ADMIN 생성은 최초 등록 절차(P7)·승격 워크플로(P3-2)로만 허용된다.
-    if (input.role === "SUPER_ADMIN") {
-      throw new AccountMutationError("SUPER_ADMIN_FORBIDDEN");
-    }
-    await validateTeacherLink(tx, input.role, input.teacherId);
-
-    // P2 (OQ-8): 비밀번호 없는 생성은 강제 비활성이다. 호출자가 isActive=true를 넘겨도
-    // 활성화되지 않으며, 임시 비밀번호 전달·이메일 검증 우회 활성화 경로는 만들지 않는다.
-    const isActive = input.passwordHash === null ? false : input.isActive;
-    const mustChangePassword = input.passwordHash !== null;
-
-    const created = await tx.user.create({
-      data: {
-        name: input.name,
-        email: input.email,
-        password: input.passwordHash,
-        role: input.role,
-        isActive,
-        teacherId: input.role === "TEACHER" ? input.teacherId : null,
-        mustChangePassword,
-        authVersion: 1,
-      },
-      select: { id: true },
-    });
-
-    await tx.userAccountChange.create({
-      data: {
-        targetUserId: created.id,
-        actorAdminId: principal.userId,
-        type: "CREATED",
-        nextEmail: input.email,
-        nextRole: input.role,
-        nextIsActive: isActive,
-      },
-    });
-
-    return created;
+    return createAccountInTransaction(tx, principal, input, assertAccountManagementActor);
   });
 }
 

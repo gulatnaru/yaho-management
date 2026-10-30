@@ -68,6 +68,40 @@ export const adminPasswordResetSchema = z.object({
   temporaryPassword: passwordSchema,
 });
 
+/**
+ * P3 초대 발급 스키마. SUPER_ADMIN은 일반 초대 경로의 역할 선택지에 없으며,
+ * zod enum(ACCOUNT_ROLES)도 SUPER_ADMIN을 허용하지 않는다 — 코어의
+ * SUPER_ADMIN_FORBIDDEN이 우회 호출에 대비한 2차 방어이다.
+ * TEACHER면 teacherId 필수, 비-TEACHER면 teacherId 금지 (validateRoleTeacher).
+ */
+export const invitationIssueSchema = z
+  .object({
+    name: nameSchema,
+    email: emailSchema,
+    role: z.enum(ACCOUNT_ROLES),
+    teacherId: teacherIdSchema,
+  })
+  .superRefine(validateRoleTeacher);
+
+/**
+ * P3 초대 수락 비밀번호 스키마. 기존 기준(8~128자)을 따르며, 본인이 직접
+ * 설정하는 초기 비밀번호이다 (임시 비밀번호 발급 경로가 아니다 — OQ-8 폐지 유지).
+ */
+export const invitationAcceptSchema = z
+  .object({
+    password: passwordSchema,
+    confirmPassword: z.string().min(1, "새 비밀번호를 다시 입력해주세요").max(128),
+  })
+  .superRefine((value, context) => {
+    if (value.password !== value.confirmPassword) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirmPassword"],
+        message: "새 비밀번호가 일치하지 않습니다",
+      });
+    }
+  });
+
 export const changeOwnPasswordSchema = z
   .object({
     currentPassword: z.string().min(1, "현재 비밀번호를 입력해주세요").max(128),
@@ -87,4 +121,6 @@ export const changeOwnPasswordSchema = z
 export type AccountCreateInput = z.infer<typeof accountCreateSchema>;
 export type AccountUpdateInput = z.infer<typeof accountUpdateSchema>;
 export type AdminPasswordResetInput = z.infer<typeof adminPasswordResetSchema>;
+export type InvitationIssueInput = z.infer<typeof invitationIssueSchema>;
+export type InvitationAcceptInput = z.infer<typeof invitationAcceptSchema>;
 export type ChangeOwnPasswordInput = z.infer<typeof changeOwnPasswordSchema>;

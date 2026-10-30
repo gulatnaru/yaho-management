@@ -58,8 +58,15 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
     (cutoverMode === "SUPER_ADMIN" && principal.role === "SUPER_ADMIN")
       ? [{ href: "/accounts", label: "계정 관리" }]
       : [];
+  // P3: 직원 초대 메뉴는 계정 관리 메뉴와 다르다 — 모든 모드에서 SUPER_ADMIN
+  // 전용이며, INVALID 모드에서는 누구에게도 노출하지 않는다 (표시일 뿐, 실제
+  // 경계는 초대 쿼리·액션·코어의 requireInvitationPrincipal + INVALID 거부이다).
+  const invitationMenuItems =
+    principal.role === "SUPER_ADMIN" && cutoverMode !== "INVALID"
+      ? [{ href: "/invitations", label: "직원 초대" }]
+      : [];
 
-  return [...OPERATIONAL_NAV_ITEMS, ...adminMenuItems, ...accountMenuItems, { href: "/account/password", label: "비밀번호 변경" }];
+  return [...OPERATIONAL_NAV_ITEMS, ...adminMenuItems, ...accountMenuItems, ...invitationMenuItems, { href: "/account/password", label: "비밀번호 변경" }];
 }
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {

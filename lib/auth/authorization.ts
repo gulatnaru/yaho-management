@@ -152,6 +152,22 @@ export async function requireSuperAdminPrincipal(): Promise<SuperAdminPrincipal>
   return principal;
 }
 
+/**
+ * P3 초대 전용 가드 — 모드 가드(requireAccountManagementPrincipal)를 재사용하지 않는다.
+ * 모드 가드는 LEGACY 모드에서 ADMIN을 허용하므로, 초대 진입점에 재사용하면
+ * LEGACY ADMIN에게 초대 발급 권한이 열리는 정반대 결과가 된다 (게이트 7).
+ * 초대 생성·취소·재발급·목록은 모든 모드에서 SUPER_ADMIN 전용이며,
+ * 미등록·잘못된 설정(INVALID)에서는 SUPER_ADMIN이라도 전원 거부(fail-closed)한다.
+ * LEGACY 모드 + SUPER_ADMIN 존재 시 발급 가능 (로그인은 계정 관리 가드와 무관).
+ */
+export async function requireInvitationPrincipal(): Promise<SuperAdminPrincipal> {
+  const principal = await requireSuperAdminPrincipal();
+  if (resolveAccountCutoverMode() === "INVALID") {
+    notFound();
+  }
+  return principal;
+}
+
 function ensureResourcePrincipal(principal: CurrentPrincipal): CurrentPrincipal {
   return enforcePasswordChange(principal);
 }

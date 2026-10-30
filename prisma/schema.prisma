@@ -35,6 +35,14 @@ enum UserAccountChangeType {
   ROLE_CHANGED
   ACTIVE_CHANGED
   PASSWORD_RESET
+  // P3 (초대 수명주기 — 최종 명칭은 P3 REVIEW 확정): 초대 발급·수락·만료·해지·재발급.
+  // EXPIRED는 만료가 파생 상태이므로 P3 흐름에서 감사 행을 쓰지 않고, 수명주기
+  // 완성용으로만 enum에 둔다 (만료 수락 시도는 상태를 변경하지 않으므로 감사 행 없음).
+  INVITATION_ISSUED
+  INVITATION_ACCEPTED
+  INVITATION_EXPIRED
+  INVITATION_REVOKED
+  INVITATION_RESENT
 }
 
 enum Gender {
@@ -187,6 +195,9 @@ model User {
   teacher                       Teacher?                           @relation(fields: [teacherId], references: [id], onDelete: Restrict)
   accountChanges                UserAccountChange[]                @relation("AccountChangeTarget")
   performedAccountChanges       UserAccountChange[]                @relation("AccountChangeActor")
+  // P3: 초대 발급자·대상 계정 연결 (AdminInvitation, Restrict).
+  issuedInvitations             AdminInvitation[]                  @relation("InvitationIssuer")
+  receivedInvitations           AdminInvitation[]                  @relation("InvitationTarget")
   issuedApplicationLinks        ReservationApplicationLink[]       @relation("ApplicationLinkIssuedBy")
   depositConfirmedApplications  ReservationApplication[]           @relation("ApplicationDepositConfirmedBy")
   resolvedApplications          ReservationApplication[]           @relation("ApplicationResolvedBy")
@@ -217,6 +228,35 @@ model UserAccountChange {
 
   @@index([targetUserId, createdAt])
   @@index([actorAdminId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// AdminInvitation — P3 직원 초대 (PLAN §2 M-3)
+// ─────────────────────────────────────────────
+// - 원본 토큰은 DB에 저장하지 않는다. tokenHash(SHA-256 hex)만 저장한다.
+// - email은 unique가 아니다 (재발급 이력 보존). 동시 유효 토큰 1개 유지는
+//   애플리케이션 로직(발급·재발급 시 이전 미사용 토큰 해지)으로 보장한다.
+// - usedAt이 있으면 수락 완료, revokedAt이 있으면 해지됨, expiresAt 경과 시 만료됨.
+// - 발급자·대상 계정은 Restrict (감사·이력 관계가 끊기지 않게 행 삭제 금지).
+model AdminInvitation {
+  id          String   @id @default(cuid())
+  email       String
+  role        Role
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  revokedAt   DateTime?
+  issuedById  String
+  targetUserId String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  issuedBy   User @relation("InvitationIssuer", fields: [issuedById], references: [id], onDelete: Restrict)
+  targetUser User @relation("InvitationTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
+
+  @@index([email, createdAt])
+  @@index([issuedById, createdAt])
+  @@index([targetUserId, createdAt])
 }
 
 // ─────────────────────────────────────────────
