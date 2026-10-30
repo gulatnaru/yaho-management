@@ -10,16 +10,14 @@ import {
   issueInvitationCore,
   reissueInvitationCore,
 } from "@/server/accounts/invitations";
+import { deliverIssuedInvitation } from "@/server/accounts/invitation-delivery";
 import { AccountMutationError } from "@/server/accounts/mutations";
 
 /**
  * P3 관리자 초대 액션 (SUPER_ADMIN 전용 + INVALID 거부 — requireInvitationPrincipal).
  * 모드 가드를 재사용하지 않는다 (게이트 7).
  *
- * 원본 토큰 취급: issueInvitationCore가 반환하는 원본 토큰은 이 액션에서
- * 버린다 (반환·렌더링·로그 일절 없음). P3에는 발송 경로가 없으므로 토큰을
- * 수신자에게 전달할 방법이 없으며, 이는 의도된 구조적 차단이다 (P4 연결 전
- * 사용 전환 금지). P4에서 발송 인터페이스로 전달하는 지점이 여기이다.
+ * 원본 토큰은 같은 요청의 발송 어댑터에만 전달한다.
  */
 
 export type InvitationFormState = {
@@ -82,10 +80,11 @@ export async function issueInvitation(
     return { errors: result.error.flatten().fieldErrors, values };
   }
   try {
-    // P3: 원본 토큰은 발송 경로가 없어 전달할 수 없다. 반환값을 버리고
-    // 성공 여부만 반환한다 (화면·로그에 원본을 노출하지 않는다).
-    const { token: _discarded } = await issueInvitationCore(principal, result.data);
-    void _discarded;
+    // The token stays in this server request and is never returned to the UI.
+    const issued = await issueInvitationCore(principal, result.data);
+    const delivery = await deliverIssuedInvitation(issued);
+    revalidatePath("/invitations");
+    if (delivery !== "ACCEPTED") return { formError: delivery === "FAILED" ? "발송 실패. 목록에서 재발급해주세요." : "발송 결과를 확인할 수 없습니다. 목록에서 재발급해주세요." };
   } catch (error) {
     if (error instanceof InvitationError) {
       return { formError: invitationErrorMessage(error), values };
@@ -140,9 +139,11 @@ export async function reissueInvitation(
   const invitationId = readFormString(formData, "invitationId");
   if (!invitationId) return { formError: "초대를 찾을 수 없습니다." };
   try {
-    // P3: 재발급 원본 토큰도 발송 경로가 없어 전달할 수 없다. 버린다.
-    const { token: _discarded } = await reissueInvitationCore(principal, invitationId);
-    void _discarded;
+    // Reissuance supplies a new token; the previous one is revoked first.
+    const issued = await reissueInvitationCore(principal, invitationId);
+    const delivery = await deliverIssuedInvitation(issued);
+    revalidatePath("/invitations");
+    if (delivery !== "ACCEPTED") return { formError: delivery === "FAILED" ? "발송 실패. 새 초대를 재발급해주세요." : "발송 결과를 확인할 수 없습니다. 새 초대를 재발급해주세요." };
   } catch (error) {
     if (error instanceof InvitationError) {
       return { formError: invitationErrorMessage(error) };

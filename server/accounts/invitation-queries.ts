@@ -35,6 +35,7 @@ export async function listInvitations() {
   const rows = await prisma.adminInvitation.findMany({
     select: {
       id: true,
+      deliveryAttempt: { select: { status: true } },
       email: true,
       role: true,
       expiresAt: true,

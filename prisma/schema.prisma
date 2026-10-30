@@ -251,12 +251,34 @@ model AdminInvitation {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  deliveryAttempt InvitationDeliveryAttempt?
   issuedBy   User @relation("InvitationIssuer", fields: [issuedById], references: [id], onDelete: Restrict)
   targetUser User @relation("InvitationTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
 
   @@index([email, createdAt])
   @@index([issuedById, createdAt])
   @@index([targetUserId, createdAt])
+}
+
+enum InvitationDeliveryStatus {
+  PENDING
+  SENDING
+  ACCEPTED
+  FAILED
+  UNKNOWN
+}
+
+model InvitationDeliveryAttempt {
+  id                String @id @default(cuid())
+  invitationId      String @unique
+  provider          String
+  status            InvitationDeliveryStatus @default(PENDING)
+  providerMessageId String?
+  errorCategory     String?
+  createdAt         DateTime @default(now())
+  attemptedAt       DateTime?
+  completedAt       DateTime?
+  invitation        AdminInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
 }
 
 // ─────────────────────────────────────────────

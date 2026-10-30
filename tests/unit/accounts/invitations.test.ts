@@ -1,3 +1,5 @@
+// P3 core contract tests exercise an explicitly enabled isolated harness.
+vi.mock("@/lib/invitations/config", () => ({ invitationUseEnabled: () => true }));
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acceptInvitationCore,

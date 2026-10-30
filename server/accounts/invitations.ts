@@ -1,3 +1,4 @@
+import { invitationUseEnabled } from "@/lib/invitations/config";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
@@ -424,6 +425,7 @@ export async function acceptInvitationCore(
   input: { token: string; passwordHash: string },
   client: InvitationClient = prisma,
 ): Promise<AcceptInvitationResult> {
+  if (!invitationUseEnabled()) throw new InvitationError("INVITATION_INVALID");
   // INVALID 모드에서는 토큰 유효 여부를 드러내지 않고 일반 무효 오류로 차단한다.
   if (resolveAccountCutoverMode() === "INVALID") {
     throw new InvitationError("INVITATION_INVALID");

@@ -10,6 +10,7 @@ import { cancelInvitation, reissueInvitation, type InvitationRowActionState } fr
 
 export type InvitationListRow = {
   id: string;
+  deliveryAttempt: { status: string } | null;
   email: string;
   role: string;
   expiresAt: Date;
@@ -57,6 +58,7 @@ export function InvitationTable({ invitations }: { invitations: InvitationListRo
           <th className="py-2 pr-4">대상</th>
           <th className="py-2 pr-4">역할</th>
           <th className="py-2 pr-4">상태</th>
+          <th className="py-2 pr-4">발송</th>
           <th className="py-2 pr-4">만료</th>
           <th className="py-2">관리</th>
         </tr>
@@ -69,6 +71,7 @@ export function InvitationTable({ invitations }: { invitations: InvitationListRo
             </td>
             <td className="py-2 pr-4">{invitation.role}</td>
             <td className="py-2 pr-4">{INVITATION_STATUS_LABELS[invitation.status]}</td>
+            <td className="py-2 pr-4">{invitation.deliveryAttempt?.status === "ACCEPTED" ? "발송 요청 접수" : invitation.deliveryAttempt?.status === "FAILED" ? "발송 실패" : invitation.deliveryAttempt ? "발송 결과 미확인" : "발송 기록 없음"}</td>
             <td className="py-2 pr-4">{new Date(invitation.expiresAt).toLocaleString("ko-KR")}</td>
             <td className="py-2">
               <span className="inline-flex gap-2">

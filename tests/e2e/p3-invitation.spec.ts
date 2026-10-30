@@ -60,7 +60,7 @@ const superPassword = `P3e2e-super-${suffix}!`;
 const adminEmail = `${run}-admin@example.test`;
 const adminPassword = `P3e2e-admin-${suffix}!`;
 
-const ids = { users: [] as string[], invitations: [] as string[] };
+const ids = { users: [] as string[], invitations: [] as string[], issuanceEmails: [] as string[] };
 let superId = "";
 let adminId = "";
 
@@ -132,16 +132,25 @@ test.describe("P3 초대 — HTTP/E2E", () => {
   });
 
   test.afterAll(async () => {
-    if (ids.invitations.length > 0) {
-      await prisma.adminInvitation.deleteMany({ where: { id: { in: ids.invitations } } });
+    try {
+      // Browser actions can create rows even if the click or an assertion fails.
+      const issued = await prisma.adminInvitation.findMany({ where: { email: { in: ids.issuanceEmails } } });
+      ids.invitations.push(...issued.map((invitation) => invitation.id));
+      const targets = await prisma.user.findMany({ where: { email: { in: ids.issuanceEmails } } });
+      ids.users.push(...targets.map((user) => user.id));
+      if (ids.invitations.length > 0) {
+        await prisma.invitationDeliveryAttempt.deleteMany({ where: { invitationId: { in: ids.invitations } } });
+        await prisma.adminInvitation.deleteMany({ where: { id: { in: ids.invitations } } });
+      }
+      await prisma.userAccountChange.deleteMany({
+        where: { OR: [{ targetUserId: { in: ids.users } }, { actorAdminId: { in: ids.users } }] },
+      });
+      if (ids.users.length > 0) {
+        await prisma.user.deleteMany({ where: { id: { in: ids.users } } });
+      }
+    } finally {
+      await prisma.$disconnect();
     }
-    await prisma.userAccountChange.deleteMany({
-      where: { OR: [{ targetUserId: { in: ids.users } }, { actorAdminId: { in: ids.users } }] },
-    });
-    if (ids.users.length > 0) {
-      await prisma.user.deleteMany({ where: { id: { in: ids.users } } });
-    }
-    await prisma.$disconnect();
   });
 
   test("SUPER_ADMIN은 초대 페이지를 보고, ADMIN은 404로 차단된다", async ({ page }) => {
@@ -162,20 +171,23 @@ test.describe("P3 초대 — HTTP/E2E", () => {
 
   test("초대 발급 UI: 성공 후 목록에 대기중으로 표시되고 원본 토큰은 화면에 없다", async ({ page }) => {
     const email = `${run}-ui@example.test`;
+    ids.issuanceEmails.push(email);
     await login(page, SUPERADMIN_URL, superEmail, superPassword);
     await gotoReady(page, `${SUPERADMIN_URL}/invitations`);
     await page.getByLabel("이름 *", { exact: true }).fill("UI 직원");
     await page.getByLabel(/이메일/).fill(email);
     await page.getByLabel(/역할/).selectOption("STAFF");
     await page.getByRole("button", { name: "초대 발급" }).click();
-    await expect(page.locator("body")).toContainText("초대를 발급했습니다");
+    const createdInvitations = await prisma.adminInvitation.findMany({ where: { email } });
+    ids.invitations.push(...createdInvitations.map((invitation) => invitation.id));
+    const createdUsers = await prisma.user.findMany({ where: { email } });
+    ids.users.push(...createdUsers.map((user) => user.id));
+    await expect(page.locator("body")).toContainText("발송 요청 접수");
     // 목록에 대기중 행이 보인다 (DB 행 존재 + 상태 파생 확인).
     await expect(page.locator("body")).toContainText(email);
     await expect(page.locator("body")).toContainText("대기중");
     const row = await prisma.adminInvitation.findFirstOrThrow({ where: { email } });
-    ids.invitations.push(row.id);
     const target = await prisma.user.findUniqueOrThrow({ where: { email } });
-    ids.users.push(target.id);
     expect(target.isActive).toBe(false);
     // 원본 토큰은 화면 어디에도 노출되지 않는다 (목록·본문 전체).
     const bodyText = await page.locator("body").innerText();

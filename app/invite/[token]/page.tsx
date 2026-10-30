@@ -1,3 +1,4 @@
+import { invitationUseEnabled } from "@/lib/invitations/config";
 import { getInvitationAcceptanceState } from "@/server/accounts/invitations";
 import { AcceptForm } from "../_components/accept-form";
 
@@ -14,7 +15,7 @@ type InvitePageProps = { params: Promise<{ token: string }> };
  */
 export default async function InvitePage({ params }: InvitePageProps) {
   const { token } = await params;
-  const { state } = await getInvitationAcceptanceState(token);
+  const { state } = invitationUseEnabled() ? await getInvitationAcceptanceState(token) : { state: "INVALID" };
 
   return (
     <main className="mx-auto max-w-xl px-6 py-12">

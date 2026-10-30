@@ -8,9 +8,10 @@
  * 검증 경계 (정직한 표기):
  * - 실제: 초대 코어(발급·재발급·해지·수락), 감사 원자성, 토큰 해시 저장, 조건부
  *   업데이트 동시성, 모드별 발급·수락 차단, credential 로그인 가능 상태
- *   (authenticateOperator + 실제 bcrypt 해시), 관리자 액션 배선 (세션 전송만 mock).
- * - 스텁된 부분: 세션 전송 계층만 mock한다 (`@/auth`의 auth()가 합성 세션을 반환하고,
- *   실제 resolveSessionPrincipal이 격리 DB 행을 읽어 principal을 만든다). HTTP 요청 전송
+ *   (authenticateOperator + 실제 bcrypt 해시), 관리자 액션 배선.
+ * - 스텁된 부분: 초대 사용 게이트는 승인된 상태, 발송은 ACCEPTED로 mock하고, 세션 전송 계층을 mock한다
+ *   (`@/auth`의 auth()가 합성 세션을 반환하고 실제 resolveSessionPrincipal이 격리 DB 행을
+ *   읽어 principal을 만든다). HTTP 요청 전송
  *   계층은 검증하지 않는다 — HTTP/E2E 배선은 tests/e2e/p3-invitation.spec.ts에서 검증한다.
  * - 테스트 간 순서 의존: describe.sequential이며, 각 테스트는 run별 고유 이메일로 독립 검증한다.
  */
@@ -22,6 +23,8 @@ import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 const sessionHolder = vi.hoisted(() => ({ userId: "", authVersion: 1 }));
 const actionContext = vi.hoisted(() => ({ db: null as unknown as PrismaClient }));
 
+vi.mock("@/lib/invitations/config", () => ({ invitationUseEnabled: () => true }));
+vi.mock("@/server/accounts/invitation-delivery", () => ({ deliverIssuedInvitation: async () => "ACCEPTED" }));
 vi.mock("@/auth", () => ({
   auth: vi.fn(async () => ({
     user: { id: sessionHolder.userId, authVersion: sessionHolder.authVersion },

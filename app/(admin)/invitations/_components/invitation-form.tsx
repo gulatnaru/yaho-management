@@ -64,11 +64,10 @@ export function InvitationForm({ teachers }: { teachers: TeacherOption[] }) {
         </div>
       ) : null}
       <p className="text-xs text-slate-500">
-        초대 링크는 72시간 동안 1회만 유효합니다. 실제 이메일 발송은 P4에서 연결되기 전까지
-        초대 수락을 사용 가능 상태로 전환하지 않으므로, 이 화면에서 발급된 초대는 발송되지 않습니다.
+        초대 링크는 72시간 동안 1회만 유효합니다. 발송 요청 결과는 목록에서 확인할 수 있습니다.
       </p>
       {state.formError ? <p className="text-sm text-red-600" role="alert">{state.formError}</p> : null}
-      {state.success ? <p className="text-sm text-emerald-700" role="status">초대를 발급했습니다.</p> : null}
+      {state.success ? <p className="text-sm text-emerald-700" role="status">발송 요청 접수</p> : null}
       <Button disabled={pending} type="submit">{pending ? "처리 중..." : "초대 발급"}</Button>
     </form>
   );
