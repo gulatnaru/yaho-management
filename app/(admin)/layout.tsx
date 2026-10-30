@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireCurrentPrincipal, type CurrentPrincipal } from "@/lib/auth/authorization";
+import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import { countPendingReservationApplications } from "@/lib/reservation-applications/queries";
 
 export const dynamic = "force-dynamic";
@@ -33,9 +34,11 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
     ];
   }
 
-  // P1 (OQ-11): SUPER_ADMIN은 전체 운영 메뉴를 본다. P2: 계정 관리 메뉴는 SUPER_ADMIN에게만
-  // 노출한다 — 메뉴 노출은 표시일 뿐 권한 경계가 아니며, 진입점 가드(queries·actions·코어)가
-  // 실제 경계이다. ADMIN은 전환 이후 계정 관리 메뉴를 보지 못하고 진입해도 차단된다.
+  // P2-S: 계정 관리 메뉴 노출도 전환 모드를 따른다. LEGACY_ADMIN 모드에서는 ADMIN에게,
+  // SUPER_ADMIN 모드에서는 SUPER_ADMIN에게만 노출한다. 미등록·잘못된 설정이면 누구에게도
+  // 노출하지 않는다. 메뉴 노출은 표시일 뿐 권한 경계가 아니며, 진입점 가드
+  // (queries·actions·코어)가 실제 경계이다. 이 파일은 서버 컴포넌트이므로
+  // 서버 전용 모드 판정을 직접 읽어도 클라이언트에 노출되지 않는다.
   const adminMenuItems =
     principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
       ? [
@@ -49,8 +52,12 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
           { href: "/revenue", label: "매출 집계" },
         ]
       : [];
+  const cutoverMode = resolveAccountCutoverMode();
   const accountMenuItems =
-    principal.role === "SUPER_ADMIN" ? [{ href: "/accounts", label: "계정 관리" }] : [];
+    (cutoverMode === "LEGACY_ADMIN" && principal.role === "ADMIN") ||
+    (cutoverMode === "SUPER_ADMIN" && principal.role === "SUPER_ADMIN")
+      ? [{ href: "/accounts", label: "계정 관리" }]
+      : [];
 
   return [...OPERATIONAL_NAV_ITEMS, ...adminMenuItems, ...accountMenuItems, { href: "/account/password", label: "비밀번호 변경" }];
 }

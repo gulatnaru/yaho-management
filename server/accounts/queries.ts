@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireCurrentPrincipal, requireSuperAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAccountManagementPrincipal, requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 
 export const ACCOUNT_ROLE_LABELS = {
@@ -37,12 +37,14 @@ const ACCOUNT_SUMMARY_SELECT = {
 } as const;
 
 /**
- * P2 (OQ-1 간소화): 계정 관리 조회는 SUPER_ADMIN 전용으로 전환됐다. 이 3개 쿼리가
- * 목록·상세·생성 페이지의 실제 choke point이므로, 페이지 가드만 바꾸는 부분 교체는
- * 허용하지 않는다. ADMIN은 전환 이후 계정 관리에 접근할 수 없다.
+ * P2-S (모드별 계약): 계정 관리 조회는 requireAccountManagementPrincipal()로
+ * 모드별 판정을 받는다. LEGACY_ADMIN 모드에서는 ADMIN이, SUPER_ADMIN 모드에서는
+ * SUPER_ADMIN이 조회한다. 미등록·잘못된 설정이면 전원 거부(fail-closed)한다.
+ * 이 3개 쿼리가 목록·상세·생성 페이지의 실제 choke point이므로, 페이지 가드만
+ * 바꾸는 부분 교체는 허용하지 않는다.
  */
 export async function listAccounts() {
-  await requireSuperAdminPrincipal();
+  await requireAccountManagementPrincipal();
   return prisma.user.findMany({
     select: ACCOUNT_SUMMARY_SELECT,
     orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -50,7 +52,7 @@ export async function listAccounts() {
 }
 
 export async function getAccountDetail(id: string) {
-  await requireSuperAdminPrincipal();
+  await requireAccountManagementPrincipal();
 
   const [account, history] = await Promise.all([
     prisma.user.findUnique({
@@ -81,7 +83,7 @@ export async function getAccountDetail(id: string) {
 }
 
 export async function listAvailableAccountTeachers(currentTeacherId?: string | null) {
-  await requireSuperAdminPrincipal();
+  await requireAccountManagementPrincipal();
   return prisma.teacher.findMany({
     where: {
       isActive: true,

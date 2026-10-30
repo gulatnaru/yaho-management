@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createAccountCore,
   resetAccountPasswordCore,
@@ -21,7 +21,22 @@ type StoredUser = {
   authVersion: number;
 };
 
-// P2: 코어 행위자는 SUPER_ADMIN 전용이다. P1의 ADMIN 행위자는 코어에서 거부된다.
+// P2-S: 코어 행위자는 전환 모드에 따라 달라진다. 기존 P2 테스트는 SUPER_ADMIN
+// 모드를 전제로 하므로 파일 기본 모드를 SUPER_ADMIN으로 두고, 모드별 신규
+// 테스트에서만 임시로 바꾼 뒤 afterEach로 복원한다.
+const CUTOVER_ENV = "YAHO_ADMIN_CUTOVER_MODE";
+const originalCutoverMode = process.env[CUTOVER_ENV];
+beforeAll(() => {
+  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
+});
+afterEach(() => {
+  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
+});
+afterAll(() => {
+  if (originalCutoverMode === undefined) delete process.env[CUTOVER_ENV];
+  else process.env[CUTOVER_ENV] = originalCutoverMode;
+});
+
 const principal = (userId = "super-1") => ({ userId, role: "SUPER_ADMIN", teacherId: null }) as never;
 
 function target(overrides: Partial<StoredUser> = {}): StoredUser {
@@ -90,13 +105,13 @@ const updateInput = {
 };
 
 describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor)", () => {
-  it("rejects ADMIN and STAFF actors at the core before any write", async () => {
+  it("rejects ADMIN and STAFF actors at the core before any write (SUPER_ADMIN mode)", async () => {
     const adminActor = harness({
       actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
     });
     await expect(
       createAccountCore({ userId: "admin-1", role: "ADMIN", teacherId: null } as never, { ...createInput, role: "STAFF" }, adminActor.client as never),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_SUPER_ADMIN" });
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
     expect(adminActor.userCreate).not.toHaveBeenCalled();
 
     const staffActor = harness({
@@ -104,8 +119,34 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
     });
     await expect(
       createAccountCore({ userId: "staff-1", role: "STAFF", teacherId: null } as never, { ...createInput, role: "STAFF" }, staffActor.client as never),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_SUPER_ADMIN" });
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
     expect(staffActor.userCreate).not.toHaveBeenCalled();
+  });
+
+  it("allows an ADMIN actor in LEGACY_ADMIN mode and denies a SUPER_ADMIN actor there", async () => {
+    process.env[CUTOVER_ENV] = "LEGACY_ADMIN";
+    const legacy = harness({
+      actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
+    });
+    await expect(
+      createAccountCore({ userId: "admin-1", role: "ADMIN", teacherId: null } as never, { ...createInput, role: "STAFF" }, legacy.client as never),
+    ).resolves.toMatchObject({ id: "created-1" });
+    expect(legacy.userCreate).toHaveBeenCalled();
+
+    const superInLegacy = harness();
+    await expect(
+      createAccountCore(principal(), { ...createInput, role: "STAFF" }, superInLegacy.client as never),
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
+    expect(superInLegacy.userCreate).not.toHaveBeenCalled();
+  });
+
+  it("denies a SUPER_ADMIN actor when the cutover mode is invalid", async () => {
+    process.env[CUTOVER_ENV] = "bogus";
+    const { client, userCreate } = harness();
+    await expect(
+      createAccountCore(principal(), { ...createInput, role: "STAFF" }, client as never),
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
+    expect(userCreate).not.toHaveBeenCalled();
   });
 
   it("rejects general-path creation of SUPER_ADMIN before any write", async () => {

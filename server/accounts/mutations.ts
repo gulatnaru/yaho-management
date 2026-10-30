@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import type { CurrentPrincipal } from "@/lib/auth/authorization";
 import {
   ACCOUNT_MUTATION_ADVISORY_LOCK_KEY,
@@ -10,7 +11,7 @@ import type { AccountCreateInput, AccountRole, AccountUpdateInput } from "@/lib/
 export { ACCOUNT_MUTATION_ADVISORY_LOCK_KEY };
 
 export type AccountMutationErrorCode =
-  | "ACTOR_NOT_SUPER_ADMIN"
+  | "ACTOR_NOT_ACCOUNT_MANAGER"
   | "ACCOUNT_NOT_FOUND"
   | "SELF_DEACTIVATION"
   | "SELF_ROLE_CHANGE"
@@ -49,19 +50,30 @@ export async function acquireAccountMutationLock(tx: Prisma.TransactionClient): 
 }
 
 /**
- * P2 (OQ-1 간소화): 계정 mutation 행위자는 SUPER_ADMIN 전용이다. P1의 ADMIN 행위자는
- * 전환 이후 계약에서 더 이상 계정 관리를 수행하지 않으며, 코어에서 거부된다.
- * live principal의 DB 행을 트랜잭션 안에서 재조회하므로, 세션에 남은 낡은 역할·비활성
- * 상태로는 우회할 수 없다. 코드명은 P1의 ACTOR_NOT_ADMIN에서 P2 계약에 맞게 변경됐다.
+ * P2-S (모드별 계약): 계정 mutation 행위자는 전환 모드에 따라 달라진다.
+ * - LEGACY_ADMIN 모드: ADMIN 행위자만 허용한다 (P2 전환 전 상태).
+ * - SUPER_ADMIN 모드: SUPER_ADMIN 행위자만 허용한다 (P2 계약).
+ * - 미등록·잘못된 설정(INVALID): 전원 거부한다 (fail-closed).
+ * 모드는 액션·쿼리 가드와 별개로 트랜잭션 안에서 다시 읽는다 — 가드에
+ * 전달된 값이 아니라 호출 시점의 process.env를 기준으로 재검증하므로,
+ * 가드 우회 직접 호출도 코어에서 걸러진다. SUPER_ADMIN 계정이 DB에
+ * 존재한다는 사실만으로는 LEGACY 모드에서 권한이 생기지 않는다.
+ * live principal의 DB 행을 트랜잭션 안에서 재조회하므로, 세션에 남은
+ * 낡은 역할·비활성 상태로는 우회할 수 없다. 코드명은 P2의
+ * ACTOR_NOT_SUPER_ADMIN에서 모드별 계약에 맞게 변경됐다.
  */
-async function assertSuperAdminActor(tx: Prisma.TransactionClient, principal: CurrentPrincipal): Promise<void> {
+async function assertAccountManagementActor(tx: Prisma.TransactionClient, principal: CurrentPrincipal): Promise<void> {
+  const mode = resolveAccountCutoverMode();
   const actor = await tx.user.findUnique({
     where: { id: principal.userId },
     select: { role: true, isActive: true, mustChangePassword: true },
   });
 
-  if (!actor?.isActive || actor.role !== "SUPER_ADMIN" || actor.mustChangePassword) {
-    throw new AccountMutationError("ACTOR_NOT_SUPER_ADMIN");
+  const roleAllowed =
+    mode === "LEGACY_ADMIN" ? actor?.role === "ADMIN" : mode === "SUPER_ADMIN" ? actor?.role === "SUPER_ADMIN" : false;
+
+  if (!actor?.isActive || actor.mustChangePassword || !roleAllowed) {
+    throw new AccountMutationError("ACTOR_NOT_ACCOUNT_MANAGER");
   }
 }
 
@@ -139,7 +151,7 @@ export async function createAccountCore(
 ): Promise<{ id: string }> {
   return client.$transaction(async (tx) => {
     await acquireAccountMutationLock(tx);
-    await assertSuperAdminActor(tx, principal);
+    await assertAccountManagementActor(tx, principal);
     // P1 차단 (스키마·선택지 확장보다 먼저 강제): 일반 생성 경로로 SUPER_ADMIN을 만들 수 없다.
     // SUPER_ADMIN 생성은 최초 등록 절차(P7)·승격 워크플로(P3-2)로만 허용된다.
     if (input.role === "SUPER_ADMIN") {
@@ -189,7 +201,7 @@ export async function updateAccountCore(
 ): Promise<void> {
   await client.$transaction(async (tx) => {
     await acquireAccountMutationLock(tx);
-    await assertSuperAdminActor(tx, principal);
+    await assertAccountManagementActor(tx, principal);
     const current = await lockTargetAccount(tx, targetUserId);
 
     // P2 본인 보호 (P1 ADMIN 전용에서 일반화): 행위자 본인의 비활성화·역할 변경은
@@ -299,7 +311,7 @@ export async function resetAccountPasswordCore(
 ): Promise<void> {
   await client.$transaction(async (tx) => {
     await acquireAccountMutationLock(tx);
-    await assertSuperAdminActor(tx, principal);
+    await assertAccountManagementActor(tx, principal);
     const current = await lockTargetAccount(tx, targetUserId);
 
     // P1 차단 유지 (방어 심화): 일반 재설정 경로로 SUPER_ADMIN credential을 교체할 수 없다.

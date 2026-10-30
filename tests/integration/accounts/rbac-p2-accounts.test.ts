@@ -10,8 +10,11 @@
  * 절대 접속하지 않는다. 합성 관리자 및 테스트 데이터만 사용한다.
  *
  * 검증 경계 (정직한 표기):
- * - 실제: 서버 가드(requireSuperAdminPrincipal / requireAdminPrincipal /
+ * - 실제: 서버 가드(모드별 requireAccountManagementPrincipal / requireAdminPrincipal /
  *   requireAdminOrSuperAdminPrincipal / requireOperationalPrincipal), 계정 코어
+ *   (P2-S: 이 파일은 SUPER_ADMIN 모드에서 실행한다 — beforeAll에서 환경변수를
+ *   SUPER_ADMIN으로 설정하고 afterAll에서 복원한다. LEGACY·INVALID 모드는
+ *   rbac-p2safe-cutover.test.ts에서 검증한다.)
  *   (create/update/resetAccountCore), 계정 쿼리(listAccounts/getAccountDetail/
  *   listAvailableAccountTeachers/listOwnAccountHistory), 실제 DB 쓰기 결과,
  *   거부 시 DB 행·권한·감사 상태 불변, live principal 반영·authVersion 무효화.
@@ -63,6 +66,11 @@ assertSafeE2eDatabaseUrls({
 
 const db = new PrismaClient();
 actionContext.db = db;
+
+// P2-S: 이 파일의 P2 계약은 SUPER_ADMIN 모드 전제이다. 파일 실행 중 모드를
+// 고정하고, 종료 시 원래 값으로 복원한다 (다른 통합 파일과 환경변수 공유 방지).
+const CUTOVER_ENV = "YAHO_ADMIN_CUTOVER_MODE";
+const originalCutoverMode = process.env[CUTOVER_ENV];
 
 const run = `p2int-${crypto.randomUUID()}`;
 const superId = `${run}-super`;
@@ -143,6 +151,7 @@ async function snapshotUser(id: string) {
 }
 
 beforeAll(async () => {
+  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
   // SUPER_ADMIN 행은 일반 경로로 만들 수 없으므로, 이미 존재하는 최고관리자를 가정하는
   // 픽스처로 직접 삽입한다 (제품 경로 우회가 아니다).
   await db.user.createMany({
@@ -165,6 +174,8 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(async () => {
+  if (originalCutoverMode === undefined) delete process.env[CUTOVER_ENV];
+  else process.env[CUTOVER_ENV] = originalCutoverMode;
   // 이 run의 합성 기록만, FK 순서대로 정리한다. reset·migration·공유 정리는 하지 않는다.
   await db.userAccountChange.deleteMany({
     where: { OR: [{ targetUserId: { in: allIds } }, { actorAdminId: { in: allIds } }] },
@@ -406,7 +417,7 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     sessionHolder.authVersion = 1;
     const authorization = await freshAuthorization();
     const queries = await freshQueries();
-    await expect(authorization.requireSuperAdminPrincipal()).resolves.toMatchObject({
+    await expect(authorization.requireAccountManagementPrincipal()).resolves.toMatchObject({
       role: "SUPER_ADMIN",
     });
     const accounts = await queries.listAccounts();
@@ -425,11 +436,11 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     await expect(authorization.requireOperationalPrincipal()).rejects.toThrow("NOT_FOUND");
     await expect(authorization.requireAdminOrSuperAdminPrincipal()).rejects.toThrow("NOT_FOUND");
     await expect(authorization.requireAdminPrincipal()).rejects.toThrow("NOT_FOUND");
-    await expect(authorization.requireSuperAdminPrincipal()).rejects.toThrow("NOT_FOUND");
+    await expect(authorization.requireAccountManagementPrincipal()).rejects.toThrow("NOT_FOUND");
     await expect(queries.listAccounts()).rejects.toThrow("NOT_FOUND");
     await expect(queries.getAccountDetail(staffId)).rejects.toThrow("NOT_FOUND");
 
-    // STAFF가 코어 행위자가 되어도 assertSuperAdminActor가 거부한다.
+    // STAFF가 코어 행위자가 되어도 assertAccountManagementActor가 거부한다.
     const forgedEmail = `${run}-forged-staff@example.test`;
     await expect(
       mutations.createAccountCore(staffPrincipal(), {
@@ -440,7 +451,7 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
         isActive: true,
         passwordHash: null,
       }),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_SUPER_ADMIN" });
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
     expect(await db.user.findUnique({ where: { email: forgedEmail } })).toBeNull();
 
     // 본인 이력 전용 경로는 본인 행만 반환한다 (nextEmail로 대상을 구분한다 —
@@ -484,7 +495,7 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     await expect(authorization.requireAdminPrincipal()).resolves.toMatchObject({
       role: "ADMIN",
     });
-    await expect(authorization.requireSuperAdminPrincipal()).rejects.toThrow("NOT_FOUND");
+    await expect(authorization.requireAccountManagementPrincipal()).rejects.toThrow("NOT_FOUND");
   });
 
   it("produces no duplicate audit rows on an identical re-submit", async () => {

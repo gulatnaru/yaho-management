@@ -2,6 +2,7 @@ import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db/prisma";
+import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import { isOperationalPrincipal } from "@/lib/auth/principal";
 import {
   resolveSessionPrincipal,
@@ -96,9 +97,35 @@ export async function getOptionalOperationalPrincipal(): Promise<
 }
 
 /**
+ * P2-S 전환 안전장치 — 계정 관리 전용 모드 가드. P2의 requireSuperAdminPrincipal
+ * 단일 계약을 모드별 계약으로 대체한다. 판정은 lib/auth/cutover-mode.ts의
+ * resolveAccountCutoverMode() 하나만 쓰며, 계층별로 다른 판정을 두지 않는다.
+ * - LEGACY_ADMIN 모드: ADMIN만 계정 관리를 수행한다 (P2 전환 전 상태).
+ * - SUPER_ADMIN 모드: SUPER_ADMIN만 일반 계정 관리를 수행한다 (P2 계약).
+ * - 미등록·잘못된 설정(INVALID): 전원 거부한다 (fail-closed, notFound 위장).
+ * SUPER_ADMIN 계정이 DB에 존재한다는 사실만으로는 전환되지 않는다 —
+ * 모드는 환경변수 설정 + 배포로만 바뀌고, 코드가 스스로 뒤집지 않는다.
+ * 코어(server/accounts/mutations.ts)도 트랜잭션 안에서 모드를 다시 읽어
+ * 행위자를 재검증하므로, 가드 우회 호출은 코어에서 한 번 더 걸러진다.
+ */
+export async function requireAccountManagementPrincipal(): Promise<
+  AdminPrincipal | SuperAdminPrincipal
+> {
+  const principal = await requireCurrentPrincipal();
+  const mode = resolveAccountCutoverMode();
+  if (mode === "LEGACY_ADMIN" && principal.role === "ADMIN") {
+    return principal;
+  }
+  if (mode === "SUPER_ADMIN" && principal.role === "SUPER_ADMIN") {
+    return principal;
+  }
+  notFound();
+}
+
+/**
  * P1 금융·운영 ADMIN 진입점용 가드. requireAdminPrincipal을 전역으로 확장하지 않는다 —
  * 전역 확장은 계정 관리 API까지 SUPER_ADMIN에게 의도치 않게 개방하기 때문이다.
- * 계정 관리 진입점은 P2부터 requireSuperAdminPrincipal(SUPER_ADMIN 전용)로 전환됐다.
+ * 계정 관리 진입점은 P2-S부터 requireAccountManagementPrincipal(모드별)로 전환됐다.
  * 메뉴 노출이 이 가드를 대체하지 않는다.
  */
 export async function requireAdminOrSuperAdminPrincipal(): Promise<SuperAdminPrincipal | AdminPrincipal> {
