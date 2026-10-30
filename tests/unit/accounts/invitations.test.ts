@@ -13,6 +13,7 @@ import {
   generateApplicationCapabilityToken,
   hashApplicationCapabilityToken,
 } from "@/lib/reservation-applications/token";
+import { authenticateOperator } from "@/lib/auth/credentials";
 
 /**
  * P3 초대 코어 단위 테스트 (mock 트랜잭션 클라이언트).
@@ -355,6 +356,18 @@ describe("acceptInvitationCore", () => {
     expect(rows[0].previousIsActive).toBe(false);
     expect(rows[0].nextIsActive).toBe(true);
     expect(JSON.stringify(audit)).not.toContain(token);
+  });
+
+  it("allows a new credential login using the account state written by acceptance", async () => {
+    const { token, client, tx, target } = validAcceptSetup();
+    await acceptInvitationCore({ token, passwordHash: "accepted-hash" }, client as never);
+    const data = (tx.user.updateMany as ReturnType<typeof vi.fn>).mock.calls[0][0].data;
+    const row = { ...target, name: "직원", password: data.password as string, isActive: data.isActive as boolean,
+      authVersion: 1 + (data.authVersion.increment as number), teacher: null };
+    const lookup = { user: { findUnique: vi.fn().mockResolvedValue(row) } };
+    const compare = vi.fn(async (password: string, hash: string) => password === "new-password" && hash === "accepted-hash");
+    await expect(authenticateOperator({ email: target.email, password: "new-password" }, lookup, compare))
+      .resolves.toMatchObject({ id: target.id, authVersion: 2 });
   });
 
   it("형식이 맞지 않는 토큰은 DB 조회 없이 무효 처리한다", async () => {

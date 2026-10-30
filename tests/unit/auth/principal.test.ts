@@ -63,6 +63,26 @@ describe("resolveSessionPrincipal", () => {
     ).resolves.toBeNull();
   });
 
+  it("rejects a session whose user no longer exists", async () => {
+    await expect(resolveSessionPrincipal({ userId: "missing", authVersion: 3 }, clientWith(null))).resolves.toBeNull();
+  });
+
+  it.each(["role change", "password reset"])("rejects the old session after %s and accepts the current version", async () => {
+    const changed = { ...adminRow, role: "MANAGER", authVersion: 4 };
+    await expect(resolveSessionPrincipal({ userId: adminRow.id, authVersion: 3 }, clientWith(changed))).resolves.toBeNull();
+    await expect(resolveSessionPrincipal({ userId: adminRow.id, authVersion: 4 }, clientWith(changed))).resolves.toMatchObject({ role: "MANAGER", authVersion: 4 });
+  });
+
+  it("does not grant a forged token role when the live database role is STAFF", async () => {
+    const forged = { userId: adminRow.id, authVersion: 3, role: "SUPER_ADMIN" };
+    await expect(resolveSessionPrincipal(forged, clientWith({ ...adminRow, role: "STAFF" }))).resolves.toMatchObject({ role: "STAFF" });
+  });
+
+  it("does not produce a principal when database verification fails", async () => {
+    const client: PrincipalLookupClient = { user: { findUnique: vi.fn().mockRejectedValue(new Error("DB unavailable")) } };
+    await expect(resolveSessionPrincipal({ userId: adminRow.id, authVersion: 3 }, client)).rejects.toThrow("DB unavailable");
+  });
+
   it("requires a matching active Teacher for a TEACHER principal", async () => {
     const teacherRow = {
       ...adminRow,

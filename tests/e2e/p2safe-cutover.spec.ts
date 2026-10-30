@@ -211,7 +211,7 @@ p2safeSuite("P2-S 전환 안전장치 HTTP/E2E", () => {
     await expect.poll(async () => (await prisma.user.findUniqueOrThrow({ where: { id: created.id } })).mustChangePassword, { timeout: 30000 }).toBe(true);
     const afterReset = await prisma.user.findUniqueOrThrow({ where: { id: created.id } });
     expect(afterReset.mustChangePassword).toBe(true);
-    expect(afterReset.authVersion).toBe(2);
+    expect(afterReset.authVersion).toBe(3); // role change and password reset each increment once
     expect(
       await prisma.userAccountChange.count({
         where: { targetUserId: created.id, type: "PASSWORD_RESET", actorAdminId: adminId },

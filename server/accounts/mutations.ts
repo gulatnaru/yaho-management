@@ -276,6 +276,9 @@ export async function updateAccountCore(
         role: input.role,
         isActive: input.isActive,
         teacherId: input.role === "TEACHER" ? input.teacherId : null,
+        ...(current.role !== input.role || current.isActive !== input.isActive
+          ? { authVersion: { increment: 1 } }
+          : {}),
       },
     });
 

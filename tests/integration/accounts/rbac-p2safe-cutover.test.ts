@@ -223,7 +223,7 @@ describe.sequential("P2-S cutover mode contract (isolated PostgreSQL)", () => {
     const reset = await snapshotUser(managerId);
     expect(reset.password).not.toBe("synthetic-hash");
     expect(reset.mustChangePassword).toBe(true);
-    expect(reset.authVersion).toBe(2);
+    expect(reset.authVersion).toBe(3);
 
     // (d) 쿼리 3곳 모두 ADMIN 세션에서 통과한다.
     const accounts = await queries.listAccounts();

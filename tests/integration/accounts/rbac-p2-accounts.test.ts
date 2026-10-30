@@ -367,7 +367,7 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     const reset = await snapshotUser(admin2Id);
     expect(reset.password).not.toBe("synthetic-hash");
     expect(reset.mustChangePassword).toBe(true);
-    expect(reset.authVersion).toBe(2);
+    expect(reset.authVersion).toBe(3);
     const resetAudit = await db.userAccountChange.findFirstOrThrow({
       where: { targetUserId: admin2Id, type: "PASSWORD_RESET", actorAdminId: superId },
     });
@@ -533,17 +533,17 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
 
   it("reflects role change and authVersion invalidation on the next live principal lookup", async () => {
     // 전제: SUPER_ADMIN 관리 테스트에서 admin2는 MANAGER로 변경되고 재설정으로
-    // authVersion이 2가 됐다. 낡은 세션(authVersion 1)은 로그인으로, 새 세션은 새 역할로 해석된다.
+    // authVersion이 3이 됐다. 낡은 세션(authVersion 1)은 로그인으로, 새 세션은 새 역할로 해석된다.
     sessionHolder.userId = admin2Id;
     sessionHolder.authVersion = 1;
     const stale = await freshAuthorization();
     await expect(stale.requirePasswordChangePrincipal()).rejects.toThrow("REDIRECT:/login");
 
-    sessionHolder.authVersion = 2;
+    sessionHolder.authVersion = 3;
     const fresh = await freshAuthorization();
     await expect(fresh.requirePasswordChangePrincipal()).resolves.toMatchObject({
       role: "MANAGER",
-      authVersion: 2,
+      authVersion: 3,
       mustChangePassword: true,
     });
   });

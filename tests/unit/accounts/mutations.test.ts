@@ -349,11 +349,45 @@ describe("account mutation core", () => {
     }, test.client);
 
     expect(test.calls.slice(0, 4)).toEqual(["advisory-lock", "actor-check", "target-lock", "admin-count"]);
+    expect(test.userUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ authVersion: { increment: 1 } }),
+    }));
     expect(test.historyCreateMany).toHaveBeenCalledWith({ data: [
       expect.objectContaining({ type: "EMAIL_CHANGED", previousEmail: "target@example.test", nextEmail: "next@example.test" }),
       expect.objectContaining({ type: "ROLE_CHANGED", previousRole: "ADMIN", nextRole: "MANAGER" }),
       expect.objectContaining({ type: "ACTIVE_CHANGED", previousIsActive: true, nextIsActive: false }),
     ] });
+  });
+
+  it.each([
+    { label: "role", before: target(), role: "STAFF" as const, isActive: true },
+    { label: "deactivation", before: target(), role: "MANAGER" as const, isActive: false },
+    { label: "reactivation", before: target({ isActive: false }), role: "MANAGER" as const, isActive: true },
+    { label: "role and active state", before: target(), role: "STAFF" as const, isActive: false },
+  ])("increments authVersion once for $label", async ({ before, role, isActive }) => {
+    const test = harness({ target: before });
+    await updateAccountCore(principal(), before.id, {
+      name: before.name, email: before.email, role, teacherId: null, isActive,
+    }, test.client);
+    expect(test.userUpdate).toHaveBeenCalledOnce();
+    expect(test.userUpdate).toHaveBeenCalledWith({
+      where: { id: before.id },
+      data: { name: before.name, email: before.email, role, isActive, teacherId: null, authVersion: { increment: 1 } },
+    });
+  });
+
+  it.each([
+    { label: "no-op", name: "대상", email: "target@example.test" },
+    { label: "general information", name: "새 이름", email: "new@example.test" },
+  ])("does not increment authVersion for $label", async ({ name, email }) => {
+    const test = harness();
+    await updateAccountCore(principal(), "target-1", {
+      name, email, role: "MANAGER", teacherId: null, isActive: true,
+    }, test.client);
+    expect(test.userUpdate).toHaveBeenCalledWith({
+      where: { id: "target-1" },
+      data: { name, email, role: "MANAGER", isActive: true, teacherId: null },
+    });
   });
 
   it("blocks self-deactivation, self-demotion, and removal of the last active ADMIN", async () => {
