@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { ProgramForm } from "../_components/program-form";
 
 export default async function NewProgramPage() {
@@ -12,7 +13,7 @@ export default async function NewProgramPage() {
       </Link>
 
       <h1 className="text-2xl font-bold">프로그램 등록</h1>
-      <ProgramForm mode="create" showDefaultPrice={principal.role === "ADMIN"} />
+      <ProgramForm mode="create" showDefaultPrice={isAdminOrSuperAdmin(principal)} />
     </section>
   );
 }

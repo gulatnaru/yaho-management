@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { readFormString } from "@/lib/forms/form-data";
 import {
   programInputSchema,
@@ -68,7 +69,7 @@ function readProgramFormValues(formData: FormData, includeFinancialFields: boole
 
 export async function createProgram(_prevState: ProgramFormState, formData: FormData): Promise<ProgramFormState> {
   const principal = await requireOperationalPrincipal();
-  const includeFinancialFields = principal.role === "ADMIN";
+  const includeFinancialFields = isAdminOrSuperAdmin(principal);
 
   const result = parseProgramForm(formData, includeFinancialFields);
   if (!result.success) {
@@ -116,7 +117,7 @@ export async function updateProgram(
   formData: FormData,
 ): Promise<ProgramFormState> {
   const principal = await requireOperationalPrincipal();
-  const includeFinancialFields = principal.role === "ADMIN";
+  const includeFinancialFields = isAdminOrSuperAdmin(principal);
 
   const result = parseProgramForm(formData, includeFinancialFields);
   if (!result.success) {
@@ -126,6 +127,10 @@ export async function updateProgram(
     };
   }
 
+  // P1-UI: priceInput 스키마가 키 생략을 0으로 변환하므로, 키 자체가 없을 때는
+  // 가격을 쓰지 않고 기존 값을 유지한다. 폼은 필드를 항상 제출하므로 폼 경유
+  // 동작은 변하지 않으며, 직접 호출에서 키를 생략한 경우의 가격 파괴만 막는다.
+  const priceSubmitted = formData.has("defaultPrice");
   try {
     const defaultPrice =
       "defaultPrice" in result.data && typeof result.data.defaultPrice === "number"
@@ -139,7 +144,7 @@ export async function updateProgram(
         targetAgeMin: result.data.targetAgeMin ?? null,
         targetAgeMax: result.data.targetAgeMax ?? null,
         defaultDuration: result.data.defaultDuration ?? null,
-        ...(includeFinancialFields && defaultPrice !== undefined ? { defaultPrice } : {}),
+        ...(includeFinancialFields && priceSubmitted && defaultPrice !== undefined ? { defaultPrice } : {}),
         memo: result.data.memo || null,
       },
     });

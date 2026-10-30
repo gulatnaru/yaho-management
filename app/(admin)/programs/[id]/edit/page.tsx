@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { getProgramAdminDetail, getProgramOperationalDetail } from "@/lib/programs/queries";
 import { ProgramForm } from "../../_components/program-form";
 
@@ -11,7 +12,7 @@ interface EditProgramPageProps {
 export default async function EditProgramPage({ params }: EditProgramPageProps) {
   const { id } = await params;
   const principal = await requireOperationalPrincipal();
-  const isAdmin = principal.role === "ADMIN";
+  const isAdmin = isAdminOrSuperAdmin(principal);
   const program = isAdmin
     ? await getProgramAdminDetail(id)
     : await getProgramOperationalDetail(id);

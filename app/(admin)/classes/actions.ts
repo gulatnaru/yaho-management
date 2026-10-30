@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { readFormString } from "@/lib/forms/form-data";
 import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
@@ -247,7 +247,7 @@ async function createRecurringClass(formData: FormData): Promise<ClassFormState>
 
 export async function createClass(_prevState: ClassFormState, formData: FormData): Promise<ClassFormState> {
   const principal = await requireOperationalPrincipal();
-  if (principal.role !== "ADMIN" && readFormString(formData, "applicationPrice")) {
+  if (!isAdminOrSuperAdmin(principal) && readFormString(formData, "applicationPrice")) {
     return { formError: "신청 최종 금액은 관리자만 설정할 수 있습니다.", values: readClassFormValues(formData) };
   }
 
@@ -294,7 +294,7 @@ export async function createClass(_prevState: ClassFormState, formData: FormData
           endsAt: data.endsAt,
           location: data.location,
           capacity: data.capacity,
-          applicationPrice: principal.role === "ADMIN" ? data.applicationPrice ?? null : null,
+          applicationPrice: isAdminOrSuperAdmin(principal) ? data.applicationPrice ?? null : null,
           status: "SCHEDULED",
           memo: data.memo || null,
           insured: data.insured,
@@ -341,7 +341,7 @@ export async function updateClass(
   formData: FormData,
 ): Promise<ClassFormState> {
   const principal = await requireOperationalPrincipal();
-  if (principal.role !== "ADMIN" && readFormString(formData, "applicationPrice")) {
+  if (!isAdminOrSuperAdmin(principal) && readFormString(formData, "applicationPrice")) {
     return { formError: "신청 최종 금액은 관리자만 설정할 수 있습니다.", values: readClassFormValues(formData) };
   }
 

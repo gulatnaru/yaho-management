@@ -1,4 +1,5 @@
 import { requireCurrentPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { dashboardSearchSchema } from "@/lib/validation/dashboard";
 import { buildMonthlyCalendar } from "@/server/dashboard/calendar";
 import { addKstMonths, getKstDayPeriod, resolveDashboardPeriod } from "@/server/dashboard/period";
@@ -29,7 +30,7 @@ function formatSelectedDateTitle(value: string) {
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const principal = await requireCurrentPrincipal();
-  const isAdmin = principal.role === "ADMIN";
+  const isAdmin = isAdminOrSuperAdmin(principal);
   const teacherId = principal.role === "TEACHER" ? principal.teacherId : undefined;
   const raw = await searchParams;
   const search = dashboardSearchSchema.parse({

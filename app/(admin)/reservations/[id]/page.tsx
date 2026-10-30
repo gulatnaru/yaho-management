@@ -4,6 +4,7 @@ import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { formatKstDate, formatKstDateTimeRange, formatKstTime } from "@/lib/classes/datetime";
 import { formatKrw } from "@/lib/payments/format";
 import {
@@ -49,7 +50,7 @@ function isAdminReservationDetail(
 export default async function ReservationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const principal = await requireOperationalPrincipal();
-  const isAdmin = principal.role === "ADMIN";
+  const isAdmin = isAdminOrSuperAdmin(principal);
   const reservation = isAdmin
     ? await getReservationDetail(id)
     : await getReservationOperationalDetail(id);

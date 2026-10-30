@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { listProgramCandidates, listTeacherCandidates } from "@/lib/classes/candidates";
 import { ClassForm } from "../_components/class-form";
 
@@ -17,7 +18,7 @@ export default async function NewClassPage() {
       </Link>
 
       <h1 className="text-2xl font-bold">클래스 등록</h1>
-      <ClassForm allowApplicationPrice={principal.role === "ADMIN"} mode="create" programCandidates={programCandidates} teacherCandidates={teacherCandidates} />
+      <ClassForm allowApplicationPrice={isAdminOrSuperAdmin(principal)} mode="create" programCandidates={programCandidates} teacherCandidates={teacherCandidates} />
     </section>
   );
 }

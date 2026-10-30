@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { listProgramCandidates, listTeacherCandidates } from "@/lib/classes/candidates";
 import { formatKstDate, formatKstTime } from "@/lib/classes/datetime";
 import { getClassDetailForPrincipal } from "@/lib/classes/queries";
@@ -68,7 +69,7 @@ export default async function EditClassPage({ params }: EditClassPageProps) {
           safetyMemo: classDetail.safetyMemo ?? "",
         }}
         mode="edit"
-        allowApplicationPrice={principal.role === "ADMIN"}
+        allowApplicationPrice={isAdminOrSuperAdmin(principal)}
         programCandidates={programCandidates}
         teacherCandidates={teacherCandidates}
       />

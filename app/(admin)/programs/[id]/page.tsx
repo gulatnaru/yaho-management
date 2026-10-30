@@ -4,6 +4,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { countFutureScheduledClasses } from "@/lib/programs/deactivation-warning";
 import { formatDuration, formatPrice, formatTargetAgeRange } from "@/lib/programs/format";
 import { getProgramAdminDetail, getProgramOperationalDetail } from "@/lib/programs/queries";
@@ -16,7 +17,7 @@ interface ProgramDetailPageProps {
 export default async function ProgramDetailPage({ params }: ProgramDetailPageProps) {
   const { id } = await params;
   const principal = await requireOperationalPrincipal();
-  const isAdmin = principal.role === "ADMIN";
+  const isAdmin = isAdminOrSuperAdmin(principal);
 
   const [program, futureClassCount] = await Promise.all([
     isAdmin ? getProgramAdminDetail(id) : getProgramOperationalDetail(id),

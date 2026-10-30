@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireOperationalPrincipal } from "@/lib/auth/authorization";
+import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
 import { calculateAge } from "@/lib/children/age";
 import { getChildConsentSummary } from "@/lib/children/consent/queries";
 import type { ConsentType } from "@/lib/children/consent/validation";
@@ -64,7 +65,7 @@ export default async function ChildDetailPage({
 }: ChildDetailPageProps) {
   const [{ id }, resolvedSearchParams] = await Promise.all([params, searchParams]);
   const principal = await requireOperationalPrincipal();
-  const isAdmin = principal.role === "ADMIN";
+  const isAdmin = isAdminOrSuperAdmin(principal);
   const historyPage = parseChildHistoryPage(resolvedSearchParams.historyPage);
   const now = new Date();
 
