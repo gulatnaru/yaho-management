@@ -1,19 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { getAccountDetail, listAvailableAccountTeachers } from "@/server/accounts/queries";
 import { AccountForm } from "../../../accounts/_components/account-form";
 
 type EditAccountPageProps = { params: Promise<{ id: string }> };
 
 export default async function EditAccountPage({ params }: EditAccountPageProps) {
-  const principal = await requireAdminPrincipal();
+  // P2: 계정 관리 진입점은 SUPER_ADMIN 전용이다. 본인 보호는 폼·코어에서 처리한다 —
+  // SUPER_ADMIN 본인 행은 폼이 읽기 전용으로 렌더링하고, 코어는 본인 변경을 거부한다.
+  await requireSuperAdminPrincipal();
   const { id } = await params;
   const detail = await getAccountDetail(id);
   if (!detail) notFound();
 
   const teachers = await listAvailableAccountTeachers(detail.account.teacher?.id);
-  const protectAdminSelf = principal.userId === detail.account.id && detail.account.role === "ADMIN";
 
   return (
     <section className="space-y-6">
@@ -29,7 +30,6 @@ export default async function EditAccountPage({ params }: EditAccountPageProps) 
           isActive: detail.account.isActive,
         }}
         mode="edit"
-        protectAdminSelf={protectAdminSelf}
         teachers={teachers}
       />
     </section>

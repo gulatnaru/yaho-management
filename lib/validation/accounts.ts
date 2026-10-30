@@ -38,6 +38,12 @@ function validateRoleTeacher(
   }
 }
 
+/**
+ * P2 (OQ-8): 임시 비밀번호 경로 폐지. 직접 등록은 비밀번호 없이 생성되며
+ * 계정은 비활성 상태로 초대 수락(P3)을 통해서만 활성화된다. 따라서 생성 스키마에
+ * 비밀번호 입력이 없다. 기존 계정의 인증정보 재설정은 adminPasswordResetSchema 경유로
+ * 별도 유지한다 (발급 경로가 아니라 지원 기능).
+ */
 export const accountCreateSchema = z
   .object({
     name: nameSchema,
@@ -45,7 +51,6 @@ export const accountCreateSchema = z
     role: z.enum(ACCOUNT_ROLES),
     teacherId: teacherIdSchema,
     isActive: z.boolean(),
-    temporaryPassword: passwordSchema,
   })
   .superRefine(validateRoleTeacher);
 

@@ -33,9 +33,9 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
     ];
   }
 
-  // P1 (OQ-11): SUPER_ADMIN은 전체 운영 메뉴를 본다. 단, 메뉴 노출이 권한 이관을 뜻하지 않는다 —
-  // 계정 관리 진입점은 P2 전환 게이트 전까지 ADMIN 전용 가드를 유지하므로,
-  // P1 단계에서 SUPER_ADMIN이 계정 관리를 열면 가드에서 차단된다 (P2에서 해소).
+  // P1 (OQ-11): SUPER_ADMIN은 전체 운영 메뉴를 본다. P2: 계정 관리 메뉴는 SUPER_ADMIN에게만
+  // 노출한다 — 메뉴 노출은 표시일 뿐 권한 경계가 아니며, 진입점 가드(queries·actions·코어)가
+  // 실제 경계이다. ADMIN은 전환 이후 계정 관리 메뉴를 보지 못하고 진입해도 차단된다.
   const adminMenuItems =
     principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
       ? [
@@ -47,11 +47,12 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
           },
           { href: "/payments", label: "결제·환불" },
           { href: "/revenue", label: "매출 집계" },
-          { href: "/accounts", label: "계정 관리" },
         ]
       : [];
+  const accountMenuItems =
+    principal.role === "SUPER_ADMIN" ? [{ href: "/accounts", label: "계정 관리" }] : [];
 
-  return [...OPERATIONAL_NAV_ITEMS, ...adminMenuItems, { href: "/account/password", label: "비밀번호 변경" }];
+  return [...OPERATIONAL_NAV_ITEMS, ...adminMenuItems, ...accountMenuItems, { href: "/account/password", label: "비밀번호 변경" }];
 }
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {

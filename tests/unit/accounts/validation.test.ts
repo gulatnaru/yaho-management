@@ -6,13 +6,15 @@ import {
   changeOwnPasswordSchema,
 } from "@/lib/validation/accounts";
 
+// P2 (OQ-8): 생성 스키마에 임시 비밀번호가 없다. 비밀번호 없는 생성이 기본이며,
+// 활성화는 P3 초대 수락을 통해서만 이뤄진다. 재설정용 비밀번호 경계는 아래 별도 테스트가
+// adminPasswordResetSchema로 계속 검증한다.
 const baseCreate = {
   name: "운영자",
   email: "operator@example.test",
   role: "MANAGER",
   teacherId: null,
   isActive: true,
-  temporaryPassword: "temporary-password",
 } as const;
 
 describe("account validation", () => {

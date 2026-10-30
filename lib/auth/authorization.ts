@@ -98,8 +98,8 @@ export async function getOptionalOperationalPrincipal(): Promise<
 /**
  * P1 금융·운영 ADMIN 진입점용 가드. requireAdminPrincipal을 전역으로 확장하지 않는다 —
  * 전역 확장은 계정 관리 API까지 SUPER_ADMIN에게 의도치 않게 개방하기 때문이다.
- * 계정 관리 진입점은 P2 전환 게이트 전까지 requireAdminPrincipal(ADMIN 전용)을 유지한다.
- * 메뉴 노출이 이 가드를 대체하지 않으며, 승인·실행 분리 규칙을 우회하는 권한을 부여하지 않는다.
+ * 계정 관리 진입점은 P2부터 requireSuperAdminPrincipal(SUPER_ADMIN 전용)로 전환됐다.
+ * 메뉴 노출이 이 가드를 대체하지 않는다.
  */
 export async function requireAdminOrSuperAdminPrincipal(): Promise<SuperAdminPrincipal | AdminPrincipal> {
   const principal = await requireCurrentPrincipal();

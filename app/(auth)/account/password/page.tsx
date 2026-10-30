@@ -1,8 +1,13 @@
+import Link from "next/link";
 import { requirePasswordChangePrincipal } from "@/lib/auth/authorization";
 import { PasswordForm } from "./password-form";
 
 export default async function PasswordPage() {
   const principal = await requirePasswordChangePrincipal();
+  // P2 (OQ-12): 본인 이력 페이지는 표시만 연결하고, 접근 권한은 서버 쿼리가 검사한다.
+  // MANAGER·TEACHER에게는 링크를 노출하지 않는다 (직접 URL 접근 시에도 서버에서 거부된다).
+  const canViewOwnHistory =
+    principal.role === "SUPER_ADMIN" || principal.role === "ADMIN" || principal.role === "STAFF";
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4 py-12">
@@ -19,6 +24,11 @@ export default async function PasswordPage() {
         <div className="mt-6">
           <PasswordForm />
         </div>
+        {canViewOwnHistory ? (
+          <p className="mt-6 text-sm">
+            <Link className="text-slate-500 hover:underline" href="/account/history">내 계정 변경 이력 보기 →</Link>
+          </p>
+        ) : null}
       </section>
     </main>
   );

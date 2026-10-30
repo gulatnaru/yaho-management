@@ -14,8 +14,8 @@ type TeacherOption = { id: string; name: string };
 export type AccountFormDefaultValues = {
   name: string;
   email: string;
-  // P1: SUPER_ADMIN 행도 상세 화면에서 조회되므로 타입에 포함한다.
-  // 단, 일반 수정 경로의 제출은 코어에서 SUPER_ADMIN_FORBIDDEN으로 거부된다 (P2에서 재작업).
+  // P2: SUPER_ADMIN 행은 상세 화면에서 조회되지만 일반 경로로는 변경할 수 없으므로,
+  // 폼은 읽기 전용으로 렌더링하고 제출 수단을 제공하지 않는다 (서버 코어 거부와 이중 방어).
   role: AccountRole | "SUPER_ADMIN";
   teacherId: string;
   isActive: boolean;
@@ -26,14 +26,13 @@ type AccountFormProps = {
   accountId?: string;
   teachers: TeacherOption[];
   defaultValues?: AccountFormDefaultValues;
-  protectAdminSelf?: boolean;
 };
 
 const ROLE_LABELS: Record<AccountRole, string> = {
   ADMIN: "관리자",
   MANAGER: "준관리자",
   TEACHER: "선생님",
-  // P1: 일반 생성 선택지에서 SUPER_ADMIN은 제외된다 (코어에서 서버 강제 거부).
+  // P2: 일반 생성·수정 선택지에서 SUPER_ADMIN은 제외된다 (코어에서 서버 강제 거부).
   STAFF: "직원",
 };
 
@@ -52,16 +51,47 @@ export function AccountForm({
   accountId,
   teachers,
   defaultValues = EMPTY_VALUES,
-  protectAdminSelf = false,
 }: AccountFormProps) {
   const action = mode === "edit" && accountId ? updateAccount.bind(null, accountId) : createAccount;
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
-  // P1: SUPER_ADMIN 행도 조회되므로 state 타입에 포함한다. Select 선택지에는 SUPER_ADMIN이 없어
-  // 일치하는 옵션이 없으면 빈 값으로 표시되며, 제출은 코어에서 SUPER_ADMIN_FORBIDDEN으로 거부된다 (P2 재작업).
   const [role, setRole] = useState<AccountRole | "SUPER_ADMIN">(defaultValues.role);
 
   const value = <K extends keyof AccountFormDefaultValues>(key: K) =>
     state.values?.[key] ?? defaultValues[key];
+
+  // P2: 최고관리자 행은 일반 경로로 어떤 변경도 할 수 없으므로 폼 자체를 제출하지 않는다.
+  // 본인 보호(protectAdminSelf)는 P2에서 소멸했다 — ADMIN은 계정 관리에 접근하지 않고,
+  // SUPER_ADMIN 본인 행도 이 읽기 전용 분기로 처리된다.
+  if (mode === "edit" && defaultValues.role === "SUPER_ADMIN") {
+    return (
+      <div className="max-w-xl space-y-6">
+        <div className="space-y-1.5">
+          <Label htmlFor="name">이름</Label>
+          <Input defaultValue={defaultValues.name} disabled id="name" name="name" />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="email">이메일</Label>
+          <Input defaultValue={defaultValues.email} disabled id="email" name="email" type="email" />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="role">역할</Label>
+          <Input defaultValue="최고관리자" disabled id="role" name="role" />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Checkbox defaultChecked={defaultValues.isActive} disabled id="isActive" name="isActive" />
+          <Label htmlFor="isActive">활성 계정</Label>
+        </div>
+
+        <p className="text-sm text-slate-500" role="note">
+          최고관리자 계정은 일반 경로로 변경할 수 없습니다. 최고관리자 권한 변경·복구는
+          별도 고위험 절차(P3-2/P7) 대상입니다.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <form action={formAction} className="max-w-xl space-y-6" noValidate>
@@ -79,21 +109,18 @@ export function AccountForm({
 
       <div className="space-y-1.5">
         <Label htmlFor="role">역할 *</Label>
-        {protectAdminSelf ? <input name="role" type="hidden" value="ADMIN" /> : null}
         <Select
-          disabled={protectAdminSelf}
           id="role"
-          name={protectAdminSelf ? undefined : "role"}
+          name="role"
           onChange={(event) => setRole(event.target.value as AccountRole)}
-          value={protectAdminSelf ? "ADMIN" : role}
+          value={role}
         >
           {ACCOUNT_ROLES.map((item) => <option key={item} value={item}>{ROLE_LABELS[item]}</option>)}
         </Select>
-        {protectAdminSelf ? <p className="text-xs text-slate-500">본인의 관리자 역할은 변경할 수 없습니다.</p> : null}
         {state.errors?.role ? <p className="text-sm text-red-600" role="alert">{state.errors.role[0]}</p> : null}
       </div>
 
-      {role === "TEACHER" && !protectAdminSelf ? (
+      {role === "TEACHER" ? (
         <div className="space-y-1.5">
           <Label htmlFor="teacherId">연결 선생님 *</Label>
           <Select defaultValue={value("teacherId")} id="teacherId" name="teacherId" required>
@@ -105,25 +132,22 @@ export function AccountForm({
       ) : null}
 
       {mode === "create" ? (
-        <div className="space-y-1.5">
-          <Label htmlFor="temporaryPassword">임시 비밀번호 *</Label>
-          <Input autoComplete="new-password" id="temporaryPassword" minLength={8} name="temporaryPassword" required type="password" />
-          <p className="text-xs text-slate-500">8~128자. 사용자는 로그인 후 반드시 새 비밀번호로 변경해야 합니다.</p>
-          {state.errors?.temporaryPassword ? <p className="text-sm text-red-600" role="alert">{state.errors.temporaryPassword[0]}</p> : null}
-        </div>
+        <p className="text-sm text-slate-500" role="note">
+          비밀번호 없이 생성됩니다. 계정은 비활성 상태로 생성되며, 초대 수락(P3)을 통해
+          활성화됩니다. 임시 비밀번호 전달 경로는 없습니다.
+        </p>
       ) : null}
 
-      <div className="flex items-center gap-2">
-        {protectAdminSelf ? <input name="isActive" type="hidden" value="on" /> : null}
-        <Checkbox
-          defaultChecked={protectAdminSelf ? true : Boolean(value("isActive"))}
-          disabled={protectAdminSelf}
-          id="isActive"
-          name={protectAdminSelf ? undefined : "isActive"}
-        />
-        <Label htmlFor="isActive">활성 계정</Label>
-      </div>
-      {protectAdminSelf ? <p className="text-xs text-slate-500">본인 계정은 비활성화할 수 없습니다.</p> : null}
+      {mode === "edit" ? (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            defaultChecked={Boolean(value("isActive"))}
+            id="isActive"
+            name="isActive"
+          />
+          <Label htmlFor="isActive">활성 계정</Label>
+        </div>
+      ) : null}
 
       {state.formError ? <p className="text-sm text-red-600" role="alert">{state.formError}</p> : null}
 

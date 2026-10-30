@@ -10,7 +10,7 @@ export default async function NewAccountPage() {
       <Link className="text-sm text-slate-500 hover:underline" href="/accounts">← 목록으로</Link>
       <div>
         <h1 className="text-2xl font-bold">계정 생성</h1>
-        <p className="mt-1 text-sm text-slate-500">임시 비밀번호는 저장 후 다시 확인할 수 없습니다.</p>
+        <p className="mt-1 text-sm text-slate-500">비밀번호 없이 생성되며, 계정은 비활성 상태로 초대 수락(P3)을 통해 활성화됩니다.</p>
       </div>
       <AccountForm mode="create" teachers={teachers} />
     </section>

@@ -1,4 +1,5 @@
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { notFound } from "next/navigation";
+import { requireCurrentPrincipal, requireSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 
 export const ACCOUNT_ROLE_LABELS = {
@@ -35,8 +36,13 @@ const ACCOUNT_SUMMARY_SELECT = {
   updatedAt: true,
 } as const;
 
+/**
+ * P2 (OQ-1 간소화): 계정 관리 조회는 SUPER_ADMIN 전용으로 전환됐다. 이 3개 쿼리가
+ * 목록·상세·생성 페이지의 실제 choke point이므로, 페이지 가드만 바꾸는 부분 교체는
+ * 허용하지 않는다. ADMIN은 전환 이후 계정 관리에 접근할 수 없다.
+ */
 export async function listAccounts() {
-  await requireAdminPrincipal();
+  await requireSuperAdminPrincipal();
   return prisma.user.findMany({
     select: ACCOUNT_SUMMARY_SELECT,
     orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -44,7 +50,7 @@ export async function listAccounts() {
 }
 
 export async function getAccountDetail(id: string) {
-  await requireAdminPrincipal();
+  await requireSuperAdminPrincipal();
 
   const [account, history] = await Promise.all([
     prisma.user.findUnique({
@@ -75,7 +81,7 @@ export async function getAccountDetail(id: string) {
 }
 
 export async function listAvailableAccountTeachers(currentTeacherId?: string | null) {
-  await requireAdminPrincipal();
+  await requireSuperAdminPrincipal();
   return prisma.teacher.findMany({
     where: {
       isActive: true,
@@ -86,5 +92,38 @@ export async function listAvailableAccountTeachers(currentTeacherId?: string | n
     },
     select: { id: true, name: true },
     orderBy: [{ name: "asc" }, { id: "asc" }],
+  });
+}
+
+/**
+ * P2 (OQ-12): 본인 이력 전용 조회 경로. 읽기 전용이며, 서버에서 권한을 검사한다.
+ * SUPER_ADMIN은 전체 이력을 상세 경로(getAccountDetail)로 보지만, 이 경로에서도 본인
+ * 이력만 반환한다. ADMIN·STAFF는 대상=본인인 행만 반환하고, 계정 관리 페이지에는
+ * 접근할 수 없다. MANAGER·TEACHER는 P2 범위에서 미결이므로 차단 방향으로 거부한다.
+ * 클라이언트 숨김만으로 제한하지 않으며, live principal 기준으로 필터링한다.
+ */
+export async function listOwnAccountHistory() {
+  const principal = await requireCurrentPrincipal();
+  if (principal.role !== "SUPER_ADMIN" && principal.role !== "ADMIN" && principal.role !== "STAFF") {
+    notFound();
+  }
+
+  return prisma.userAccountChange.findMany({
+    where: { targetUserId: principal.userId },
+    select: {
+      id: true,
+      type: true,
+      previousEmail: true,
+      nextEmail: true,
+      previousRole: true,
+      nextRole: true,
+      previousIsActive: true,
+      nextIsActive: true,
+      createdAt: true,
+      actorAdmin: {
+        select: { id: true, name: true, email: true },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
 }

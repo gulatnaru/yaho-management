@@ -21,7 +21,8 @@ type StoredUser = {
   authVersion: number;
 };
 
-const principal = (userId = "admin-1") => ({ userId, role: "ADMIN", teacherId: null }) as never;
+// P2: 코어 행위자는 SUPER_ADMIN 전용이다. P1의 ADMIN 행위자는 코어에서 거부된다.
+const principal = (userId = "super-1") => ({ userId, role: "SUPER_ADMIN", teacherId: null }) as never;
 
 function target(overrides: Partial<StoredUser> = {}): StoredUser {
   return {
@@ -46,7 +47,7 @@ function harness(options: {
   const actor =
     options.actor === null
       ? null
-      : target({ id: "admin-1", email: "admin@example.test", role: "ADMIN", ...options.actor });
+      : target({ id: "super-1", email: "super@example.test", role: "SUPER_ADMIN", ...options.actor });
   const userCreate = vi.fn(async () => ({ id: "created-1" }));
   const userUpdate = vi.fn(async () => currentTarget);
   const accountChangeCreate = vi.fn(async () => ({}));
@@ -88,7 +89,25 @@ const updateInput = {
   teacherId: null,
 };
 
-describe("P1 SUPER_ADMIN escalation blocking (server-enforced)", () => {
+describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor)", () => {
+  it("rejects ADMIN and STAFF actors at the core before any write", async () => {
+    const adminActor = harness({
+      actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
+    });
+    await expect(
+      createAccountCore({ userId: "admin-1", role: "ADMIN", teacherId: null } as never, { ...createInput, role: "STAFF" }, adminActor.client as never),
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_SUPER_ADMIN" });
+    expect(adminActor.userCreate).not.toHaveBeenCalled();
+
+    const staffActor = harness({
+      actor: { id: "staff-1", email: "staff@example.test", role: "STAFF" },
+    });
+    await expect(
+      createAccountCore({ userId: "staff-1", role: "STAFF", teacherId: null } as never, { ...createInput, role: "STAFF" }, staffActor.client as never),
+    ).rejects.toMatchObject({ code: "ACTOR_NOT_SUPER_ADMIN" });
+    expect(staffActor.userCreate).not.toHaveBeenCalled();
+  });
+
   it("rejects general-path creation of SUPER_ADMIN before any write", async () => {
     const { client, userCreate } = harness();
     await expect(
@@ -167,13 +186,12 @@ describe("P1 SUPER_ADMIN escalation blocking (server-enforced)", () => {
   });
 });
 
-describe("P1 role validation (OQ-4 option B: role required)", () => {
+describe("P1 role validation (OQ-4 option B: role required; P2 keeps it, drops the password field)", () => {
   const base = {
     name: "신규",
     email: "new@example.test",
     teacherId: null,
     isActive: true,
-    temporaryPassword: "password-123",
   };
 
   it("rejects a missing role (no ADMIN default)", () => {
