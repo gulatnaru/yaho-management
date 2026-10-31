@@ -987,3 +987,42 @@ model Refund {
 // - 클래스당 Teacher 최소 1명 배정 (원칙은 2명, 2명 미만은 경고만 — ADR-019)
 // - 예약 신청 링크 접수 판정: 링크 활성 + 클래스 SCHEDULED + startsAt 이전 + 허용 환경 + 설정 유효 (ADR-052)
 // - 예약 신청 상태 전이는 SUBMITTED 에서만 가능하고, 확정은 입금 확인이 기록된 신청만 가능 (ADR-053)
+// P7 evidence is independent from ordinary account audit retention.
+model BootstrapApproval {
+  id               String   @id @default(cuid())
+  approverUserId   String
+  targetUserId     String
+  targetEmail      String
+  approvedAt       DateTime
+  expiresAt        DateTime
+  identityMethod   String
+  identityAt       DateTime
+  revokedAt        DateTime?
+  consumedAt       DateTime?
+  executionId      String?
+  @@index([targetUserId])
+}
+
+model BootstrapAcceptance {
+  id                String   @id @default(cuid())
+  approvalId        String
+  acceptedForUserId String
+  targetEmail       String
+  tokenHash         String   @unique
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  acceptedAt        DateTime?
+  tokenVerified     Boolean  @default(false)
+  authenticationMethod String?
+  consumedAt        DateTime?
+  executionId       String?
+  @@index([approvalId])
+}
+
+// Singleton key is enforced by the draft SQL CHECK, independent of User/audit.
+model BootstrapCompletion {
+  id           String   @id
+  approvalId   String   @unique
+  acceptanceId String   @unique
+  completedAt  DateTime
+}
