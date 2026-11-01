@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { notFound } from "next/navigation";
 import { z } from "zod";
 import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
@@ -23,6 +24,7 @@ export async function recordAttendanceAction(
   formData: FormData,
 ): Promise<AttendanceFormState> {
   const principal = await requireCurrentPrincipal();
+  if (principal.role === "STAFF") notFound();
   const parsed = attendanceInputSchema.safeParse({
     reservationId: formData.get("reservationId"),
     attendance: formData.get("attendance"),

@@ -10,6 +10,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "";
 const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL ?? "";
 const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD ?? "";
+const testEmailDomain = process.env.PHASE16_TEST_EMAIL_DOMAIN ?? "phase16.test";
 
 // P2-S: 이 스펙은 SUPER_ADMIN 모드 전제로 P2 계약을 검증한다. ADMIN 계정 생성
 // 전제는 P2에서 뒤집혔으므로(ADMIN의 계정 관리는 SUPER_ADMIN 모드에서 차단),
@@ -47,6 +48,7 @@ let bootstrapAdminPrincipal: CurrentPrincipal;
 let bootstrapSuperAdminPrincipal: CurrentPrincipal;
 let managerEmail: string;
 let teacherEmail: string;
+let staffEmail: string;
 let teacherId: string;
 let unrelatedTeacherId: string;
 let assignedClassId: string;
@@ -147,8 +149,8 @@ phase16Suite("Phase 16 계정·권한 관리", () => {
     ids.programs.push(program.id);
     ids.children.push(assignedChild.id, unrelatedChild.id);
 
-    managerEmail = `manager-${suffix}@phase16.test`;
-    teacherEmail = `teacher-${suffix}@phase16.test`;
+    managerEmail = `manager-${suffix}@${testEmailDomain}`;
+    teacherEmail = `teacher-${suffix}@${testEmailDomain}`;
     const [manager, teacherUser] = await Promise.all([
       prisma.user.create({
         data: { name: `Phase16 준관리자 ${suffix}`, email: managerEmail, password: passwordHash, role: "MANAGER" },
@@ -158,6 +160,11 @@ phase16Suite("Phase 16 계정·권한 관리", () => {
       }),
     ]);
     ids.users.push(manager.id, teacherUser.id);
+    staffEmail = `staff-${suffix}@${testEmailDomain}`;
+    const staff = await prisma.user.create({
+      data: { name: `Phase16 직원 ${suffix}`, email: staffEmail, password: passwordHash, role: "STAFF" },
+    });
+    ids.users.push(staff.id);
 
     const startsAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const endsAt = new Date(Date.now() - 60 * 60 * 1000);
@@ -228,6 +235,31 @@ phase16Suite("Phase 16 계정·권한 관리", () => {
     await prisma.user.deleteMany({ where: { id: { in: ids.users } } });
     await prisma.teacher.deleteMany({ where: { id: { in: ids.teachers } } });
     await prisma.$disconnect();
+  });
+
+  test("STAFF 대시보드 HTML/RSC에는 운영 데이터가 없고 클래스와 선생님 직접 접근은 거부된다", async ({ page }) => {
+    await login(page, staffEmail, password);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const nextDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + 86_400_000));
+    for (const path of ["/dashboard", `/dashboard?date=${today}`, `/dashboard?date=${nextDay}`, "/dashboard?month=2030-01"]) {
+      const response = await page.goto(path);
+      expect(response?.status()).toBe(200);
+      const html = await response!.text();
+      const rsc = await page.evaluate(async (url) => {
+        const result = await fetch(url, { headers: { RSC: "1" } });
+        return { status: result.status, type: result.headers.get("content-type"), body: await result.text() };
+      }, path);
+      expect(rsc.status).toBe(200);
+      expect(rsc.type).toContain("text/x-component");
+      for (const payload of [html, rsc.body]) {
+        for (const forbidden of [`Phase16 배정 아이 ${suffix}`, `Phase16 배정 선생님 ${suffix}`, `Phase16 프로그램 ${suffix}`, `Phase16 배정 장소 ${suffix}`, assignedReservationId, assignedClassId]) {
+          expect(payload).not.toContain(forbidden);
+        }
+      }
+    }
+    await expectDenied(page, "/classes");
+    await expectDenied(page, `/classes/${assignedClassId}`);
+    await expectDenied(page, `/teachers/${teacherId}`);
   });
 
   test("MANAGER는 비재무 운영 화면을 사용하지만 재무·계정 URL과 payload는 받지 않는다", async ({ page }) => {
@@ -328,7 +360,7 @@ phase16Suite("Phase 16 계정·권한 관리", () => {
   });
 
   test("SUPER_ADMIN은 계정을 생성·재설정하고 비밀값 없이 append-only 이력을 남긴다 (P2 계약)", async ({ page }) => {
-    const accountEmail = `account-ui-${suffix}@phase16.test`;
+    const accountEmail = `account-ui-${suffix}@${testEmailDomain}`;
     await login(page, SUPER_ADMIN_EMAIL as string, SUPER_ADMIN_PASSWORD as string);
     await page.goto("/dashboard");
     expect(await page.content()).toContain('href="/accounts"');
@@ -390,7 +422,7 @@ phase16Suite("Phase 16 계정·권한 관리", () => {
 
   test("DB role·active·authVersion 변경은 기존 세션의 다음 요청부터 적용되고 로그인 loop가 없다", async ({ page }) => {
     const passwordHash = await hash(password, 4);
-    const email = `freshness-${suffix}@phase16.test`;
+    const email = `freshness-${suffix}@${testEmailDomain}`;
     const user = await prisma.user.create({
       data: { name: "Phase16 Freshness", email, password: passwordHash, role: "ADMIN" },
     });
@@ -445,11 +477,11 @@ phase16Suite("Phase 16 계정·권한 관리", () => {
     const passwordHash = await hash(password, 4);
     const existingAdmin = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN_EMAIL }, select: { id: true, isActive: true } });
     const [adminA, adminB, resetTarget, superA, superB] = await Promise.all([
-      prisma.user.create({ data: { name: "Phase16 Admin A", email: `admin-a-${suffix}@phase16.test`, password: passwordHash, role: "ADMIN" } }),
-      prisma.user.create({ data: { name: "Phase16 Admin B", email: `admin-b-${suffix}@phase16.test`, password: passwordHash, role: "ADMIN" } }),
-      prisma.user.create({ data: { name: "Phase16 Reset", email: `reset-${suffix}@phase16.test`, password: passwordHash, role: "MANAGER" } }),
-      prisma.user.create({ data: { name: "Phase16 Super A", email: `super-a-${suffix}@phase16.test`, password: passwordHash, role: "SUPER_ADMIN" } }),
-      prisma.user.create({ data: { name: "Phase16 Super B", email: `super-b-${suffix}@phase16.test`, password: passwordHash, role: "SUPER_ADMIN" } }),
+      prisma.user.create({ data: { name: "Phase16 Admin A", email: `admin-a-${suffix}@${testEmailDomain}`, password: passwordHash, role: "ADMIN" } }),
+      prisma.user.create({ data: { name: "Phase16 Admin B", email: `admin-b-${suffix}@${testEmailDomain}`, password: passwordHash, role: "ADMIN" } }),
+      prisma.user.create({ data: { name: "Phase16 Reset", email: `reset-${suffix}@${testEmailDomain}`, password: passwordHash, role: "MANAGER" } }),
+      prisma.user.create({ data: { name: "Phase16 Super A", email: `super-a-${suffix}@${testEmailDomain}`, password: passwordHash, role: "SUPER_ADMIN" } }),
+      prisma.user.create({ data: { name: "Phase16 Super B", email: `super-b-${suffix}@${testEmailDomain}`, password: passwordHash, role: "SUPER_ADMIN" } }),
     ]);
     ids.users.push(adminA.id, adminB.id, resetTarget.id, superA.id, superB.id);
     await prisma.user.update({ where: { id: existingAdmin.id }, data: { isActive: false } });

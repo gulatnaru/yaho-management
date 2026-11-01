@@ -194,7 +194,7 @@ describe.sequential("P1-UI financial storage (isolated PostgreSQL)", () => {
     expect(row.applicationPrice).toBe(30_000);
   });
 
-  it("SUPER_ADMIN updateClass price change persists via CAS, unchanged price preserves (U-01)", async () => {
+  it("SUPER_ADMIN updateClass persists changed and unchanged prices (U-01)", async () => {
     sessionHolder.userId = superId;
     const actions = await freshClassActions();
     const before = await db.classSchedule.findFirstOrThrow({ where: { programId }, orderBy: { createdAt: "desc" } });
@@ -219,7 +219,7 @@ describe.sequential("P1-UI financial storage (isolated PostgreSQL)", () => {
     const changed = await db.classSchedule.findUniqueOrThrow({ where: { id: before.id } });
     expect(changed.applicationPrice).toBe(35_000);
 
-    // 가격 미변경 제출 시 기존 값 유지 (CAS 쓰기가 일어나지 않는다).
+    // 동일 가격을 다시 제출한 뒤 최종 저장값을 확인한다. 가격은 조건부 updateMany로 다시 쓴다.
     try {
       await actions.updateClass(
         changed.id,

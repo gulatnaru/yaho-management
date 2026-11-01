@@ -32,6 +32,8 @@ describe("P4 delivery", () => {
     expect(body.text).toContain(input.acceptUrl);
     expect(body.text).toContain("72시간");
     expect(body.text).toContain("비밀번호");
+    expect(body.text).toBe(`YAHO 관리자 계정 초대\n대상 이메일: a&b@example.test\n계정 설정: ${input.acceptUrl}\n이 링크는 72시간 동안 유효합니다.\n요청하지 않았다면 이 메일을 무시해주세요.\n저희는 이메일로 비밀번호를 요청하지 않습니다.`);
+    expect(body.text).not.toContain("\\n");
   });
   it("constructs one request with stable idempotency key and reports API acceptance", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "message-1" }), { status: 200 }));

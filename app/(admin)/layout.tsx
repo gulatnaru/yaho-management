@@ -74,7 +74,7 @@ export default async function AdminLayout({ children }: Readonly<{ children: Rea
   const displayName = principal.name || principal.email;
   const pendingApplicationCount =
     principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
-      ? await countPendingReservationApplications().catch(() => null)
+      ? (await countPendingReservationApplications().catch(() => null)) ?? 0
       : 0;
   const navigationItems = getNavigationItems(principal, pendingApplicationCount);
 

@@ -4,6 +4,7 @@ import path from "node:path";
 export default defineConfig({
   resolve: {
     alias: {
+      "server-only": path.resolve(__dirname, "tests/unit/manual-test/server-only.ts"),
       "@": path.resolve(__dirname, "."),
     },
   },

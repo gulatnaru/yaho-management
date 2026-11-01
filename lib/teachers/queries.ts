@@ -48,6 +48,9 @@ export async function getTeacherDetail(id: string) {
 }
 
 export async function getTeacherDetailForPrincipal(id: string, principal: CurrentPrincipal) {
+  if (principal.role === "STAFF") {
+    return null;
+  }
   if (principal.role === "TEACHER" && principal.teacherId !== id) {
     return null;
   }

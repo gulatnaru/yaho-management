@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { isAdminOrSuperAdmin } from "@/lib/auth/roles";
+import { requireOperationalPrincipal } from "@/lib/auth/authorization";
 import { readFormString } from "@/lib/forms/form-data";
 import { findPastRecurringClassDates } from "@/lib/classes/recurrence";
 import { getClassDisplayStatus } from "@/lib/classes/status";
@@ -394,7 +395,7 @@ export async function updateClass(
           // Managers may edit operational class details, but never write a stale
           // application price read before the transaction. Omitting the field lets
           // a concurrent ADMIN price edit remain authoritative.
-          ...(principal.role === "ADMIN" ? { applicationPrice: data.applicationPrice ?? null } : {}),
+          ...(isAdminOrSuperAdmin(principal) ? { applicationPrice: data.applicationPrice ?? null } : {}),
           memo: data.memo || null,
           insured: data.insured,
           insurer: data.insurer || null,

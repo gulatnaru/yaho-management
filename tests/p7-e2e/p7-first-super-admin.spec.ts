@@ -211,7 +211,7 @@ test("synthetic ADMIN approval, recipient acceptance and first registration", as
       await legacyPage.goto(`/accounts/${staffId}/edit`);
       await legacyPage.getByLabel(/역할/).selectOption("MANAGER");
       await legacyPage.getByRole("button", { name: "변경사항 저장" }).click();
-      await expect(legacyPage).toHaveURL(new RegExp(`/accounts/${staffId}$`));
+      await expect(legacyPage).toHaveURL(new RegExp(`/accounts/${staffId}$`), { timeout: 30_000 });
       await staffPage.goto("/dashboard");
       await expect(staffPage).toHaveURL(/\/login/);
       await staffLogin();

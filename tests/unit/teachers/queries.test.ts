@@ -68,4 +68,22 @@ describe("getTeacherDetail", () => {
     expect(result).toBeNull();
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
+
+  it("does not query an existing teacher for STAFF", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: "teacher-1", name: "선생님", phone: "010", memo: "운영 메모", isActive: true });
+    await expect(getTeacherDetailForPrincipal("teacher-1", {
+      userId: "staff", name: "직원", email: "staff@yaho.test", role: "STAFF", teacherId: null, authVersion: 1, mustChangePassword: false,
+    })).resolves.toBeNull();
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    findUniqueMock.mockReset();
+  });
+
+  it.each(["ADMIN", "MANAGER", "SUPER_ADMIN", "TEACHER"] as const)("preserves %s teacher detail lookup", async (role) => {
+    const teacher = { id: "teacher-1", name: "선생님", phone: "010", memo: "운영 메모", isActive: true };
+    findUniqueMock.mockResolvedValueOnce(teacher);
+    const base = { userId: "user", name: "사용자", email: "user@yaho.test", authVersion: 1, mustChangePassword: false };
+    const principal = role === "TEACHER" ? { ...base, role, teacherId: "teacher-1" } : { ...base, role, teacherId: null };
+    await expect(getTeacherDetailForPrincipal("teacher-1", principal)).resolves.toEqual(teacher);
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "teacher-1" } });
+  });
 });

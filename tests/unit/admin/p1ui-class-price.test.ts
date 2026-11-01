@@ -15,13 +15,10 @@ const classTeacherFindManyMock = vi.fn();
 const classTeacherDeleteManyMock = vi.fn();
 const classProgramFindUniqueMock = vi.fn();
 const classTeacherCountMock = vi.fn();
-const classQueryRawMock = vi.fn();
 const classTransactionMock = vi.fn();
 
 const classTxMock = {
-  $queryRaw: (...args: unknown[]) => classQueryRawMock(...args),
   classSchedule: {
-    findUnique: async () => ({ updatedAt: new Date(0) }),
     create: (...args: unknown[]) => classCreateMock(...args),
     updateMany: (...args: unknown[]) => classUpdateManyMock(...args),
   },
@@ -162,7 +159,7 @@ describe("U-01/U-02 class application price (server validation)", () => {
     expect(classTransactionMock).not.toHaveBeenCalled();
   });
 
-  it("SUPER_ADMIN update with a changed price writes it via CAS (U-01)", async () => {
+  it("SUPER_ADMIN update with a changed price writes it (U-01)", async () => {
     classRequireMock.mockResolvedValue({ user: { role: "SUPER_ADMIN" } });
 
     await expect(
@@ -171,8 +168,6 @@ describe("U-01/U-02 class application price (server validation)", () => {
         {},
         classFormData({
           applicationPrice: "20000",
-          applicationPriceBaseline: "10000",
-          applicationPriceRevision: "2026-10-20T00:00:00.000Z",
         }),
       ),
     ).rejects.toThrow("REDIRECT");
@@ -180,7 +175,7 @@ describe("U-01/U-02 class application price (server validation)", () => {
     expect(classUpdateManyMock.mock.calls[0]![0].data.applicationPrice).toBe(20_000);
   });
 
-  it("SUPER_ADMIN update with an unchanged price does not overwrite it (U-01)", async () => {
+  it("SUPER_ADMIN update with an unchanged price writes the same value (U-01)", async () => {
     classRequireMock.mockResolvedValue({ user: { role: "SUPER_ADMIN" } });
 
     await expect(
@@ -190,14 +185,15 @@ describe("U-01/U-02 class application price (server validation)", () => {
         classFormData({
           applicationPrice: "10000",
           applicationPriceBaseline: "10000",
-          applicationPriceRevision: "2026-10-20T00:00:00.000Z",
         }),
       ),
     ).rejects.toThrow("REDIRECT");
 
-    for (const [call] of classUpdateManyMock.mock.calls) {
-      expect(call.data).not.toHaveProperty("applicationPrice");
-    }
+    expect(classUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(classUpdateManyMock).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "class-1", status: "SCHEDULED" },
+      data: expect.objectContaining({ applicationPrice: 10_000 }),
+    }));
   });
 
   it("MANAGER update with a price is rejected before any write (U-01)", async () => {

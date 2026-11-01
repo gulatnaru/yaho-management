@@ -18,6 +18,7 @@ vi.mock("@/lib/db/prisma", () => ({
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND"); } }));
 
 const { recordAttendanceAction } = await import(
   "@/app/(admin)/reservations/attendance-actions"
@@ -90,5 +91,36 @@ describe("attendance role authorization", () => {
     await expect(recordAttendanceAction({}, formData())).rejects.toThrow("UNAUTHORIZED");
     expect(findFirstMock).not.toHaveBeenCalled();
     expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["RESERVED", "COMPLETED", "NO_SHOW"]) ("rejects STAFF before lookup and %s attendance writes", async (status) => {
+    requireCurrentPrincipalMock.mockResolvedValue({ ...teacherPrincipal, role: "STAFF", teacherId: null });
+    findFirstMock.mockResolvedValue({ classScheduleId: "class-1", status, classSchedule: { endsAt: new Date("2020-01-01") } });
+    await expect(recordAttendanceAction({}, formData())).rejects.toThrow("NOT_FOUND");
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["ADMIN", "MANAGER", "SUPER_ADMIN"]) ("preserves %s record and correction paths", async (role) => {
+    requireCurrentPrincipalMock.mockResolvedValue({ ...teacherPrincipal, role, teacherId: null });
+    for (const status of ["RESERVED", "COMPLETED", "NO_SHOW"]) {
+      findFirstMock.mockResolvedValue({ classScheduleId: "class-1", status, classSchedule: { endsAt: new Date("2020-01-01") } });
+      await expect(recordAttendanceAction({}, formData())).resolves.toEqual({ success: true });
+      expect(findFirstMock).toHaveBeenLastCalledWith(expect.objectContaining({ where: { id: "reservation-1" } }));
+      expect(updateManyMock).toHaveBeenLastCalledWith(expect.objectContaining({
+        where: { id: "reservation-1", status: status === "RESERVED" ? "RESERVED" : { in: ["COMPLETED", "NO_SHOW"] } },
+      }));
+    }
+  });
+
+  it("preserves assigned TEACHER correction", async () => {
+    findFirstMock.mockResolvedValue({ classScheduleId: "class-1", status: "COMPLETED", classSchedule: { endsAt: new Date("2020-01-01") } });
+    await expect(recordAttendanceAction({}, formData())).resolves.toEqual({ success: true });
+    expect(findFirstMock).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      id: "reservation-1", classSchedule: { teachers: { some: { teacherId: "teacher-1" } } },
+    } }));
+    expect(updateManyMock).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      id: "reservation-1", status: { in: ["COMPLETED", "NO_SHOW"] },
+    } }));
   });
 });

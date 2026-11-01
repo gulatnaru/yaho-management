@@ -149,4 +149,10 @@ describe("getClassDetail", () => {
     );
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
+
+  it("returns null without a class query for STAFF", async () => {
+    await expect(getClassDetailForPrincipal("class-1", { ...adminPrincipal, role: "STAFF" })).resolves.toBeNull();
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
 });

@@ -30,6 +30,13 @@ function formatSelectedDateTitle(value: string) {
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const principal = await requireCurrentPrincipal();
+  if (principal.role === "STAFF") {
+    return (
+      <section>
+        <h1 className="text-2xl font-bold">관리자 홈</h1>
+      </section>
+    );
+  }
   const isAdmin = isAdminOrSuperAdmin(principal);
   const teacherId = principal.role === "TEACHER" ? principal.teacherId : undefined;
   const raw = await searchParams;

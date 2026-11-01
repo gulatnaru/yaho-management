@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { requireCurrentPrincipal } from "@/lib/auth/authorization";
 import { listClasses } from "@/lib/classes/queries";
@@ -19,6 +20,7 @@ interface ClassesPageProps {
 
 export default async function ClassesPage({ searchParams }: ClassesPageProps) {
   const principal = await requireCurrentPrincipal();
+  if (principal.role === "STAFF") notFound();
   const resolvedParams = await searchParams;
   const status = parseClassListStatus(resolvedParams.status);
   const page = resolvedParams.page ? Number.parseInt(resolvedParams.page, 10) || 1 : 1;

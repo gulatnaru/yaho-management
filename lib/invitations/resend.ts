@@ -5,7 +5,12 @@ function escapeHtml(value: string): string {
 }
 
 export function invitationEmail(email: string, acceptUrl: string) {
-  const text = `YAHO 관리자 계정 초대\n대상 이메일: ${email}\n계정 설정: ${acceptUrl}\n이 링크는 72시간 동안 유효합니다.\n요청하지 않았다면 이 메일을 무시해주세요.\n저희는 이메일로 비밀번호를 요청하지 않습니다.`;
+  const text = `YAHO 관리자 계정 초대
+대상 이메일: ${email}
+계정 설정: ${acceptUrl}
+이 링크는 72시간 동안 유효합니다.
+요청하지 않았다면 이 메일을 무시해주세요.
+저희는 이메일로 비밀번호를 요청하지 않습니다.`;
   const html = `<h1>YAHO 관리자 계정 초대</h1><p>대상 이메일: ${escapeHtml(email)}</p><p><a href="${escapeHtml(acceptUrl)}">계정 설정</a></p><p>이 링크는 72시간 동안 유효합니다.</p><p>요청하지 않았다면 이 메일을 무시해주세요.</p><p>저희는 이메일로 비밀번호를 요청하지 않습니다.</p>`;
   return { text, html };
 }
