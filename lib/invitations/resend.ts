@@ -15,16 +15,16 @@ export function invitationEmail(email: string, acceptUrl: string) {
   return { text, html };
 }
 
-export function resendDelivery(apiKey: string, sender: string, request: typeof fetch = fetch): InvitationDelivery {
+export function resendDelivery(apiKey: string, sender: string, request: typeof fetch = fetch, options?: { subject: string; template: typeof invitationEmail; namespace: string }): InvitationDelivery {
   return {
     async sendInvitation(input): Promise<DeliveryResult> {
       if (!input.invitationId || !input.attemptId) return { status: "FAILED", errorCategory: "CONFIG" };
-      const body = invitationEmail(input.email, input.acceptUrl);
+      const body = (options?.template ?? invitationEmail)(input.email, input.acceptUrl);
       try {
         const response = await request("https://api.resend.com/emails", {
           method: "POST",
-          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": `invitation/${input.invitationId}/${input.attemptId}` },
-          body: JSON.stringify({ from: sender, to: [input.email], subject: "YAHO 관리자 계정 초대", ...body, headers: { "X-Entity-Ref-ID": input.invitationId } }),
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": `${options?.namespace ?? "invitation"}/${input.invitationId}/${input.attemptId}` },
+          body: JSON.stringify({ from: sender, to: [input.email], subject: options?.subject ?? "YAHO 관리자 계정 초대", ...body, headers: { "X-Entity-Ref-ID": input.invitationId } }),
           signal: AbortSignal.timeout(10000),
         });
         if (!response.ok) return { status: "FAILED", errorCategory: response.status === 429 ? "LIMIT" : response.status === 401 || response.status === 403 ? "AUTH" : "PROVIDER" };

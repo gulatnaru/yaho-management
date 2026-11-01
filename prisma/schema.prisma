@@ -1026,3 +1026,16 @@ model BootstrapCompletion {
   acceptanceId String   @unique
   completedAt  DateTime
 }
+
+// P7 delivery history is retained independently of acceptance evidence.
+model BootstrapDeliveryAttempt {
+  id                String                   @id @default(cuid())
+  acceptanceId      String                   @unique
+  provider          String
+  status            InvitationDeliveryStatus @default(PENDING)
+  providerMessageId String?
+  errorCategory     String?
+  createdAt         DateTime                 @default(now())
+  attemptedAt       DateTime?
+  completedAt       DateTime?
+}
