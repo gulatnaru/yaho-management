@@ -5,6 +5,7 @@ import { countPendingReservationApplications } from "@/lib/reservation-applicati
 
 export const dynamic = "force-dynamic";
 import { NavDrawer } from "./_components/nav-drawer";
+import { LogoutButton } from "./_components/logout-button";
 
 const OPERATIONAL_NAV_ITEMS = [
   { href: "/dashboard", label: "대시보드" },
@@ -89,7 +90,10 @@ export default async function AdminLayout({ children }: Readonly<{ children: Rea
               </Link>
             </NavDrawer>
           </div>
-          <p className="hidden text-sm text-slate-600 md:block">{displayName}</p>
+          <div className="hidden items-center gap-4 md:flex">
+            <p className="text-sm text-slate-600">{displayName}</p>
+            <LogoutButton />
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>

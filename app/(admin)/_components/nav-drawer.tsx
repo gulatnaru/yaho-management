@@ -4,6 +4,7 @@ import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { LogoutButton } from "./logout-button";
 
 export interface NavDrawerItem {
   href: string;
@@ -114,7 +115,10 @@ export function NavDrawer({ items, userLabel, children }: NavDrawerProps) {
             </Link>
           ))}
         </nav>
-        <p className="text-sm text-slate-600">{userLabel}</p>
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-slate-600">{userLabel}</p>
+          <LogoutButton tabIndex={open ? undefined : -1} />
+        </div>
       </div>
     </>
   );
