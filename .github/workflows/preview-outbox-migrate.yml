@@ -1,18 +1,36 @@
-# Preview-only official Prisma migrate deploy for the NotificationOutbox migration.
+# Preview-only official Prisma migrate deploy for the 5 RBAC migrations.
+# CI-BRANCH VERSION. Target path on the CI branch:
+#   .github/workflows/preview-outbox-migrate.yml
+# (NOT preview-rbac-migrate.yml.)
+# WHY THIS PATH: GitHub workflow_dispatch can only be triggered for a
+# workflow whose file exists on the default branch. The path
+# preview-outbox-migrate.yml already exists on default (workflow ID
+# 397767921, state active), so dispatching that path with
+# --ref ci-preview-rbac-migrate resolves, and the run uses THIS branch's version of the
+# file (gh: --ref = "Branch or tag name which contains the version of the
+# workflow file you'd like to run"). A new file existing only on a branch
+# is NOT dispatchable. Main's file is NEVER modified by this branch, and
+# this branch must NEVER be merged to main (merging would overwrite main's
+# outbox workflow). Delete this branch after the migration.
 # Manual execution ONLY (workflow_dispatch). Never auto-triggered.
 # Target: Preview Supabase project ONLY, verified by parsed project ref before any DB touch.
 # Secrets referenced by NAME only (values never printed, never stored in this file):
 #   PREVIEW_DIRECT_URL   - Preview Direct/Session-pooler connection string
 #   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
-# Verification is decided by command exit code only: DO blocks raise on mismatch.
-# The Preview runtime role is unconfirmed from this connection, so no runtime-role
-# claim is made here; the later C smoke test proves it (app writes via its own
-# runtime connection).
-# Application code, schema, and migration files are NOT part of this workflow;
-# the migrate run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
-# DO NOT MERGE without an explicit merge decision (see PR description).
+# The 5 RBAC migration files below are embedded EXACTLY as reviewed (local commit 20d479d).
+# Before deploy, their sha256 hashes are verified against the recorded values;
+# any mismatch aborts the run. The base tree is pinned to the verified main tip
+# 749f29d97b6a6df2ce89f556c0154909c380ead6 (same tree as the remote RBAC branch); it does not auto-follow main.
+# Prisma is pinned to 6.19.3 via npx (the isolated-verified version); no npm ci
+# is needed because migrate/db-execute do not require the repo's node_modules.
+# DRAFT STATUS: this file lives outside the repo. Pushing it to the CI branch
+# requires a separate approval. The draft itself performs no push, no Vercel
+# deployment, no Production access, and no DB change. The CI branch also
+# carries a vercel.json gate (deploymentEnabled: {"ci-preview-rbac-migrate": false}) so the
+# push itself creates no Vercel deployment.
+# DO NOT MERGE without an explicit merge decision (and never merge this branch).
 
-name: preview-outbox-migrate
+name: preview-rbac-migrate
 
 on:
   workflow_dispatch:
@@ -26,17 +44,207 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: preview-rbac-migrate
+  cancel-in-progress: false
+
 jobs:
   migrate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "1337a195af87e3ecbaf4eaffccc259516bbf25e0"
+          ref: "749f29d97b6a6df2ce89f556c0154909c380ead6"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      - name: Write RBAC migration files (reviewed content, hash-checked)
+        run: |
+          set -euo pipefail
+          mkdir -p prisma/migrations/20261031090000_admin_rbac_p1_roles
+          mkdir -p prisma/migrations/20261031100000_admin_rbac_p3_invitations
+          mkdir -p prisma/migrations/20261031110000_admin_rbac_p4_delivery_attempts
+          mkdir -p prisma/migrations/20261031120000_admin_rbac_p7_bootstrap
+          mkdir -p prisma/migrations/20261031130000_admin_rbac_p7_delivery
+          cat > prisma/migrations/20261031090000_admin_rbac_p1_roles/migration.sql << 'RBAC_MIGRATION_SQL'
+          -- G1-A formal migration (UNCOMMITTED — separate commit approval required; DO NOT APPLY to Preview/Production without the G1-A gate + explicit approval).
+          -- RBAC P1: Role enum expansion (ADMIN/MANAGER/TEACHER -> SUPER_ADMIN/ADMIN/MANAGER/TEACHER/STAFF) + User.role default removal.
+          -- Source: draft prisma/migrations-DRAFT/20261030000000_admin_rbac_p1.sql (DDL identical; header/timeouts/transaction framing added here).
+          -- Order: FIRST of the RBAC set. P3 references the new Role enum; P4 references P3; P7 is order-independent but applied last as a bundle.
+          -- Baseline: applies after main formal 13 (through 20261006090000) and, on Preview, after 20261026090000_notification_outbox.
+          -- Preconditions (verified at G1-A design time; re-check before any real apply): target DB has User.role with a default to drop,
+          -- CHECK "user_teacher_role_consistency" (created by 20260913170000_phase16_account_access_management), and Role values only in
+          -- ADMIN/MANAGER/TEACHER. SUPER_ADMIN/STAFF rows must NOT pre-exist (the USING cast would fail on any other value).
+          -- Existing rows: the default removal affects new rows only; existing role values are unchanged by the cast.
+          -- CHECK note: "user_teacher_role_consistency" references the old enum type, so it is dropped before the type swap and re-added
+          -- against the new type. (role='TEACHER') = (teacherId IS NOT NULL) still holds for all five values; SUPER_ADMIN/STAFF must have
+          -- teacherId NULL — enforced in code (P1/P2), not by this CHECK.
+          -- Transaction note: PostgreSQL ALTER TYPE ... ADD VALUE cannot run inside a transaction block, so this migration uses the
+          -- create-new-type + column-type-swap + rename sequence, which IS transaction-safe. BEGIN/COMMIT are explicit here following
+          -- the 20261026090000_notification_outbox precedent (lock_timeout 5s, statement_timeout 60s).
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+
+          CREATE TYPE "Role_new" AS ENUM ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEACHER', 'STAFF');
+          -- A remaining default blocks the automatic cast, so drop it before the type swap.
+          ALTER TABLE "User" ALTER COLUMN "role" DROP DEFAULT;
+          -- The teacher-consistency CHECK references the old enum type; drop it before the swap.
+          ALTER TABLE "User" DROP CONSTRAINT "user_teacher_role_consistency";
+          -- "Role" is used by 3 columns (User.role, UserAccountChange.previousRole/nextRole). All three must move or the old type cannot be dropped.
+          ALTER TABLE "User" ALTER COLUMN "role" TYPE "Role_new" USING ("role"::text::"Role_new");
+          ALTER TABLE "UserAccountChange" ALTER COLUMN "previousRole" TYPE "Role_new" USING ("previousRole"::text::"Role_new");
+          ALTER TABLE "UserAccountChange" ALTER COLUMN "nextRole" TYPE "Role_new" USING ("nextRole"::text::"Role_new");
+          ALTER TYPE "Role" RENAME TO "Role_old";
+          ALTER TYPE "Role_new" RENAME TO "Role";
+          DROP TYPE "Role_old";
+          ALTER TABLE "User" ADD CONSTRAINT "user_teacher_role_consistency" CHECK ((role = 'TEACHER') = ("teacherId" IS NOT NULL));
+
+          COMMIT;
+          RBAC_MIGRATION_SQL
+          cat > prisma/migrations/20261031100000_admin_rbac_p3_invitations/migration.sql << 'RBAC_MIGRATION_SQL'
+          -- G1-A formal migration (UNCOMMITTED — separate commit approval required; DO NOT APPLY to Preview/Production without the G1-A gate + explicit approval).
+          -- RBAC P3: AdminInvitation table + UserAccountChangeType expansion (5 invitation audit types).
+          -- Source: draft prisma/migrations-DRAFT/20261030120000_admin_rbac_p3.sql (DDL identical; header/timeouts/transaction framing added here).
+          -- Order: SECOND of the RBAC set, after P1 (AdminInvitation.role references the new Role enum). P4 references AdminInvitation.
+          -- No CHECK references UserAccountChangeType (only UserAccountChange.type uses it), so no constraint drop/re-add is needed.
+          -- The original token is stored nowhere in this migration (tokenHash only). InvitationDeliveryAttempt (P4) references AdminInvitation.
+          -- Transaction note: enum swap uses the create-new-type + rename sequence (transaction-safe); BEGIN/COMMIT explicit following
+          -- the 20261026090000_notification_outbox precedent (lock_timeout 5s, statement_timeout 60s).
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+
+          CREATE TYPE "UserAccountChangeType_new" AS ENUM ('CREATED', 'EMAIL_CHANGED', 'ROLE_CHANGED', 'ACTIVE_CHANGED', 'PASSWORD_RESET', 'INVITATION_ISSUED', 'INVITATION_ACCEPTED', 'INVITATION_EXPIRED', 'INVITATION_REVOKED', 'INVITATION_RESENT');
+          ALTER TABLE "UserAccountChange" ALTER COLUMN "type" TYPE "UserAccountChangeType_new" USING ("type"::text::"UserAccountChangeType_new");
+          ALTER TYPE "UserAccountChangeType" RENAME TO "UserAccountChangeType_old";
+          ALTER TYPE "UserAccountChangeType_new" RENAME TO "UserAccountChangeType";
+          DROP TYPE "UserAccountChangeType_old";
+
+          CREATE TABLE "AdminInvitation" (
+              "id" TEXT NOT NULL,
+              "email" TEXT NOT NULL,
+              "role" "Role" NOT NULL,
+              "tokenHash" TEXT NOT NULL,
+              "expiresAt" TIMESTAMP(3) NOT NULL,
+              "usedAt" TIMESTAMP(3),
+              "revokedAt" TIMESTAMP(3),
+              "issuedById" TEXT NOT NULL,
+              "targetUserId" TEXT NOT NULL,
+              "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              "updatedAt" TIMESTAMP(3) NOT NULL,
+
+              CONSTRAINT "AdminInvitation_pkey" PRIMARY KEY ("id")
+          );
+
+          CREATE UNIQUE INDEX "AdminInvitation_tokenHash_key" ON "AdminInvitation"("tokenHash");
+          CREATE INDEX "AdminInvitation_email_createdAt_idx" ON "AdminInvitation"("email", "createdAt");
+          CREATE INDEX "AdminInvitation_issuedById_createdAt_idx" ON "AdminInvitation"("issuedById", "createdAt");
+          CREATE INDEX "AdminInvitation_targetUserId_createdAt_idx" ON "AdminInvitation"("targetUserId", "createdAt");
+
+          ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_issuedById_fkey" FOREIGN KEY ("issuedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+          ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_targetUserId_fkey" FOREIGN KEY ("targetUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+          COMMIT;
+          RBAC_MIGRATION_SQL
+          cat > prisma/migrations/20261031110000_admin_rbac_p4_delivery_attempts/migration.sql << 'RBAC_MIGRATION_SQL'
+          -- G1-A formal migration (UNCOMMITTED — separate commit approval required; DO NOT APPLY to Preview/Production without the G1-A gate + explicit approval).
+          -- RBAC P4: InvitationDeliveryAttempt table + InvitationDeliveryStatus enum (PENDING/SENDING/ACCEPTED/FAILED/UNKNOWN).
+          -- Source: draft prisma/migrations-DRAFT/20261030180000_admin_rbac_p4.sql (DDL identical; header/timeouts/transaction framing added here).
+          -- Order: THIRD of the RBAC set, after P3 (invitationId references AdminInvitation). One attempt row per invitation (UNIQUE invitationId).
+          -- Transaction note: BEGIN/COMMIT explicit following the 20261026090000_notification_outbox precedent (lock_timeout 5s, statement_timeout 60s).
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+
+          CREATE TYPE "InvitationDeliveryStatus" AS ENUM ('PENDING', 'SENDING', 'ACCEPTED', 'FAILED', 'UNKNOWN');
+          CREATE TABLE "InvitationDeliveryAttempt" (
+            "id" TEXT NOT NULL PRIMARY KEY,
+            "invitationId" TEXT NOT NULL UNIQUE,
+            "provider" TEXT NOT NULL,
+            "status" "InvitationDeliveryStatus" NOT NULL DEFAULT 'PENDING',
+            "providerMessageId" TEXT,
+            "errorCategory" TEXT,
+            "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "attemptedAt" TIMESTAMP(3),
+            "completedAt" TIMESTAMP(3),
+            CONSTRAINT "InvitationDeliveryAttempt_invitationId_fkey" FOREIGN KEY ("invitationId") REFERENCES "AdminInvitation"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+          );
+
+          COMMIT;
+          RBAC_MIGRATION_SQL
+          cat > prisma/migrations/20261031120000_admin_rbac_p7_bootstrap/migration.sql << 'RBAC_MIGRATION_SQL'
+          -- G1-A formal migration (UNCOMMITTED — separate commit approval required; DO NOT APPLY to Preview/Production without the G1-A gate + explicit approval).
+          -- RBAC P7: BootstrapApproval / BootstrapAcceptance / BootstrapCompletion tables (first SUPER_ADMIN evidence + singleton completion mark).
+          -- Source: draft prisma/migrations-DRAFT/20261031000000_admin_rbac_p7.sql (tables/indexes/singleton CHECK identical) PLUS the SPEC §2.5
+          -- FK policy, which the draft did not carry: approval.targetUserId -> User RESTRICT, acceptance.approvalId -> BootstrapApproval
+          -- RESTRICT, acceptance.acceptedForUserId -> User RESTRICT. BootstrapCompletion.approvalId/acceptanceId are deliberately plain TEXT
+          -- identifiers with UNIQUE only and NO FK, so the permanent completion mark never blocks lawful evidence disposal at the end of
+          -- its retention period (SPEC §2.5 / user G1 instruction §3.3). The mark holds only minimal event identifiers, no personal data copies.
+          -- Order: LAST of the RBAC set. Order-independent vs P1/P3/P4 (no FK to their tables), applied last as a bundle.
+          -- No deletion API or automatic purge is created by this migration (retention 5-year draft + bundle-unit manual purge remain
+          -- unapproved operating-gate items; the mark itself is permanent).
+          -- No original tokens and no full acceptance URLs are stored (tokenHash only, in BootstrapAcceptance).
+          -- Transaction note: BEGIN/COMMIT explicit following the 20261026090000_notification_outbox precedent (lock_timeout 5s, statement_timeout 60s).
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+
+          CREATE TABLE "BootstrapApproval" (
+            "id" TEXT PRIMARY KEY, "approverUserId" TEXT NOT NULL, "targetUserId" TEXT NOT NULL,
+            "targetEmail" TEXT NOT NULL, "approvedAt" TIMESTAMP(3) NOT NULL, "expiresAt" TIMESTAMP(3) NOT NULL,
+            "identityMethod" TEXT NOT NULL, "identityAt" TIMESTAMP(3) NOT NULL, "revokedAt" TIMESTAMP(3),
+            "consumedAt" TIMESTAMP(3), "executionId" TEXT
+          );
+          CREATE INDEX "BootstrapApproval_targetUserId_idx" ON "BootstrapApproval"("targetUserId");
+          CREATE TABLE "BootstrapAcceptance" (
+            "id" TEXT PRIMARY KEY, "approvalId" TEXT NOT NULL, "acceptedForUserId" TEXT NOT NULL,
+            "targetEmail" TEXT NOT NULL, "tokenHash" TEXT NOT NULL UNIQUE, "expiresAt" TIMESTAMP(3) NOT NULL,
+            "revokedAt" TIMESTAMP(3), "acceptedAt" TIMESTAMP(3), "tokenVerified" BOOLEAN NOT NULL DEFAULT false,
+            "authenticationMethod" TEXT, "consumedAt" TIMESTAMP(3), "executionId" TEXT
+          );
+          CREATE INDEX "BootstrapAcceptance_approvalId_idx" ON "BootstrapAcceptance"("approvalId");
+          CREATE TABLE "BootstrapCompletion" (
+            "id" TEXT PRIMARY KEY CHECK ("id" = 'FIRST_SUPER_ADMIN'), "approvalId" TEXT NOT NULL UNIQUE,
+            "acceptanceId" TEXT NOT NULL UNIQUE, "completedAt" TIMESTAMP(3) NOT NULL
+          );
+
+          -- SPEC §2.5 FK policy (added here; absent from the P7 draft by design of that draft stage).
+          ALTER TABLE "BootstrapApproval" ADD CONSTRAINT "BootstrapApproval_targetUserId_fkey" FOREIGN KEY ("targetUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+          ALTER TABLE "BootstrapAcceptance" ADD CONSTRAINT "BootstrapAcceptance_approvalId_fkey" FOREIGN KEY ("approvalId") REFERENCES "BootstrapApproval"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+          ALTER TABLE "BootstrapAcceptance" ADD CONSTRAINT "BootstrapAcceptance_acceptedForUserId_fkey" FOREIGN KEY ("acceptedForUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+          -- BootstrapCompletion.approvalId / acceptanceId intentionally have NO FK (see header).
+
+          COMMIT;
+          RBAC_MIGRATION_SQL
+          cat > prisma/migrations/20261031130000_admin_rbac_p7_delivery/migration.sql << 'RBAC_MIGRATION_SQL'
+          -- G1-B draft, not approved for deployment. Acceptance identifier deliberately has no FK.
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+          CREATE TABLE "BootstrapDeliveryAttempt" (
+            "id" TEXT NOT NULL PRIMARY KEY,
+            "acceptanceId" TEXT NOT NULL,
+            "provider" TEXT NOT NULL,
+            "status" "InvitationDeliveryStatus" NOT NULL DEFAULT 'PENDING',
+            "providerMessageId" TEXT,
+            "errorCategory" TEXT,
+            "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "attemptedAt" TIMESTAMP(3),
+            "completedAt" TIMESTAMP(3)
+          );
+          CREATE UNIQUE INDEX "BootstrapDeliveryAttempt_acceptanceId_key" ON "BootstrapDeliveryAttempt"("acceptanceId");
+          COMMIT;
+          -- Rollback draft only: BEGIN; SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '60s'; DROP TABLE "BootstrapDeliveryAttempt"; COMMIT;
+          RBAC_MIGRATION_SQL
+          cat > /tmp/rbac-checksums.txt << 'RBAC_CHECKSUMS'
+          004bce7afee0dfdfd57a9af32513a3529b7796db089574d9e02376d049e01dc2  prisma/migrations/20261031090000_admin_rbac_p1_roles/migration.sql
+          a69cf5386be8e72be3c9ff3905c2de611af4461e2ac1fecc10c571bdbee3f9f6  prisma/migrations/20261031100000_admin_rbac_p3_invitations/migration.sql
+          d760d8cbc0fbf82f829138e12bee6f308167d6b8e2c9b869cb1340a1e58d56da  prisma/migrations/20261031110000_admin_rbac_p4_delivery_attempts/migration.sql
+          fae20f967883eda410f412cc92706f698dca4420046b5e013f136055457a9728  prisma/migrations/20261031120000_admin_rbac_p7_bootstrap/migration.sql
+          c2c37cd255b9788b7f19a2212ca63e1242deb4f287d73538584683aeda7e6ffe  prisma/migrations/20261031130000_admin_rbac_p7_delivery/migration.sql
+          RBAC_CHECKSUMS
+          sha256sum -c /tmp/rbac-checksums.txt
       - name: Pre-connection target guard (Preview only, no DB touch)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
@@ -108,59 +316,78 @@ jobs:
             exit 1
           fi
           echo "Pre-connection guard passed: target yaho-preview, Preview project ref match, port 5432"
-      - name: Status check + official migrate deploy (Preview only)
+      - name: Preflight (Preview only, read-only checks)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
           DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
         run: |
           set -euo pipefail
-          # Never print DATABASE_URL or DIRECT_URL.
-          # A) Connection + failed-migration + outbox-absent check (read-only).
-          # Decided by exit code only: the DO block raises on any mismatch,
-          # so success means all conditions hold. No result rows are parsed.
-          # The error text is used only to label the abort, never to pass.
-          set +e
-          PRECHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          # A) Read-only preflight: no failed/incomplete, RBAC rows 0, applied 16.
+          # Decided by exit code only: the DO block raises on any mismatch.
+          if ! npx --yes prisma@6.19.3 db execute --schema prisma/schema.prisma --stdin <<'SQL'
           DO $$
           BEGIN
             IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) THEN
               RAISE EXCEPTION 'failed or incomplete migration exists';
             END IF;
-            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox') THEN
-              RAISE EXCEPTION 'outbox migration already applied (not pending)';
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name LIKE '20261031%') THEN
+              RAISE EXCEPTION 'RBAC migration already present';
+            END IF;
+            IF (SELECT COUNT(*) FROM "_prisma_migrations") <> 16 THEN
+              RAISE EXCEPTION 'applied count is not 16';
             END IF;
           END $$;
           SQL
-          )"
-          PRECHECK_EXIT=$?
-          set -e
-          if [ "$PRECHECK_EXIT" -ne 0 ]; then
-            case "$PRECHECK_OUTPUT" in
-              *'failed or incomplete migration exists'*)
-                echo "ABORT: failed or incomplete migration exists"
-                ;;
-              *'outbox migration already applied'*)
-                echo "ABORT: outbox migration already applied (not pending)"
-                ;;
-              *)
-                echo "ABORT: cannot connect or query migration history (connection failure)"
-                ;;
-            esac
+          then
+            echo "ABORT: preflight failed (see command error above)"
             exit 1
           fi
-          # B) Prisma-native pending check (content-based; robust to exit-code semantics).
-          STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
-          if ! echo "$STATUS_BEFORE" | grep -q '20261026090000_notification_outbox'; then
-            echo "ABORT: outbox migration is not listed as pending (history mismatch)"
+          # B) Prisma-native status classification.
+          # Prisma 6.19.3 status exits 1 for BOTH pending and errors, so the exit code
+          # alone cannot distinguish them; the output must be classified.
+          # Orphans are listed as bare lines in a SEPARATE section, so a global grep
+          # would capture 8 lines and wrongly abort: parse ONLY the pending section.
+          STATUS_FILE="$(mktemp)"
+          STATUS_EXIT=0
+          npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$STATUS_FILE" 2>&1 || STATUS_EXIT=$?
+          if [ "$STATUS_EXIT" -eq 0 ]; then
+            echo "ABORT: status reports up to date (no pending) - RBAC already applied or unexpected state"
             exit 1
           fi
-          PENDING="$(echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true)"
-          if [ "$PENDING" != "20261026090000_notification_outbox" ]; then
-            echo "ABORT: pending is not exactly the outbox migration (multiple pending or format mismatch)"
+          if ! grep -q 'have not yet been applied' "$STATUS_FILE"; then
+            if grep -qE 'Error:|P[0-9]{4}|Can'"'"'t|cannot|drift|checksum' "$STATUS_FILE"; then
+              echo "ABORT: migrate status errored (connection, schema, or drift) - no deploy attempted"
+            else
+              echo "ABORT: status output format unexpected (no pending section header)"
+            fi
             exit 1
           fi
-          npx prisma migrate deploy --schema prisma/schema.prisma
-          npx prisma migrate status --schema prisma/schema.prisma
+          PENDING="$(awk '/The migrations have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {print}' "$STATUS_FILE")"
+          EXPECTED_PENDING="20261031090000_admin_rbac_p1_roles
+          20261031100000_admin_rbac_p3_invitations
+          20261031110000_admin_rbac_p4_delivery_attempts
+          20261031120000_admin_rbac_p7_bootstrap
+          20261031130000_admin_rbac_p7_delivery"
+          if [ "$PENDING" != "$EXPECTED_PENDING" ]; then
+            echo "ABORT: pending is not exactly the 5 RBAC migrations"
+            exit 1
+          fi
+          echo "Preflight passed: applied 16, pending exactly the 5 RBAC migrations, failed 0"
+      - name: Official migrate deploy (Preview only)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma
+          POST_FILE="$(mktemp)"
+          POST_EXIT=0
+          npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$POST_FILE" 2>&1 || POST_EXIT=$?
+          if [ "$POST_EXIT" -ne 0 ] || ! grep -q 'up to date' "$POST_FILE"; then
+            echo "ABORT: post-deploy status is not up to date"
+            exit 1
+          fi
+          echo "Deploy complete: post-deploy status is up to date"
       - name: Post-apply verification (DO block, exit code decides)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
@@ -168,46 +395,49 @@ jobs:
         run: |
           set -euo pipefail
           # Decided by exit code only: the DO block raises on any mismatch.
-          # Each privilege is checked individually. No result rows are parsed.
-          # NOTE: the Preview runtime role is NOT verified here (its identity
-          # is unconfirmed from this connection), so no runtime-role claim is
-          # made by this step; the later C smoke test proves it, because the
-          # app writes via its own runtime connection.
-          if ! npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          if ! npx --yes prisma@6.19.3 db execute --schema prisma/schema.prisma --stdin <<'SQL'
           DO $$
           DECLARE
             v_count integer;
-            v_rls boolean;
-            v_priv text;
+            v_check text;
           BEGIN
-            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: table'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public';
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: enum'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx');
-            IF v_count <> 3 THEN RAISE EXCEPTION 'verification failed: indexes'; END IF;
-            SELECT BOOL_OR(relrowsecurity) INTO v_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public';
-            IF v_rls IS NOT TRUE THEN RAISE EXCEPTION 'verification failed: RLS'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
-            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: policies'; END IF;
-            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: history'; END IF;
-            FOREACH v_priv IN ARRAY ARRAY['INSERT', 'SELECT', 'UPDATE', 'DELETE'] LOOP
-              IF NOT has_table_privilege('postgres', '"NotificationOutbox"', v_priv) THEN
-                RAISE EXCEPTION 'verification failed: postgres %', v_priv;
-              END IF;
-              IF has_table_privilege('anon', '"NotificationOutbox"', v_priv) THEN
-                RAISE EXCEPTION 'verification failed: anon %', v_priv;
-              END IF;
-              IF has_table_privilege('authenticated', '"NotificationOutbox"', v_priv) THEN
-                RAISE EXCEPTION 'verification failed: authenticated %', v_priv;
-              END IF;
-            END LOOP;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations";
+            IF v_count <> 21 THEN RAISE EXCEPTION 'verification failed: total'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: failed'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name LIKE '20261031%';
+            IF v_count <> 5 THEN RAISE EXCEPTION 'verification failed: rbac rows'; END IF;
+            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('AdminInvitation','BootstrapAcceptance','BootstrapApproval','BootstrapCompletion','BootstrapDeliveryAttempt','InvitationDeliveryAttempt');
+            IF v_count <> 6 THEN RAISE EXCEPTION 'verification failed: tables'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "AdminInvitation";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: AdminInvitation not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "BootstrapAcceptance";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: BootstrapAcceptance not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "BootstrapApproval";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: BootstrapApproval not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "BootstrapCompletion";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: BootstrapCompletion not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "BootstrapDeliveryAttempt";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: BootstrapDeliveryAttempt not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "InvitationDeliveryAttempt";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: InvitationDeliveryAttempt not empty'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261014090000_phase21_ai_consultations_mock';
+            IF v_check <> '26dc71bb2a44bb15f6dd3fd83aceb3fa109e84d29275beccc4f82d05f787026c' THEN RAISE EXCEPTION 'verification failed: preview-only 20261014090000_phase21_ai_consultations_mock'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261015090000_ai_service_followup';
+            IF v_check <> 'bacd02b4a1c69e19c891d0c122f08bf9f715b6d0b2e43f5899d92c329fee1b7f' THEN RAISE EXCEPTION 'verification failed: preview-only 20261015090000_ai_service_followup'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox';
+            IF v_check <> '5ed492ceed6339123518aa4dc337b3ee57497459429b9b6fff863ac58d12c95c' THEN RAISE EXCEPTION 'verification failed: preview-only 20261026090000_notification_outbox'; END IF;
           END $$;
           SQL
           then
             echo "ABORT: post-apply verification failed (see command error above)"
             exit 1
           fi
-          echo "Post-apply verification passed: table, enum, indexes, RLS, policies, history, privileges"
-          echo "Runtime-role privilege: NOT claimed here (role unconfirmed); proven by the later C smoke test"
+          echo "Post-apply verification passed: 21 history rows, 6 new tables (empty), preview-only rows unchanged"
+      - name: Failure diagnostic (runs only on failure)
+        if: failure()
+        run: |
+          echo "Deploy did not complete. Do NOT re-run or resolve without review."
+          echo "Check _prisma_migrations for failed rows (finished_at NULL) and inspect the failed step's log."
+          echo "A failed migration blocks later deploys (P3009) until its state is reviewed."
+          echo "No data was modified by this diagnostic step." 
