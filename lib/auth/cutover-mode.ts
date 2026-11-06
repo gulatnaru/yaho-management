@@ -24,12 +24,12 @@
  * 전환 후 LEGACY 복귀는 별도 복구 승인 하에 사람이 환경변수를 바꾸고
  * 재배포하는 절차적 통제로만 수행한다.
  *
- * 판정 사용처 (모두 동일한 이 함수를 쓴다 — 계층별 판정 분기 금지):
- * - lib/auth/authorization.ts requireAccountManagementPrincipal()
- *   (계정 액션·쿼리·페이지 가드)
- * - server/accounts/mutations.ts assertAccountManagementActor()
- *   (트랜잭션 내 행위자 재검증 — 가드와 별개로 모드를 다시 읽는다)
- * - app/(admin)/layout.tsx 계정 관리 메뉴 노출 (표시일 뿐, 경계가 아니다)
+ * 판정 사용처 (단순화 결정 ADR-071 이후 — 계정 관리 경로는 모드를 참조하지 않는다):
+ * - server/accounts/first-super-admin-core.ts 등 P7 잔존 코드만 참조한다
+ *   (미사용 휴면 상태 — 삭제하지 않고 둔다).
+ * - lib/auth/authorization.ts, server/accounts/mutations.ts,
+ *   server/accounts/invitations.ts, app/(admin)/layout.tsx는 ADR-071 이후
+ *   모드를 판정하지 않는다 (ADMIN 또는 SUPER_ADMIN 역할만 본다).
  *
  * 본인 이력 전용 경로(listOwnAccountHistory, OQ-12)는 계정 관리가 아니라
  * 읽기 전용 본인 조회이므로 모드와 무관하게 P2 계약을 유지한다

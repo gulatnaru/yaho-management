@@ -2,10 +2,7 @@ import { requireInvitationPrincipal } from "@/lib/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
 
 /**
- * P3 초대 조회 (SUPER_ADMIN 전용 + INVALID 거부 — requireInvitationPrincipal).
- * 모드 가드(requireAccountManagementPrincipal)를 재사용하지 않는다:
- * LEGACY 모드에서 SUPER_ADMIN이 초대 목록을 보지 못하면 초대 관리 자체가
- * 불가능해지기 때문이다 (게이트 7: 초대 진입점은 모드와 무관하게 SUPER_ADMIN 전용).
+ * P3 초대 조회 (ADMIN 또는 SUPER_ADMIN — requireInvitationPrincipal, 단순화 결정 ADR-071).
  * tokenHash는 어떤 조회에서도 select하지 않는다 (원본 토큰 비노출).
  */
 

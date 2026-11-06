@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ACCOUNT_ROLES = ["ADMIN", "MANAGER", "TEACHER", "STAFF"] as const;
+export const ACCOUNT_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEACHER", "STAFF"] as const;
 export type AccountRole = (typeof ACCOUNT_ROLES)[number];
 
 const emailSchema = z.string().trim().email("올바른 이메일 주소를 입력해주세요").max(320);
@@ -69,9 +69,8 @@ export const adminPasswordResetSchema = z.object({
 });
 
 /**
- * P3 초대 발급 스키마. SUPER_ADMIN은 일반 초대 경로의 역할 선택지에 없으며,
- * zod enum(ACCOUNT_ROLES)도 SUPER_ADMIN을 허용하지 않는다 — 코어의
- * SUPER_ADMIN_FORBIDDEN이 우회 호출에 대비한 2차 방어이다.
+ * P3 초대 발급 스키마. 단순화 결정(ADR-071): SUPER_ADMIN도 일반 초대 경로의 역할
+ * 선택지에 포함되며, zod enum(ACCOUNT_ROLES)도 SUPER_ADMIN을 허용한다.
  * TEACHER면 teacherId 필수, 비-TEACHER면 teacherId 금지 (validateRoleTeacher).
  */
 export const invitationIssueSchema = z

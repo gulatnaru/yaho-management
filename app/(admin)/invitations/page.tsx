@@ -5,7 +5,7 @@ import { InvitationTable } from "./_components/invitation-table";
 export const dynamic = "force-dynamic";
 
 /**
- * P3 직원 초대 관리 (SUPER_ADMIN 전용 + INVALID 거부 — 쿼리가 가드한다).
+ * P3 직원 초대 관리 (ADMIN 또는 SUPER_ADMIN — 쿼리가 가드한다, 단순화 결정 ADR-071).
  * 원본 토큰은 이 화면에 표시하지 않는다 (P4 발송 연결 전 사용 전환 금지).
  */
 export default async function InvitationsPage() {

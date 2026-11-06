@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import type { CurrentPrincipal } from "@/lib/auth/authorization";
 import {
   ACCOUNT_MUTATION_ADVISORY_LOCK_KEY,
@@ -13,13 +12,9 @@ export { ACCOUNT_MUTATION_ADVISORY_LOCK_KEY };
 export type AccountMutationErrorCode =
   | "ACTOR_NOT_ACCOUNT_MANAGER"
   | "ACCOUNT_NOT_FOUND"
-  | "SELF_DEACTIVATION"
-  | "SELF_ROLE_CHANGE"
-  | "LAST_ACTIVE_ADMIN"
-  | "LAST_ACTIVE_SUPER_ADMIN"
+  | "LAST_ACTIVE_MANAGER"
   | "TEACHER_REQUIRED"
-  | "TEACHER_NOT_AVAILABLE"
-  | "SUPER_ADMIN_FORBIDDEN";
+  | "TEACHER_NOT_AVAILABLE";
 
 export class AccountMutationError extends Error {
   constructor(readonly code: AccountMutationErrorCode) {
@@ -34,9 +29,7 @@ type LockedAccount = {
   id: string;
   email: string;
   name: string;
-  // P1: 일반 경로의 신뢰 경계. DB 행은 P7 이후 SUPER_ADMIN일 수 있어 코어 입력·잠금 행은
-  // SUPER_ADMIN을 명시적으로 포함하고, 아래에서 일반 경로 진입을 거부한다.
-  role: AccountRole | "SUPER_ADMIN";
+  role: AccountRole;
   isActive: boolean;
   teacherId: string | null;
 };
@@ -50,27 +43,19 @@ export async function acquireAccountMutationLock(tx: Prisma.TransactionClient): 
 }
 
 /**
- * P2-S (모드별 계약): 계정 mutation 행위자는 전환 모드에 따라 달라진다.
- * - LEGACY_ADMIN 모드: ADMIN 행위자만 허용한다 (P2 전환 전 상태).
- * - SUPER_ADMIN 모드: SUPER_ADMIN 행위자만 허용한다 (P2 계약).
- * - 미등록·잘못된 설정(INVALID): 전원 거부한다 (fail-closed).
- * 모드는 액션·쿼리 가드와 별개로 트랜잭션 안에서 다시 읽는다 — 가드에
- * 전달된 값이 아니라 호출 시점의 process.env를 기준으로 재검증하므로,
- * 가드 우회 직접 호출도 코어에서 걸러진다. SUPER_ADMIN 계정이 DB에
- * 존재한다는 사실만으로는 LEGACY 모드에서 권한이 생기지 않는다.
- * live principal의 DB 행을 트랜잭션 안에서 재조회하므로, 세션에 남은
- * 낡은 역할·비활성 상태로는 우회할 수 없다. 코드명은 P2의
- * ACTOR_NOT_SUPER_ADMIN에서 모드별 계약에 맞게 변경됐다.
+ * 단순화 결정(ADR-071): 계정 mutation 행위자는 역할만 본다 — ADMIN 또는
+ * SUPER_ADMIN이면 허용한다. 전환 모드는 판정하지 않는다 (INVALID 모드에서도
+ * 계정 관리가 끊기지 않는다). live principal의 DB 행을 트랜잭션 안에서
+ * 재조회하므로, 세션에 남은 낡은 역할·비활성 상태로는 우회할 수 없다.
+ * 조건: 활성 + mustChangePassword false + 역할 ADMIN/SUPER_ADMIN.
  */
 async function assertAccountManagementActor(tx: Prisma.TransactionClient, principal: CurrentPrincipal): Promise<void> {
-  const mode = resolveAccountCutoverMode();
   const actor = await tx.user.findUnique({
     where: { id: principal.userId },
     select: { role: true, isActive: true, mustChangePassword: true },
   });
 
-  const roleAllowed =
-    mode === "LEGACY_ADMIN" ? actor?.role === "ADMIN" : mode === "SUPER_ADMIN" ? actor?.role === "SUPER_ADMIN" : false;
+  const roleAllowed = actor?.role === "ADMIN" || actor?.role === "SUPER_ADMIN";
 
   if (!actor?.isActive || actor.mustChangePassword || !roleAllowed) {
     throw new AccountMutationError("ACTOR_NOT_ACCOUNT_MANAGER");
@@ -139,9 +124,9 @@ export type CreateAccountCoreInput = Omit<AccountCreateInput, "role"> & {
    * 문자열이면 기존 해시 경로(재설정 지원과 동일한 mustChangePassword=true 계약)이다.
    */
   passwordHash: string | null;
-  // P1 신뢰 경계: 검증 스키마는 SUPER_ADMIN을 허용하지 않지만, 코어는 우회 호출에 대비해
-  // SUPER_ADMIN 입력을 명시적으로 받고 아래에서 거부한다.
-  role: AccountRole | "SUPER_ADMIN";
+  // 단순화 결정(ADR-071): SUPER_ADMIN도 일반 생성 경로로 만들 수 있다.
+  // ACCOUNT_ROLES가 SUPER_ADMIN을 포함하므로 AccountRole이 그대로 쓰인다.
+  role: AccountRole;
 };
 
 export type AccountActorAssertion = (
@@ -154,8 +139,9 @@ export type AccountActorAssertion = (
  * P2 경로(createAccountCore)는 이 함수에 assertAccountManagementActor를 넘기고,
  * P3 초대 발급 경로는 assertInvitationActor를 넘겨 같은 생성·감사 원자성을
  * 초대 행 생성과 하나의 트랜잭션으로 묶는다. 행위자 판정 이외의 규칙
- * (SUPER_ADMIN 차단·선생님 연결 검증·비밀번호 없는 강제 비활성·CREATED 감사)은
- * 두 경로에서 동일하다.
+ * (선생님 연결 검증·비밀번호 없는 강제 비활성·CREATED 감사)은 두 경로에서 동일하다.
+ * 단순화 결정(ADR-071): SUPER_ADMIN 생성 차단은 제거됐다 — 일반 경로로
+ * SUPER_ADMIN 계정을 만들 수 있다.
  */
 export async function createAccountInTransaction(
   tx: Prisma.TransactionClient,
@@ -164,11 +150,6 @@ export async function createAccountInTransaction(
   assertActor: AccountActorAssertion,
 ): Promise<{ id: string }> {
   await assertActor(tx, principal);
-  // P1 차단 (스키마·선택지 확장보다 먼저 강제): 일반 생성 경로로 SUPER_ADMIN을 만들 수 없다.
-  // SUPER_ADMIN 생성은 최초 등록 절차(P7)·승격 워크플로(P3-2)로만 허용된다.
-  if (input.role === "SUPER_ADMIN") {
-    throw new AccountMutationError("SUPER_ADMIN_FORBIDDEN");
-  }
   await validateTeacherLink(tx, input.role, input.teacherId);
 
   // P2 (OQ-8): 비밀번호 없는 생성은 강제 비활성이다. 호출자가 isActive=true를 넘겨도
@@ -218,7 +199,7 @@ export async function createAccountCore(
 export async function updateAccountCore(
   principal: CurrentPrincipal,
   targetUserId: string,
-  input: Omit<AccountUpdateInput, "role"> & { role: AccountRole | "SUPER_ADMIN" },
+  input: Omit<AccountUpdateInput, "role"> & { role: AccountRole },
   client: AccountMutationClient = prisma,
 ): Promise<void> {
   await client.$transaction(async (tx) => {
@@ -226,43 +207,22 @@ export async function updateAccountCore(
     await assertAccountManagementActor(tx, principal);
     const current = await lockTargetAccount(tx, targetUserId);
 
-    // P2 본인 보호 (P1 ADMIN 전용에서 일반화): 행위자 본인의 비활성화·역할 변경은
-    // 대상 역할과 무관하게 거부한다. SUPER_ADMIN 본인의 강등도 여기서 SELF_ROLE_CHANGE으로
-    // 거부되며, 일반 경로 blanket보다 먼저 판정한다.
-    if (principal.userId === targetUserId && !input.isActive) {
-      throw new AccountMutationError("SELF_DEACTIVATION");
-    }
-    if (principal.userId === targetUserId && input.role !== current.role) {
-      throw new AccountMutationError("SELF_ROLE_CHANGE");
-    }
-
-    // P2 마지막 활성 SUPER_ADMIN 보호 (LAST_ACTIVE_ADMIN과 병존). 실제 활성 SUPER_ADMIN을
-    // 제거하는 변경(비활성화 또는 SUPER_ADMIN 외 역할로의 변경)에 한해, 활성 SUPER_ADMIN이
-    // 1명 이하이면 거부한다. 일반 경로에서는 본인 제거가 위 본인 보호에, 타인 제거가 아래
-    // blanket에 먼저 걸리므로 이 검사는 방어 심화(defense-in-depth)이며, 목 기반 단위
-    // 테스트로 판정 순서·코드를 검증한다. 고위험 승격·최초 등록 전용 경로는 P3-2/P7 범위이다.
-    const removesActiveSuperAdmin = current.role === "SUPER_ADMIN" && current.isActive &&
-      (input.role !== "SUPER_ADMIN" || !input.isActive);
-    if (removesActiveSuperAdmin) {
-      const activeSuperAdminCount = await tx.user.count({ where: { role: "SUPER_ADMIN", isActive: true } });
-      if (activeSuperAdminCount <= 1) {
-        throw new AccountMutationError("LAST_ACTIVE_SUPER_ADMIN");
-      }
-    }
-
-    // P1 차단 유지: 일반 수정 경로로는 SUPER_ADMIN 대상의 어떤 변경도, SUPER_ADMIN으로의
-    // 승격도 불가하다. SUPER_ADMIN 관련 변경은 승격 워크플로(P3-2)·최초 등록(P7)으로만
-    // 허용되며, 일반 변경 2인 승인·실행 워크플로(P2-2)는 간소화 결정으로 폐지됐다.
-    if (current.role === "SUPER_ADMIN" || input.role === "SUPER_ADMIN") {
-      throw new AccountMutationError("SUPER_ADMIN_FORBIDDEN");
-    }
-
-    const removesActiveAdmin = current.role === "ADMIN" && current.isActive &&
-      (input.role !== "ADMIN" || !input.isActive);
-    if (removesActiveAdmin) {
-      const activeAdminCount = await tx.user.count({ where: { role: "ADMIN", isActive: true } });
-      if (activeAdminCount <= 1) {
-        throw new AccountMutationError("LAST_ACTIVE_ADMIN");
+    // 단순화 결정(ADR-071): 본인 보호(SELF_DEACTIVATION·SELF_ROLE_CHANGE)는 제거됐다.
+    // ADMIN 본인의 역할 변경(ADMIN→SUPER_ADMIN 포함)·비활성화도 허용한다.
+    // 유일하게 남는 차단은 아래 최종 관리 가능 계정 가드이다.
+    // 최종 관리 가능 계정 가드 (LAST_ACTIVE_MANAGER): 변경(역할 변경 또는
+    // 비활성화) 후 활성 ADMIN + 활성 SUPER_ADMIN의 합이 0명이 되면 거부한다.
+    // 본인·타인 모두에 적용되며, 마지막 관리 가능 계정이 사라지는 변경 하나만 막는다.
+    const removesActiveManager =
+      (current.role === "ADMIN" || current.role === "SUPER_ADMIN") &&
+      current.isActive &&
+      (input.role !== "ADMIN" && input.role !== "SUPER_ADMIN" || !input.isActive);
+    if (removesActiveManager) {
+      const activeManagerCount = await tx.user.count({
+        where: { role: { in: ["ADMIN", "SUPER_ADMIN"] }, isActive: true },
+      });
+      if (activeManagerCount <= 1) {
+        throw new AccountMutationError("LAST_ACTIVE_MANAGER");
       }
     }
 
@@ -337,13 +297,10 @@ export async function resetAccountPasswordCore(
   await client.$transaction(async (tx) => {
     await acquireAccountMutationLock(tx);
     await assertAccountManagementActor(tx, principal);
-    const current = await lockTargetAccount(tx, targetUserId);
-
-    // P1 차단 유지 (방어 심화): 일반 재설정 경로로 SUPER_ADMIN credential을 교체할 수 없다.
-    // 임시 비밀번호를 아는 행위자가 SUPER_ADMIN으로 로그인하는 상승 경로를 막는다.
-    if (current.role === "SUPER_ADMIN") {
-      throw new AccountMutationError("SUPER_ADMIN_FORBIDDEN");
-    }
+    // 대상 행 잠금 (없으면 ACCOUNT_NOT_FOUND). 단순화 결정(ADR-071): SUPER_ADMIN
+    // 대상 재설정 차단은 제거됐다 — 일반 재설정 경로로 SUPER_ADMIN credential을
+    // 교체할 수 있다.
+    await lockTargetAccount(tx, targetUserId);
 
     await tx.user.update({
       where: { id: targetUserId },

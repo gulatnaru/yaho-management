@@ -1,20 +1,22 @@
 /**
- * P2 account guard transition — executed against an isolated PostgreSQL 16.
+ * 단순화 결정(ADR-071) — ADMIN 직접 계정 관리 계약을 격리 PostgreSQL 16에서 검증한다.
  *
  * P1의 rbac-p1-bypass.test.ts를 대체한다. P1 파일은 ADMIN 행위자의 일반 계정 생성을
  * 허용 전제로 검증했으나, P2 전환 계약에서는 ADMIN의 계정 관리 자체가 차단되므로
  * 해당 전제가 뒤집혔다. P1 파일은 삭제하고 이 파일이 P2 계약을 검증한다.
+ * ADR-071 이후 ADMIN의 계정 관리는 다시 허용되며, SUPER_ADMIN 생성·승격·재설정도
+ * 일반 경로로 허용되고, 유일한 차단은 최종 관리 가능 계정 가드(LAST_ACTIVE_MANAGER)이다.
  *
  * 실행 환경: 독립 임시 PG16 (127.0.0.1:55432, DB/user yaho_e2e, DB 안전 게이트 통과 URL),
  * 기존 migration 15건 적용 + P1 draft migration 적용 상태. 실제 프로젝트 DB(Preview/Production)에는
  * 절대 접속하지 않는다. 합성 관리자 및 테스트 데이터만 사용한다.
  *
  * 검증 경계 (정직한 표기):
- * - 실제: 서버 가드(모드별 requireAccountManagementPrincipal / requireAdminPrincipal /
+ * - 실제: 서버 가드(모드 무관 requireAccountManagementPrincipal / requireAdminPrincipal /
  *   requireAdminOrSuperAdminPrincipal / requireOperationalPrincipal), 계정 코어
- *   (P2-S: 이 파일은 SUPER_ADMIN 모드에서 실행한다 — beforeAll에서 환경변수를
- *   SUPER_ADMIN으로 설정하고 afterAll에서 복원한다. LEGACY·INVALID 모드는
- *   rbac-p2safe-cutover.test.ts에서 검증한다.)
+ *   (ADR-071: 이 파일은 SUPER_ADMIN 모드에서 실행한다 — beforeAll에서 환경변수를
+ *   SUPER_ADMIN으로 설정하고 afterAll에서 복원한다. 모드는 판정하지 않으므로
+ *   LEGACY·INVALID 모드에서도 동일하게 동작한다 — rbac-p2safe-cutover.test.ts에서 검증한다.)
  *   (create/update/resetAccountCore), 계정 쿼리(listAccounts/getAccountDetail/
  *   listAvailableAccountTeachers/listOwnAccountHistory), 실제 DB 쓰기 결과,
  *   거부 시 DB 행·권한·감사 상태 불변, live principal 반영·authVersion 무효화.
@@ -22,9 +24,10 @@
  *   실제 resolveSessionPrincipal이 격리 DB 행을 읽어 principal을 만든다). HTTP 요청 전송 계층은
  *   검증하지 않는다 — 계정 액션은 HTTP 라우트 표면이 아니라 서버 액션이라, 이 파일의 호출은
  *   HTTP 배선을 입증하지 않는다. 따라서 HTTP 배선 검증은 PASS가 아니라 NOT VERIFIED로 기록한다.
- * - LAST_ACTIVE_SUPER_ADMIN은 일반 경로에서 본인 보호·blanket에 먼저 걸려 실제 DB로는
- *   도달하지 않으므로, 판정 순서·코드는 목 기반 단위 테스트에서만 검증하고 이 파일에서는
- *   SUPER_ADMIN 대상 일반 변경이 blanket으로 거부됨을 검증한다.
+ * - LAST_ACTIVE_MANAGER는 합산 가드이다. 관리자가 여러 명일 때 강등이 허용됨은
+ *   이 파일에서 실제 DB로 검증하고, 카운트가 정확히 1명일 때의 거부는 공유 격리 DB를
+ *   1명으로 줄일 수 없어(다른 파일의 픽스처도 같은 DB에 존재) 목 기반 단위 테스트에서
+ *   판정 순서·코드를 검증한다.
  * - 테스트 간 순서 의존: 세션 무효화 테스트는 SUPER_ADMIN 관리 테스트에서 admin2의
  *   역할 변경·재설정이 먼저 수행됐음을 전제로 한다 (describe.sequential).
  */
@@ -152,8 +155,8 @@ async function snapshotUser(id: string) {
 
 beforeAll(async () => {
   process.env[CUTOVER_ENV] = "SUPER_ADMIN";
-  // SUPER_ADMIN 행은 일반 경로로 만들 수 없으므로, 이미 존재하는 최고관리자를 가정하는
-  // 픽스처로 직접 삽입한다 (제품 경로 우회가 아니다).
+  // 합성 최고관리자·관리자 픽스처를 직접 삽입한다 (일반 경로 생성도 가능하지만,
+  // 픽스처는 테스트 전제이지 제품 경로 검증 대상이 아니다).
   await db.user.createMany({
     data: [
       { id: superId, name: "합성 최고관리자", email: `${run}-super@example.test`, password: "synthetic-hash", role: "SUPER_ADMIN", isActive: true, mustChangePassword: false, authVersion: 1 },
@@ -185,133 +188,196 @@ afterAll(async () => {
 }, 30000);
 
 describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
-  it("rejects SUPER_ADMIN creation through the general path (validation layer, core, and DB)", async () => {
-    const forgedEmail = `${run}-forged-super@example.test`;
+  it("allows SUPER_ADMIN creation through the general path (validation, core, and DB)", async () => {
+    const actionEmail = `${run}-new-super@example.test`;
+    const coreEmail = `${run}-core-super@example.test`;
     sessionHolder.userId = superId;
     const actions = await freshActions();
     const mutations = await freshMutations();
 
-    // (a) 서버 액션 경유 위조 페이로드: zod 검증 단계에서 거부된다.
-    const actionResult = await actions.createAccount(
+    // (a) 서버 액션 경유 생성: SUPER_ADMIN 역할이 zod 검증을 통과하고,
+    // 비밀번호 없이 비활성·비밀번호 null로 생성된다. 성공 시 redirect를 던진다.
+    await expect(actions.createAccount(
       {},
       accountForm({
-        name: "위조 최고관리자",
-        email: forgedEmail,
+        name: "신규 최고관리자",
+        email: actionEmail,
         role: "SUPER_ADMIN",
         isActive: "on",
       }),
-    );
-    expect(actionResult.errors?.role).toBeDefined();
-    expect(await db.user.findUnique({ where: { email: forgedEmail } })).toBeNull();
+    )).rejects.toThrow(/^REDIRECT:\/accounts\//);
+    const actionCreated = await db.user.findUniqueOrThrow({ where: { email: actionEmail } });
+    allIds.push(actionCreated.id);
+    expect(actionCreated.role).toBe("SUPER_ADMIN");
+    expect(actionCreated.password).toBeNull();
+    expect(actionCreated.isActive).toBe(false);
+    expect(actionCreated.mustChangePassword).toBe(false);
     expect(
-      await db.userAccountChange.count({ where: { nextEmail: forgedEmail } }),
-    ).toBe(0);
+      await db.userAccountChange.count({
+        where: { targetUserId: actionCreated.id, type: "CREATED", actorAdminId: superId },
+      }),
+    ).toBe(1);
 
-    // (b) 코어 직접 호출 (검증 우회 시도): 쓰기 전에 SUPER_ADMIN_FORBIDDEN으로 거부된다.
-    await expect(
-      mutations.createAccountCore(superPrincipal(), {
-        name: "위조 최고관리자",
-        email: forgedEmail,
+    // (b) 코어 직접 호출: ADMIN 행위자도 SUPER_ADMIN을 생성할 수 있다.
+    const coreCreated = await mutations.createAccountCore(
+      { userId: adminId, name: "합성 관리자", email: `${run}-admin@example.test`, authVersion: 1, mustChangePassword: false, role: "ADMIN", teacherId: null } as never,
+      {
+        name: "코어 최고관리자",
+        email: coreEmail,
         role: "SUPER_ADMIN",
         teacherId: null,
         isActive: true,
         passwordHash: "synthetic-hash",
-      }),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(await db.user.findUnique({ where: { email: forgedEmail } })).toBeNull();
+      },
+    );
+    allIds.push(coreCreated.id);
+    const coreRow = await db.user.findUniqueOrThrow({ where: { email: coreEmail } });
+    expect(coreRow.role).toBe("SUPER_ADMIN");
+    expect(coreRow.isActive).toBe(true);
     expect(
-      await db.userAccountChange.count({ where: { nextEmail: forgedEmail } }),
-    ).toBe(0);
+      await db.userAccountChange.count({
+        where: { targetUserId: coreCreated.id, type: "CREATED", actorAdminId: adminId },
+      }),
+    ).toBe(1);
   });
 
-  it("rejects SUPER_ADMIN promotion and demotion through the general path", async () => {
+  it("allows SUPER_ADMIN promotion and demotion through the general path", async () => {
     sessionHolder.userId = superId;
     const actions = await freshActions();
     const mutations = await freshMutations();
-    const managerBefore = await snapshotUser(managerId);
-    const superBefore = await snapshotUser(superId);
 
-    // (a) 코어 직접 호출: MANAGER → SUPER_ADMIN 승격 거부, 행 불변, 감사 불변.
-    await expect(
-      mutations.updateAccountCore(superPrincipal(), managerId, {
-        name: "합성 매니저",
-        email: `${run}-manager@example.test`,
-        role: "SUPER_ADMIN",
-        teacherId: null,
-        isActive: true,
+    // (a) 코어 직접 호출: STAFF → SUPER_ADMIN 승격, 행·감사·authVersion 일치.
+    const promoted = await mutations.createAccountCore(superPrincipal(), {
+      name: "승격 대상",
+      email: `${run}-promote@example.test`,
+      role: "STAFF",
+      teacherId: null,
+      isActive: true,
+      passwordHash: null,
+    });
+    allIds.push(promoted.id);
+    const beforePromote = await snapshotUser(promoted.id);
+    await mutations.updateAccountCore(superPrincipal(), promoted.id, {
+      name: "승격 대상",
+      email: `${run}-promote@example.test`,
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: true,
+    });
+    const afterPromote = await snapshotUser(promoted.id);
+    expect(afterPromote.role).toBe("SUPER_ADMIN");
+    expect(afterPromote.authVersion).toBe(beforePromote.authVersion + 1);
+    expect(
+      await db.userAccountChange.count({
+        where: { targetUserId: promoted.id, type: "ROLE_CHANGED", actorAdminId: superId },
       }),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(await snapshotUser(managerId)).toEqual(managerBefore);
-    expect(await db.userAccountChange.count({ where: { targetUserId: managerId } })).toBe(0);
+    ).toBe(1);
+    const promoteAudit = await db.userAccountChange.findFirstOrThrow({
+      where: { targetUserId: promoted.id, type: "ROLE_CHANGED" },
+    });
+    expect(promoteAudit.previousRole).toBe("STAFF");
+    expect(promoteAudit.nextRole).toBe("SUPER_ADMIN");
 
-    // (b) 코어 직접 호출: SUPER_ADMIN 본인 강등은 본인 보호(SELF_ROLE_CHANGE)로 거부된다.
-    // 본인 검사가 blanket보다 먼저 판정되기 때문이다. 행 불변, 감사 불변.
-    await expect(
-      mutations.updateAccountCore(superPrincipal(), superId, {
-        name: "바뀐 이름",
-        email: `${run}-super@example.test`,
-        role: "ADMIN",
-        teacherId: null,
-        isActive: true,
-      }),
-    ).rejects.toMatchObject({ code: "SELF_ROLE_CHANGE" });
-    expect(await snapshotUser(superId)).toEqual(superBefore);
-    expect(await db.userAccountChange.count({ where: { targetUserId: superId } })).toBe(0);
+    // (b) 코어 직접 호출: ADMIN 본인 강등은 다른 관리자가 있으면 허용된다.
+    const selfDemote = await mutations.createAccountCore(superPrincipal(), {
+      name: "본인 강등 대상",
+      email: `${run}-selfdemote@example.test`,
+      role: "ADMIN",
+      teacherId: null,
+      isActive: true,
+      passwordHash: "synthetic-hash",
+    });
+    allIds.push(selfDemote.id);
+    await db.user.update({ where: { id: selfDemote.id }, data: { mustChangePassword: false } });
+    const selfPrincipal = {
+      userId: selfDemote.id,
+      name: "본인 강등 대상",
+      email: `${run}-selfdemote@example.test`,
+      authVersion: 1,
+      mustChangePassword: false,
+      role: "ADMIN" as const,
+      teacherId: null,
+    };
+    await mutations.updateAccountCore(selfPrincipal as never, selfDemote.id, {
+      name: "본인 강등 대상",
+      email: `${run}-selfdemote@example.test`,
+      role: "MANAGER",
+      teacherId: null,
+      isActive: true,
+    });
+    expect((await snapshotUser(selfDemote.id)).role).toBe("MANAGER");
 
-    // (b2) 코어 직접 호출: 다른 SUPER_ADMIN 대상 일반 수정은 blanket으로 거부된다.
-    const super2Before = await snapshotUser(super2Id);
-    await expect(
-      mutations.updateAccountCore(superPrincipal(), super2Id, {
-        name: "바뀐 이름",
-        email: `${run}-super2@example.test`,
-        role: "ADMIN",
-        teacherId: null,
-        isActive: true,
-      }),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(await snapshotUser(super2Id)).toEqual(super2Before);
-    expect(await db.userAccountChange.count({ where: { targetUserId: super2Id } })).toBe(0);
+    // (c) 코어 직접 호출: 다른 SUPER_ADMIN 대상 강등도 허용된다.
+    await mutations.updateAccountCore(superPrincipal(), promoted.id, {
+      name: "승격 대상",
+      email: `${run}-promote@example.test`,
+      role: "ADMIN",
+      teacherId: null,
+      isActive: true,
+    });
+    expect((await snapshotUser(promoted.id)).role).toBe("ADMIN");
 
-    // (c) 서버 액션 경유: zod 검증 단계에서 거부되고 행이 바뀌지 않는다.
-    const actionResult = await actions.updateAccount(
-      managerId,
+    // (d) 서버 액션 경유: STAFF → SUPER_ADMIN 승격이 zod 검증을 통과한다.
+    const actionTarget = await mutations.createAccountCore(superPrincipal(), {
+      name: "액션 승격 대상",
+      email: `${run}-action-promote@example.test`,
+      role: "STAFF",
+      teacherId: null,
+      isActive: true,
+      passwordHash: null,
+    });
+    allIds.push(actionTarget.id);
+    await expect(actions.updateAccount(
+      actionTarget.id,
       {},
       accountForm({
-        name: "합성 매니저",
-        email: `${run}-manager@example.test`,
+        name: "액션 승격 대상",
+        email: `${run}-action-promote@example.test`,
         role: "SUPER_ADMIN",
         isActive: "on",
       }),
-    );
-    expect(actionResult.errors?.role).toBeDefined();
-    expect(await snapshotUser(managerId)).toEqual(managerBefore);
+    )).rejects.toThrow(`REDIRECT:/accounts/${actionTarget.id}`);
+    expect((await snapshotUser(actionTarget.id)).role).toBe("SUPER_ADMIN");
   });
 
-  it("rejects general-path credential reset of a SUPER_ADMIN target", async () => {
+  it("allows general-path credential reset of a SUPER_ADMIN target", async () => {
     sessionHolder.userId = superId;
     const actions = await freshActions();
     const mutations = await freshMutations();
-    const superBefore = await snapshotUser(superId);
+    const target = await mutations.createAccountCore(superPrincipal(), {
+      name: "재설정 대상 최고관리자",
+      email: `${run}-reset-super@example.test`,
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: true,
+      passwordHash: "synthetic-hash",
+    });
+    allIds.push(target.id);
+    const before = await snapshotUser(target.id);
 
-    // (a) 코어 직접 호출: SUPER_ADMIN 대상 재설정 거부, credential·버전·감사 불변.
-    await expect(
-      mutations.resetAccountPasswordCore(superPrincipal(), superId, "synthetic-new-hash"),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(await snapshotUser(superId)).toEqual(superBefore);
+    // (a) 코어 직접 호출: 해시 교체·강제 변경·authVersion 증가, 감사 기록.
+    await mutations.resetAccountPasswordCore(superPrincipal(), target.id, "synthetic-new-hash");
+    const afterCore = await snapshotUser(target.id);
+    expect(afterCore.password).toBe("synthetic-new-hash");
+    expect(afterCore.mustChangePassword).toBe(true);
+    expect(afterCore.authVersion).toBe(before.authVersion + 1);
     expect(
       await db.userAccountChange.count({
-        where: { targetUserId: superId, type: "PASSWORD_RESET" },
+        where: { targetUserId: target.id, type: "PASSWORD_RESET", actorAdminId: superId },
       }),
-    ).toBe(0);
+    ).toBe(1);
 
-    // (b) 서버 액션 경유: formError로 거부되고 행이 바뀌지 않는다.
+    // (b) 서버 액션 경유: 성공하고 행이 바뀐다.
     const actionResult = await actions.resetAccountPassword(
-      superId,
+      target.id,
       {},
       accountForm({ temporaryPassword: "synthetic-pass-123" }),
     );
-    expect(actionResult.formError).toMatch("최고관리자");
-    expect(await snapshotUser(superId)).toEqual(superBefore);
+    expect(actionResult.success).toBe(true);
+    const afterAction = await snapshotUser(target.id);
+    expect(afterAction.password).not.toBe("synthetic-new-hash");
+    expect(afterAction.mustChangePassword).toBe(true);
+    expect(afterAction.authVersion).toBe(before.authVersion + 2);
   });
 
   it("allows SUPER_ADMIN general management: passwordless creation, update, and reset", async () => {
@@ -374,42 +440,83 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     expect(JSON.stringify(resetAudit)).not.toContain("synthetic-pass-123");
   });
 
-  it("denies ADMIN account management after the transition (guards, actions, queries, DB unchanged)", async () => {
+  it("allows ADMIN account management (guards, actions, queries, DB)", async () => {
     sessionHolder.userId = adminId;
     sessionHolder.authVersion = 1;
     const actions = await freshActions();
     const queries = await freshQueries();
-    const managerBefore = await snapshotUser(managerId);
 
-    // 서버 액션 3곳 모두 가드에서 거부된다.
+    // 서버 액션 3곳 모두 ADMIN 세션에서 통과한다.
+    const newEmail = `${run}-admin-created@example.test`;
     await expect(actions.createAccount(
       {},
-      accountForm({ name: "위조", email: `${run}-forged@example.test`, role: "STAFF" }),
-    )).rejects.toThrow("NOT_FOUND");
+      accountForm({ name: "관리자 생성 직원", email: newEmail, role: "STAFF" }),
+    )).rejects.toThrow(/^REDIRECT:\/accounts\//);
+    const created = await db.user.findUniqueOrThrow({ where: { email: newEmail } });
+    allIds.push(created.id);
+    expect(created.role).toBe("STAFF");
+    expect(
+      await db.userAccountChange.count({
+        where: { targetUserId: created.id, type: "CREATED", actorAdminId: adminId },
+      }),
+    ).toBe(1);
+
     await expect(actions.updateAccount(
-      managerId,
+      created.id,
       {},
       accountForm({
-        name: "합성 매니저",
-        email: `${run}-manager@example.test`,
-        role: "STAFF",
+        name: "관리자 생성 직원",
+        email: newEmail,
+        role: "MANAGER",
         isActive: "on",
       }),
-    )).rejects.toThrow("NOT_FOUND");
-    await expect(actions.resetAccountPassword(
-      managerId,
+    )).rejects.toThrow(`REDIRECT:/accounts/${created.id}`);
+    expect((await snapshotUser(created.id)).role).toBe("MANAGER");
+
+    const resetResult = await actions.resetAccountPassword(
+      created.id,
       {},
       accountForm({ temporaryPassword: "synthetic-pass-123" }),
-    )).rejects.toThrow("NOT_FOUND");
+    );
+    expect(resetResult.success).toBe(true);
+    expect((await snapshotUser(created.id)).mustChangePassword).toBe(true);
 
-    // 쿼리 3곳(목록·상세·선생님 선택지) 모두 가드에서 거부된다 — choke point 전환 확인.
-    await expect(queries.listAccounts()).rejects.toThrow("NOT_FOUND");
-    await expect(queries.getAccountDetail(managerId)).rejects.toThrow("NOT_FOUND");
-    await expect(queries.listAvailableAccountTeachers()).rejects.toThrow("NOT_FOUND");
+    // 쿼리 3곳(목록·상세·선생님 선택지) 모두 ADMIN 세션에서 통과한다.
+    const accounts = await queries.listAccounts();
+    expect(accounts.some((account) => account.id === adminId)).toBe(true);
+    const detail = await queries.getAccountDetail(created.id);
+    expect(detail?.account.id).toBe(created.id);
+    expect(Array.isArray(await queries.listAvailableAccountTeachers())).toBe(true);
+  });
 
-    expect(await snapshotUser(managerId)).toEqual(managerBefore);
-    expect(await db.user.findUnique({ where: { email: `${run}-forged@example.test` } })).toBeNull();
-    expect(await db.userAccountChange.count({ where: { targetUserId: managerId } })).toBe(0);
+  it("allows demotion while other active managers remain (LAST_ACTIVE_MANAGER positive control)", async () => {
+    sessionHolder.userId = superId;
+    const mutations = await freshMutations();
+    const target = await mutations.createAccountCore(superPrincipal(), {
+      name: "강등 대조 대상",
+      email: `${run}-demote-control@example.test`,
+      role: "ADMIN",
+      teacherId: null,
+      isActive: true,
+      passwordHash: "synthetic-hash",
+    });
+    allIds.push(target.id);
+    const countBefore = await db.user.count({
+      where: { role: { in: ["ADMIN", "SUPER_ADMIN"] }, isActive: true },
+    });
+    expect(countBefore).toBeGreaterThan(1);
+    await mutations.updateAccountCore(superPrincipal(), target.id, {
+      name: "강등 대조 대상",
+      email: `${run}-demote-control@example.test`,
+      role: "MANAGER",
+      teacherId: null,
+      isActive: true,
+    });
+    expect((await snapshotUser(target.id)).role).toBe("MANAGER");
+    const countAfter = await db.user.count({
+      where: { role: { in: ["ADMIN", "SUPER_ADMIN"] }, isActive: true },
+    });
+    expect(countAfter).toBe(countBefore - 1);
   });
 
   it("allows SUPER_ADMIN through account guards and queries", async () => {
@@ -482,7 +589,7 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     expect(superOwn.length).toBe(0);
   });
 
-  it("preserves ADMIN operational authority (guards pass; account management stays blocked)", async () => {
+  it("preserves ADMIN operational authority (guards pass; account management allowed)", async () => {
     sessionHolder.userId = adminId;
     sessionHolder.authVersion = 1;
     const authorization = await freshAuthorization();
@@ -495,7 +602,9 @@ describe.sequential("P2 account guard transition (isolated PostgreSQL)", () => {
     await expect(authorization.requireAdminPrincipal()).resolves.toMatchObject({
       role: "ADMIN",
     });
-    await expect(authorization.requireAccountManagementPrincipal()).rejects.toThrow("NOT_FOUND");
+    await expect(authorization.requireAccountManagementPrincipal()).resolves.toMatchObject({
+      role: "ADMIN",
+    });
   });
 
   it("produces no duplicate audit rows on an identical re-submit", async () => {

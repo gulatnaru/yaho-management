@@ -9,7 +9,8 @@ import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
  *
  * 서버 2대는 하네스가 미리 띄운다 (next start, 격리 PG 공유):
  * - SUPER_ADMIN 모드 (P3_SUPERADMIN_URL): 초대 관리·수락 정상 계약
- * - INVALID 모드 (P3_INVALID_URL): 설정 오류 시 fail-closed 계약
+ * - INVALID 모드 (P3_INVALID_URL): 단순화 결정(ADR-071) 이후 모드는 초대·수락을
+ *   차단하지 않으므로, INVALID 서버에서도 수락이 정상 실행됨을 검증한다.
  * 스펙은 모드를 바꾸지 않는다 (서버 재시작·재배포 영역).
  *
  * 안전 가드: Preview/Production DB 접속 금지, 격리 PG·루프백 오리진만 허용,
@@ -153,7 +154,7 @@ test.describe("P3 초대 — HTTP/E2E", () => {
     }
   });
 
-  test("SUPER_ADMIN은 초대 페이지를 보고, ADMIN은 404로 차단된다", async ({ page }) => {
+  test("SUPER_ADMIN과 ADMIN 모두 초대 페이지를 본다", async ({ page }) => {
     await login(page, SUPERADMIN_URL, superEmail, superPassword);
     await gotoReady(page, `${SUPERADMIN_URL}/invitations`);
     await expect(page.locator("body")).toContainText("직원 초대");
@@ -162,10 +163,9 @@ test.describe("P3 초대 — HTTP/E2E", () => {
     const adminPage = page.context();
     const page2 = await adminPage.newPage();
     await login(page2, SUPERADMIN_URL, adminEmail, adminPassword);
-    const response = await page2.goto(`${SUPERADMIN_URL}/invitations`);
-    if (response?.status() !== 404) {
-      await expect(page2.locator("body")).toContainText(/404|This page could not be found/i);
-    }
+    await gotoReady(page2, `${SUPERADMIN_URL}/invitations`);
+    await expect(page2.locator("body")).toContainText("직원 초대");
+    await expect(page2.locator("body")).toContainText("초대 발급");
     await page2.close();
   });
 
@@ -255,25 +255,23 @@ test.describe("P3 초대 — HTTP/E2E", () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test("INVALID 모드: 수락 폼은 보여도 실행은 차단되고 DB는 불변이다", async ({ page }) => {
+  test("INVALID 모드: 수락이 실행되고 계정이 활성화된다 (모드와 무관)", async ({ page }) => {
     const email = `${run}-invalid@example.test`;
     const password = `P3e2e-invalid-${suffix}!`;
     const { token, userId } = await seedInvitation(email, "STAFF");
     await blockPrefetch(page);
-    // 조회는 허용되므로 폼이 보이지만 (게이트 7 적용 방식),
     await gotoReady(page, `${INVALID_URL}/invite/${token}`);
     await expect(page.locator("body")).toContainText("초대 링크가 확인되었습니다");
     await page.getByLabel("새 비밀번호 *", { exact: true }).fill(password);
     await page.getByLabel("새 비밀번호 확인 *", { exact: true }).fill(password);
     await page.getByRole("button", { name: "비밀번호 설정하고 계정 활성화" }).click();
-    // 실행은 fail-closed로 차단되고 일반 안내만 보인다.
-    await expect(page.locator("body")).toContainText("초대 수락에 실패했습니다");
+    await expect(page.locator("body")).toContainText("초대를 수락했습니다");
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    expect(user.isActive).toBe(false);
-    expect(user.password).toBeNull();
+    expect(user.isActive).toBe(true);
+    expect(user.password).not.toBeNull();
     const invitation = await prisma.adminInvitation.findFirstOrThrow({ where: { email } });
-    expect(invitation.usedAt).toBeNull();
+    expect(invitation.usedAt).toBeInstanceOf(Date);
     const audits = await prisma.userAccountChange.findMany({ where: { targetUserId: userId, type: "INVITATION_ACCEPTED" } });
-    expect(audits).toHaveLength(0);
+    expect(audits).toHaveLength(1);
   });
 });

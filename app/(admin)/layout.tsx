@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { requireCurrentPrincipal, type CurrentPrincipal } from "@/lib/auth/authorization";
-import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import { countPendingReservationApplications } from "@/lib/reservation-applications/queries";
 
 export const dynamic = "force-dynamic";
@@ -35,11 +34,9 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
     ];
   }
 
-  // P2-S: 계정 관리 메뉴 노출도 전환 모드를 따른다. LEGACY_ADMIN 모드에서는 ADMIN에게,
-  // SUPER_ADMIN 모드에서는 SUPER_ADMIN에게만 노출한다. 미등록·잘못된 설정이면 누구에게도
-  // 노출하지 않는다. 메뉴 노출은 표시일 뿐 권한 경계가 아니며, 진입점 가드
-  // (queries·actions·코어)가 실제 경계이다. 이 파일은 서버 컴포넌트이므로
-  // 서버 전용 모드 판정을 직접 읽어도 클라이언트에 노출되지 않는다.
+  // 단순화 결정(ADR-071): 계정 관리·직원 초대 메뉴 노출은 역할만 본다.
+  // ADMIN 또는 SUPER_ADMIN에게 모드와 무관하게 노출한다. 메뉴 노출은 표시일 뿐
+  // 권한 경계가 아니며, 진입점 가드(queries·actions·코어)가 실제 경계이다.
   const adminMenuItems =
     principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
       ? [
@@ -53,17 +50,12 @@ function getNavigationItems(principal: CurrentPrincipal, pendingApplicationCount
           { href: "/revenue", label: "매출 집계" },
         ]
       : [];
-  const cutoverMode = resolveAccountCutoverMode();
   const accountMenuItems =
-    (cutoverMode === "LEGACY_ADMIN" && principal.role === "ADMIN") ||
-    (cutoverMode === "SUPER_ADMIN" && principal.role === "SUPER_ADMIN")
+    principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
       ? [{ href: "/accounts", label: "계정 관리" }]
       : [];
-  // P3: 직원 초대 메뉴는 계정 관리 메뉴와 다르다 — 모든 모드에서 SUPER_ADMIN
-  // 전용이며, INVALID 모드에서는 누구에게도 노출하지 않는다 (표시일 뿐, 실제
-  // 경계는 초대 쿼리·액션·코어의 requireInvitationPrincipal + INVALID 거부이다).
   const invitationMenuItems =
-    principal.role === "SUPER_ADMIN" && cutoverMode !== "INVALID"
+    principal.role === "ADMIN" || principal.role === "SUPER_ADMIN"
       ? [{ href: "/invitations", label: "직원 초대" }]
       : [];
 

@@ -217,15 +217,29 @@ describe("issueInvitationCore", () => {
     ).rejects.toMatchObject({ code: "INVITATION_ROLE_MISMATCH" });
   });
 
-  it("일반 초대 경로에서 SUPER_ADMIN 지정은 코어에서 거부된다", async () => {
-    const { client } = mockClient({ actor: superActor });
-    await expect(
-      issueInvitationCore(
-        superPrincipal,
-        { name: "x", email: "s@example.test", role: "SUPER_ADMIN", teacherId: null } as never,
-        client as never,
-      ),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
+  it("일반 초대 경로에서 SUPER_ADMIN 지정도 발급된다", async () => {
+    const { client, audit, createdInvitations } = mockClient({ actor: superActor });
+    const result = await issueInvitationCore(
+      superPrincipal,
+      { name: "x", email: "s@example.test", role: "SUPER_ADMIN", teacherId: null } as never,
+      client as never,
+    );
+    expect(result.targetUserId).toBe("new-user-1");
+    expect((createdInvitations[0] as { role: string }).role).toBe("SUPER_ADMIN");
+    const types = (audit as { type: string }[]).map((row) => row.type);
+    expect(types).toContain("CREATED");
+    expect(types).toContain("INVITATION_ISSUED");
+  });
+
+  it("ADMIN이 SUPER_ADMIN 역할로 초대를 발급한다", async () => {
+    const { client, createdInvitations } = mockClient({ actor: adminActor });
+    const result = await issueInvitationCore(
+      adminPrincipal,
+      { name: "x", email: "sa@example.test", role: "SUPER_ADMIN", teacherId: null } as never,
+      client as never,
+    );
+    expect(result.targetUserId).toBe("new-user-1");
+    expect((createdInvitations[0] as { role: string }).role).toBe("SUPER_ADMIN");
   });
 
   it("TEACHER 초대 시 선생님 미선택은 거부된다 (CHECK 우회 없음)", async () => {
@@ -235,7 +249,7 @@ describe("issueInvitationCore", () => {
     ).rejects.toMatchObject({ code: "TEACHER_REQUIRED" });
   });
 
-  it("LEGACY 모드에서도 SUPER_ADMIN 발급은 허용되고, ADMIN 발급은 거부된다", async () => {
+  it("LEGACY 모드에서도 ADMIN 발급이 허용된다 (모드와 무관)", async () => {
     setMode("LEGACY_ADMIN");
     const ok = mockClient({ actor: superActor });
     const result = await issueInvitationCore(
@@ -244,18 +258,24 @@ describe("issueInvitationCore", () => {
       ok.client as never,
     );
     expect(result.targetUserId).toBe("new-user-1");
-    const denied = mockClient({ actor: adminActor });
-    await expect(
-      issueInvitationCore(adminPrincipal, { name: "x", email: "l2@example.test", role: "STAFF", teacherId: null }, denied.client as never),
-    ).rejects.toMatchObject({ code: "INVITATION_FORBIDDEN" });
+    const allowed = mockClient({ actor: adminActor });
+    const adminResult = await issueInvitationCore(
+      adminPrincipal,
+      { name: "x", email: "l2@example.test", role: "STAFF", teacherId: null },
+      allowed.client as never,
+    );
+    expect(adminResult.targetUserId).toBe("new-user-1");
   });
 
-  it("INVALID 모드에서는 SUPER_ADMIN이라도 발급이 차단된다", async () => {
+  it("INVALID 모드에서도 발급이 허용된다 (모드와 무관)", async () => {
     setMode("BOGUS_MODE");
     const { client } = mockClient({ actor: superActor });
-    await expect(
-      issueInvitationCore(superPrincipal, { name: "x", email: "i@example.test", role: "STAFF", teacherId: null }, client as never),
-    ).rejects.toMatchObject({ code: "INVITATION_MODE_INVALID" });
+    const result = await issueInvitationCore(
+      superPrincipal,
+      { name: "x", email: "i@example.test", role: "STAFF", teacherId: null },
+      client as never,
+    );
+    expect(result.targetUserId).toBe("new-user-1");
   });
 });
 
@@ -444,12 +464,20 @@ describe("acceptInvitationCore", () => {
     expect(result.userId).toBe("target-1");
   });
 
-  it("INVALID 모드에서는 수락 실행이 차단된다", async () => {
+  it("INVALID 모드에서도 수락 실행이 허용된다 (모드와 무관)", async () => {
     setMode("BOGUS_MODE");
     const { token, client } = validAcceptSetup();
-    await expect(acceptInvitationCore({ token, passwordHash: "x" }, client as never)).rejects.toMatchObject({
-      code: "INVITATION_INVALID",
+    const result = await acceptInvitationCore({ token, passwordHash: "x" }, client as never);
+    expect(result.userId).toBe("target-1");
+  });
+
+  it("SUPER_ADMIN 대상 초대도 수락된다 (발급→수락)", async () => {
+    const { token, client } = validAcceptSetup({
+      invitation: { role: "SUPER_ADMIN" },
+      target: { role: "SUPER_ADMIN" },
     });
+    const result = await acceptInvitationCore({ token, passwordHash: "x" }, client as never);
+    expect(result.userId).toBe("target-1");
   });
 
   it("수락 실패 시 감사 행을 쓰지 않는다", async () => {

@@ -1,7 +1,6 @@
 import { invitationUseEnabled } from "@/lib/invitations/config";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import type { CurrentPrincipal } from "@/lib/auth/authorization";
 import {
   generateApplicationCapabilityToken,
@@ -17,28 +16,25 @@ import {
 /**
  * P3 직원 초대·수락·활성화 코어 (서버 전용).
  *
- * 보안 계약 (게이트 문서가 확정 — 임의 변경 금지):
- * - 초대 발급·취소·재발급·목록은 모든 모드에서 SUPER_ADMIN 전용이다.
- *   모드 가드(requireAccountManagementPrincipal)를 재사용하지 않는다 —
- *   LEGACY 모드에서 ADMIN에게 초대 권한이 열리는 정반대 결과가 되기 때문이다.
- *   대신 requireInvitationPrincipal() (SUPER_ADMIN + INVALID 거부) + 코어의
- *   assertInvitationActor() (트랜잭션 내 재검증) 이중 방어를 쓴다.
- * - INVALID 모드에서는 SUPER_ADMIN이라도 발급·수락 실행이 fail-closed로 차단된다.
+ * 보안 계약 (단순화 결정 ADR-071로 변경 — 모드 판정 제거):
+ * - 초대 발급·취소·재발급·목록은 ADMIN 또는 SUPER_ADMIN이 수행한다.
+ *   requireInvitationPrincipal() + 코어의 assertInvitationActor() 이중 방어를 쓴다.
+ *   전환 모드는 판정하지 않는다 (INVALID 모드에서도 발급·수락이 끊기지 않는다).
  * - 토큰은 CSPRNG 32바이트 capability 패턴 → base64url → SHA-256 hex만 DB 저장.
  *   원본 토큰은 이 모듈이 반환하는 1회뿐이며, 제품 라우트·화면·로그에 노출하지 않는다.
  *   (P3 발급 액션은 원본을 버리고, P4에서 발송 인터페이스로 전달한다.)
- * - 수락은 토큰 게이트 대상이다 (세션 무관 공개 라우트). 단, 소비·활성화 실행은
- *   INVALID 모드에서 차단하며, 폼 노출 여부와 별개로 검사한다.
+ * - 수락은 토큰 게이트 대상이다 (세션 무관 공개 라우트). SUPER_ADMIN 대상 초대도
+ *   일반 경로로 수락된다 (ADR-071).
  * - 실제 이메일 소유권 확인은 P4 신뢰 경로 연결 후에야 완성된다. 이 모듈의
  *   수락은 토큰 소지 확인이지 이메일 소유권 확인이 아니다.
- * - 최초 SUPER_ADMIN 부트스트랩(P7)·제2 승격(P3-2)에는 이 흐름을 재사용하지 않는다.
+ * - 최초 SUPER_ADMIN 부트스트랩(P7)·제2 승격(P3-2)에는 이 흐름을 재사용하지 않는다
+ *   (P7 코드는 미사용 휴면 상태로 남는다 — ADR-071).
  */
 
 export const INVITATION_TTL_MS = 72 * 60 * 60 * 1000; // OQ-9: 72시간 (최종 값은 P3 REVIEW 확정)
 
 export type InvitationErrorCode =
   | "INVITATION_FORBIDDEN"
-  | "INVITATION_MODE_INVALID"
   | "INVITATION_EMAIL_ACTIVE"
   | "INVITATION_ROLE_MISMATCH"
   | "INVITATION_NOT_FOUND"
@@ -75,30 +71,25 @@ type InvitationRow = {
 type TargetRow = {
   id: string;
   email: string;
-  // 초대 경로는 일반 역할만 대상으로 하지만, 런타임 행은 P3-2/P7로 SUPER_ADMIN일
-  // 수 있으므로 타입을 넓혀 수락 단계에서 명시적으로 거부한다.
-  role: AccountRole | "SUPER_ADMIN";
+  role: AccountRole;
   isActive: boolean;
   teacherId: string | null;
 };
 
 /**
  * P3 초대 행위자 검증 (트랜잭션 내 재검증 — 가드와 별개).
- * SUPER_ADMIN 전용 + 활성 + 강제 변경 아님 + INVALID 모드 전원 거부.
- * 가드 우회 직접 호출도 코어에서 걸러진다.
+ * 단순화 결정(ADR-071): ADMIN 또는 SUPER_ADMIN + 활성 + 강제 변경 아님.
+ * 전환 모드는 판정하지 않는다. 가드 우회 직접 호출도 코어에서 걸러진다.
  */
 export async function assertInvitationActor(
   tx: Prisma.TransactionClient,
   principal: CurrentPrincipal,
 ): Promise<void> {
-  if (resolveAccountCutoverMode() === "INVALID") {
-    throw new InvitationError("INVITATION_MODE_INVALID");
-  }
   const actor = await tx.user.findUnique({
     where: { id: principal.userId },
     select: { role: true, isActive: true, mustChangePassword: true },
   });
-  if (actor?.role !== "SUPER_ADMIN" || !actor.isActive || actor.mustChangePassword) {
+  if ((actor?.role !== "SUPER_ADMIN" && actor?.role !== "ADMIN") || !actor?.isActive || actor.mustChangePassword) {
     throw new InvitationError("INVITATION_FORBIDDEN");
   }
 }
@@ -199,12 +190,13 @@ export type IssueInvitationResult = {
 };
 
 /**
- * P3 초대 발급. SUPER_ADMIN 전용 + INVALID 거부.
+ * P3 초대 발급. ADMIN 또는 SUPER_ADMIN이 수행한다 (단순화 결정 ADR-071).
  * - 기존 활성 이메일 → 거부 (INVITATION_EMAIL_ACTIVE).
  * - 기존 비활성 계정 재초대 → 계정 행 불변 (이름·역할·활성 상태 변경 없음),
  *   역할 불일치 시 거부. 이전 미사용 토큰 해지 후 새 토큰 발행.
  * - 신규 계정 → P2 비활성 생성 규칙 재사용 (passwordHash null, 강제 비활성,
  *   역할 명시, CREATED 감사) + 초대 행 + INVITATION_ISSUED 감사를 하나의 트랜잭션으로.
+ *   SUPER_ADMIN 역할로도 발급할 수 있다 (ADR-071).
  * - TEACHER면 발급 시점 선생님 선택이 필수이며, CHECK를 만족하지 못하면
  *   createAccountInTransaction의 validateTeacherLink가 거부한다 (우회 금지).
  * - 발송은 호출하지 않는다 (P4 인터페이스 뒤에 둠). 반환된 원본 토큰은
@@ -274,7 +266,7 @@ export async function issueInvitationCore(
 }
 
 /**
- * P3 초대 재발급. SUPER_ADMIN 전용 + INVALID 거부.
+ * P3 초대 재발급. ADMIN 또는 SUPER_ADMIN이 수행한다 (단순화 결정 ADR-071).
  * - 사용済 초대 → 거부 (수락 완료 계정에 재발급하지 않는다).
  * - 대상 계정 활성 → 거부 (활성 계정의 초대는 권한 변경 절차로 수행한다).
  * - 대기·만료·해지 초대 → 이전 미사용 토큰 전부 해지(REVOKED 감사) 후 새 토큰 발행(RESENT 감사).
@@ -326,7 +318,7 @@ export async function reissueInvitationCore(
 }
 
 /**
- * P3 초대 해지. SUPER_ADMIN 전용 + INVALID 거부.
+ * P3 초대 해지. ADMIN 또는 SUPER_ADMIN이 수행한다 (단순화 결정 ADR-071).
  * - 대기·만료 초대를 해지한다 (revokedAt 설정 + REVOKED 감사). 계정 행은 삭제하지
  *   않고 isActive=false + 해지 상태로 보존한다 (PLAN P3 권장 — 감사 관계 유지).
  * - 사용済 → ALREADY_USED 거부, 이미 해지됨 → REVOKED 거부, 없음 → NOT_FOUND.
@@ -373,8 +365,6 @@ export async function cancelInvitationCore(
  * P3 초대 상태 조회 (공개 라우트용, 읽기 전용 — 상태를 변경하지 않는다).
  * 반환은 폼 노출 여부 판정용 최소 정보뿐이다: 유효한 대기 초대인지 여부와
  * 만료 여부(재요청 안내 문구 구분용). 계정 존재 여부·초대자 정보는 포함하지 않는다.
- * INVALID 모드에서도 조회 자체는 허용한다 (폼 노출은 토큰 게이트를 따르고,
- * 소비·활성화 실행만 INVALID에서 차단한다는 게이트 7 적용 방식).
  */
 export async function getInvitationAcceptanceState(
   token: string,
@@ -406,7 +396,8 @@ export type AcceptInvitationResult = { userId: string };
  * - 토큰 소비와 활성화는 단일 DB 트랜잭션이다. advisory lock 직렬화 +
  *   조건부 업데이트(count 검증)로 동일 토큰 동시 수락 시 최대 1건만 성공한다.
  * - GET 요청만으로 소비·활성화하지 않는다 (이 함수는 POST 액션에서만 호출한다).
- * - INVALID 모드에서는 실행을 fail-closed로 차단한다 (폼 노출과 별개 검사).
+ * - 단순화 결정(ADR-071): 모드 판정을 하지 않으며, SUPER_ADMIN 대상 초대의
+ *   수락도 일반 경로로 허용한다.
  * - 대상 계정이 이미 활성이면 거부한다 (별도 경로로 활성화된 계정의 토큰 탈취 방지).
  * - 초대 이메일과 대상 계정 이메일이 다르면 거부한다 (발급 후 이메일 변경 시
  *   초대는 무효 — 재발급 필요). 역할은 관리자 변경이 가능하므로 수락 시 건드리지 않는다.
@@ -426,10 +417,6 @@ export async function acceptInvitationCore(
   client: InvitationClient = prisma,
 ): Promise<AcceptInvitationResult> {
   if (!invitationUseEnabled()) throw new InvitationError("INVITATION_INVALID");
-  // INVALID 모드에서는 토큰 유효 여부를 드러내지 않고 일반 무효 오류로 차단한다.
-  if (resolveAccountCutoverMode() === "INVALID") {
-    throw new InvitationError("INVITATION_INVALID");
-  }
   if (!isWellFormedApplicationLinkToken(input.token)) {
     throw new InvitationError("INVITATION_INVALID");
   }
@@ -453,10 +440,6 @@ export async function acceptInvitationCore(
 
     const target = await lockUserRow(tx, invitation.targetUserId);
     if (!target) {
-      throw new InvitationError("INVITATION_INVALID");
-    }
-    // 일반 초대 경로의 대상이 SUPER_ADMIN이면 수락하지 않는다 (P3-2/P7 전용 경로).
-    if (target.role === "SUPER_ADMIN") {
       throw new InvitationError("INVITATION_INVALID");
     }
     if (target.isActive) {

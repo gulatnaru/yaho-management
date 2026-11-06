@@ -61,22 +61,14 @@ function accountMutationMessage(error: AccountMutationError): string {
   switch (error.code) {
     case "ACCOUNT_NOT_FOUND":
       return "계정을 찾을 수 없습니다.";
-    case "SELF_DEACTIVATION":
-      return "본인 계정은 비활성화할 수 없습니다.";
-    case "SELF_ROLE_CHANGE":
-      return "본인의 관리자 역할은 변경할 수 없습니다.";
-    case "LAST_ACTIVE_ADMIN":
-      return "마지막 활성 관리자는 비활성화하거나 역할을 변경할 수 없습니다.";
-    case "LAST_ACTIVE_SUPER_ADMIN":
-      return "마지막 활성 최고관리자는 비활성화하거나 역할을 변경할 수 없습니다.";
+    case "LAST_ACTIVE_MANAGER":
+      return "마지막 관리 가능 계정(활성 관리자·최고관리자)은 비활성화하거나 역할을 변경할 수 없습니다.";
     case "TEACHER_REQUIRED":
       return "선생님 계정에 연결할 선생님을 선택해주세요.";
     case "TEACHER_NOT_AVAILABLE":
       return "선택한 선생님을 계정에 연결할 수 없습니다. 활성 상태와 기존 연결을 확인해주세요.";
     case "ACTOR_NOT_ACCOUNT_MANAGER":
       return "계정 관리 권한을 다시 확인해주세요.";
-    case "SUPER_ADMIN_FORBIDDEN":
-      return "최고관리자 계정은 일반 경로로 생성·변경할 수 없습니다.";
   }
 }
 

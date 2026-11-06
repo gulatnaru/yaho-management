@@ -18,16 +18,16 @@ type StoredUser = {
   authVersion: number;
 };
 
-// P2-S: 코어 행위자는 전환 모드에 따라 달라진다. 기존 P2 테스트는 SUPER_ADMIN
-// 모드를 전제로 하므로 파일 기본 모드를 SUPER_ADMIN으로 두고, 모드별 신규
-// 테스트에서만 임시로 바꾼 뒤 afterEach로 복원한다.
+// 단순화 결정(ADR-071): 코어 행위자는 역할만 본다 (ADMIN 또는 SUPER_ADMIN).
+// 전환 모드는 판정하지 않으므로, 이 파일은 모드와 무관하게 동작한다.
+// 아래 beforeAll/afterEach는 환경변수가 남아 있는 경우를 정리할 뿐 모드를 고정하지 않는다.
 const CUTOVER_ENV = "YAHO_ADMIN_CUTOVER_MODE";
 const originalCutoverMode = process.env[CUTOVER_ENV];
 beforeAll(() => {
-  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
+  delete process.env[CUTOVER_ENV];
 });
 afterEach(() => {
-  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
+  delete process.env[CUTOVER_ENV];
 });
 afterAll(() => {
   if (originalCutoverMode === undefined) delete process.env[CUTOVER_ENV];
@@ -99,9 +99,19 @@ function harness(options: {
     calls.push("user-update");
     return {};
   });
-  // P2: 코어의 count 호출은 역할별로 나뉜다. 목은 where.role을 보고 해당 카운트를 반환한다.
-  const adminCount = vi.fn(async (args?: { where?: { role?: string } }) => {
-    if (args?.where?.role === "SUPER_ADMIN") {
+  // 단순화 결정(ADR-071): 코어는 활성 ADMIN + 활성 SUPER_ADMIN 합산 카운트
+  // (role: { in: ["ADMIN", "SUPER_ADMIN"] })를 한 번만 조회한다. 목은 in 배열에
+  // 들어간 역할별 카운트의 합을 반환한다.
+  const managerCount = vi.fn(async (args?: { where?: { role?: string | { in?: string[] } } }) => {
+    const role = args?.where?.role;
+    if (typeof role === "object" && role !== null && Array.isArray(role.in)) {
+      calls.push("manager-count");
+      return role.in.reduce(
+        (total, item) => total + (item === "SUPER_ADMIN" ? (options.activeSuperAdminCount ?? 2) : (options.activeAdminCount ?? 2)),
+        0,
+      );
+    }
+    if (role === "SUPER_ADMIN") {
       calls.push("super-count");
       return options.activeSuperAdminCount ?? 2;
     }
@@ -128,7 +138,7 @@ function harness(options: {
       findFirst: linkedFind,
       create: userCreate,
       update: userUpdate,
-      count: adminCount,
+      count: managerCount,
     },
     teacher: { findUnique: teacherFind },
     userAccountChange: { create: historyCreate, createMany: historyCreateMany },
@@ -142,7 +152,7 @@ function harness(options: {
     queryRaw,
     userCreate,
     userUpdate,
-    adminCount,
+    managerCount,
     historyCreate,
     historyCreateMany,
     teacherFind,
@@ -210,7 +220,7 @@ describe("account mutation core", () => {
     });
   });
 
-  it("rejects a non-SUPER_ADMIN actor at the core before any write (SUPER_ADMIN mode)", async () => {
+  it("allows an ADMIN actor at the core (mode-independent)", async () => {
     const test = harness({
       actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
     });
@@ -225,77 +235,66 @@ describe("account mutation core", () => {
         passwordHash: null,
       },
       test.client,
+    )).resolves.toEqual({ id: "created-1" });
+    expect(test.userCreate).toHaveBeenCalled();
+  });
+
+  it("rejects a non-manager actor at the core before any write", async () => {
+    const test = harness({
+      actor: { id: "manager-1", email: "manager@example.test", role: "MANAGER" },
+    });
+    await expect(createAccountCore(
+      { userId: "manager-1", role: "MANAGER", teacherId: null } as never,
+      {
+        name: "신규",
+        email: "new@example.test",
+        role: "STAFF",
+        teacherId: null,
+        isActive: true,
+        passwordHash: null,
+      },
+      test.client,
     )).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
     expect(test.userCreate).not.toHaveBeenCalled();
   });
 
-  it("allows a LEGACY_ADMIN actor in LEGACY_ADMIN mode and denies a SUPER_ADMIN actor there", async () => {
-    process.env[CUTOVER_ENV] = "LEGACY_ADMIN";
-    const legacy = harness({
-      actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
-    });
-    await expect(createAccountCore(
-      { userId: "admin-1", role: "ADMIN", teacherId: null } as never,
-      {
-        name: "신규",
-        email: "new@example.test",
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      },
-      legacy.client,
-    )).resolves.toEqual({ id: "created-1" });
-    expect(legacy.userCreate).toHaveBeenCalled();
+  it("allows ADMIN and SUPER_ADMIN actors in every cutover mode, including invalid or unset", async () => {
+    for (const mode of ["LEGACY_ADMIN", "SUPER_ADMIN", "BOGUS_MODE", undefined]) {
+      if (mode === undefined) delete process.env[CUTOVER_ENV];
+      else process.env[CUTOVER_ENV] = mode;
 
-    const superInLegacy = harness();
-    await expect(createAccountCore(
-      principal(),
-      {
-        name: "신규",
-        email: "new@example.test",
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      },
-      superInLegacy.client,
-    )).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(superInLegacy.userCreate).not.toHaveBeenCalled();
-  });
+      const adminCase = harness({
+        actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
+      });
+      await expect(createAccountCore(
+        { userId: "admin-1", role: "ADMIN", teacherId: null } as never,
+        {
+          name: "신규",
+          email: "new@example.test",
+          role: "STAFF",
+          teacherId: null,
+          isActive: true,
+          passwordHash: null,
+        },
+        adminCase.client,
+      )).resolves.toEqual({ id: "created-1" });
+      expect(adminCase.userCreate).toHaveBeenCalled();
 
-  it("denies every actor when the cutover mode is invalid or unregistered", async () => {
-    process.env[CUTOVER_ENV] = "BOGUS_MODE";
-    const bogus = harness();
-    await expect(createAccountCore(
-      principal(),
-      {
-        name: "신규",
-        email: "new@example.test",
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      },
-      bogus.client,
-    )).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(bogus.userCreate).not.toHaveBeenCalled();
-
-    delete process.env[CUTOVER_ENV];
-    const unset = harness();
-    await expect(createAccountCore(
-      principal(),
-      {
-        name: "신규",
-        email: "new@example.test",
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      },
-      unset.client,
-    )).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(unset.userCreate).not.toHaveBeenCalled();
+      const superCase = harness();
+      await expect(createAccountCore(
+        principal(),
+        {
+          name: "신규",
+          email: "new@example.test",
+          role: "STAFF",
+          teacherId: null,
+          isActive: true,
+          passwordHash: null,
+        },
+        superCase.client,
+      )).resolves.toEqual({ id: "created-1" });
+      expect(superCase.userCreate).toHaveBeenCalled();
+    }
   });
 
   it("validates an active, unlinked Teacher before creating a TEACHER account", async () => {
@@ -348,7 +347,7 @@ describe("account mutation core", () => {
       isActive: false,
     }, test.client);
 
-    expect(test.calls.slice(0, 4)).toEqual(["advisory-lock", "actor-check", "target-lock", "admin-count"]);
+    expect(test.calls.slice(0, 4)).toEqual(["advisory-lock", "actor-check", "target-lock", "manager-count"]);
     expect(test.userUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ authVersion: { increment: 1 } }),
     }));
@@ -390,18 +389,9 @@ describe("account mutation core", () => {
     });
   });
 
-  it("blocks self-deactivation, self-demotion, and removal of the last active ADMIN", async () => {
-    // P2: 본인 보호는 SUPER_ADMIN 본인에게도 적용된다 (P1 ADMIN 전용에서 일반화).
-    const self = harness({ target: target({ id: "super-1", role: "SUPER_ADMIN" }) });
-    await expect(updateAccountCore(principal(), "super-1", {
-      name: "최고관리자",
-      email: "super@example.test",
-      role: "SUPER_ADMIN",
-      teacherId: null,
-      isActive: false,
-    }, self.client)).rejects.toMatchObject({ code: "SELF_DEACTIVATION" });
-    expect(self.userUpdate).not.toHaveBeenCalled();
-
+  it("allows self-demotion and self-deactivation when another active manager exists", async () => {
+    // 단순화 결정(ADR-071): 본인 보호는 제거됐다. 다른 관리 가능 계정이 있으면
+    // 본인 역할 변경(ADMIN→SUPER_ADMIN 포함)·비활성화가 허용된다.
     const demotion = harness({ target: target({ id: "super-1", role: "SUPER_ADMIN" }) });
     await expect(updateAccountCore(principal(), "super-1", {
       name: "최고관리자",
@@ -409,47 +399,196 @@ describe("account mutation core", () => {
       role: "ADMIN",
       teacherId: null,
       isActive: true,
-    }, demotion.client)).rejects.toMatchObject({ code: "SELF_ROLE_CHANGE" });
+    }, demotion.client)).resolves.toBeUndefined();
+    expect(demotion.userUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ role: "ADMIN", authVersion: { increment: 1 } }),
+    }));
 
-    const last = harness({ target: target({ role: "ADMIN" }), activeAdminCount: 1 });
+    const deactivation = harness({ target: target({ id: "super-1", role: "SUPER_ADMIN" }) });
+    await expect(updateAccountCore(principal(), "super-1", {
+      name: "최고관리자",
+      email: "super@example.test",
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: false,
+    }, deactivation.client)).resolves.toBeUndefined();
+    expect(deactivation.userUpdate).toHaveBeenCalled();
+  });
+
+  it("allows an ADMIN actor to create a SUPER_ADMIN account and promote an existing account to SUPER_ADMIN", async () => {
+    // ① ADMIN이 SUPER_ADMIN 계정을 생성한다.
+    const adminActor = harness({
+      actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
+    });
+    const created = await createAccountCore(
+      { userId: "admin-1", role: "ADMIN", teacherId: null } as never,
+      {
+        name: "신규 최고관리자",
+        email: "newsuper@example.test",
+        role: "SUPER_ADMIN",
+        teacherId: null,
+        isActive: true,
+        passwordHash: "hash-only",
+      },
+      adminActor.client,
+    );
+    expect(created).toEqual({ id: "created-1" });
+    expect(adminActor.userCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ role: "SUPER_ADMIN" }),
+    }));
+    expect(adminActor.historyCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ type: "CREATED", nextRole: "SUPER_ADMIN" }),
+    });
+
+    // ② ADMIN이 기존 계정을 SUPER_ADMIN으로 승격한다 — authVersion 증가 + ROLE_CHANGED 감사.
+    const promotion = harness();
+    await updateAccountCore(principal(), "target-1", {
+      name: "대상",
+      email: "target@example.test",
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: true,
+    }, promotion.client);
+    expect(promotion.userUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ role: "SUPER_ADMIN", authVersion: { increment: 1 } }),
+    }));
+    expect(promotion.historyCreateMany).toHaveBeenCalledWith({ data: [
+      expect.objectContaining({ type: "ROLE_CHANGED", previousRole: "MANAGER", nextRole: "SUPER_ADMIN" }),
+    ] });
+  });
+
+  it("allows an ADMIN actor to promote itself to SUPER_ADMIN", async () => {
+    // ③ ADMIN 본인이 SUPER_ADMIN으로 승격한다 (본인 역할 변경 허용).
+    const test = harness({
+      actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
+      target: target({ id: "admin-1", role: "ADMIN" }),
+    });
+    await expect(updateAccountCore(
+      { userId: "admin-1", role: "ADMIN", teacherId: null } as never,
+      "admin-1",
+      {
+        name: "관리자",
+        email: "admin@example.test",
+        role: "SUPER_ADMIN",
+        teacherId: null,
+        isActive: true,
+      },
+      test.client,
+    )).resolves.toBeUndefined();
+    expect(test.userUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ role: "SUPER_ADMIN", authVersion: { increment: 1 } }),
+    }));
+  });
+
+  it("blocks removal of the last active manager, whether self or another account", async () => {
+    // ⑤ 마지막 관리 가능 계정 제거 시도(본인·타인 모두)가 거부된다.
+    // (a) 본인: 유일한 활성 ADMIN이 본인을 강등한다.
+    const selfDemotion = harness({
+      actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
+      target: target({ id: "admin-1", role: "ADMIN" }),
+      activeAdminCount: 1,
+      activeSuperAdminCount: 0,
+    });
+    await expect(updateAccountCore(
+      { userId: "admin-1", role: "ADMIN", teacherId: null } as never,
+      "admin-1",
+      {
+        name: "마지막 관리자",
+        email: "admin@example.test",
+        role: "MANAGER",
+        teacherId: null,
+        isActive: true,
+      },
+      selfDemotion.client,
+    )).rejects.toMatchObject({ code: "LAST_ACTIVE_MANAGER" });
+    expect(selfDemotion.userUpdate).not.toHaveBeenCalled();
+
+    // (b) 타인: 유일한 활성 ADMIN을 다른 행위자가 강등한다.
+    const otherDemotion = harness({
+      target: target({ role: "ADMIN" }),
+      activeAdminCount: 1,
+      activeSuperAdminCount: 0,
+    });
     await expect(updateAccountCore(principal(), "target-1", {
       name: "마지막 관리자",
       email: "target@example.test",
       role: "MANAGER",
       teacherId: null,
       isActive: true,
-    }, last.client)).rejects.toMatchObject({ code: "LAST_ACTIVE_ADMIN" });
-    expect(last.userUpdate).not.toHaveBeenCalled();
+    }, otherDemotion.client)).rejects.toMatchObject({ code: "LAST_ACTIVE_MANAGER" });
+    expect(otherDemotion.userUpdate).not.toHaveBeenCalled();
+
+    // (c) 타인: 유일한 활성 SUPER_ADMIN을 비활성화한다.
+    const otherDeactivation = harness({
+      target: target({ role: "SUPER_ADMIN" }),
+      activeAdminCount: 0,
+      activeSuperAdminCount: 1,
+    });
+    await expect(updateAccountCore(principal(), "target-1", {
+      name: "마지막 최고관리자",
+      email: "target@example.test",
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: false,
+    }, otherDeactivation.client)).rejects.toMatchObject({ code: "LAST_ACTIVE_MANAGER" });
+    expect(otherDeactivation.userUpdate).not.toHaveBeenCalled();
+
+    // (d) 대조: 관리 가능 계정이 2명 이상이면 같은 변경이 허용된다.
+    const allowed = harness({
+      target: target({ role: "ADMIN" }),
+      activeAdminCount: 1,
+      activeSuperAdminCount: 1,
+    });
+    await expect(updateAccountCore(principal(), "target-1", {
+      name: "관리자",
+      email: "target@example.test",
+      role: "MANAGER",
+      teacherId: null,
+      isActive: true,
+    }, allowed.client)).resolves.toBeUndefined();
+    expect(allowed.userUpdate).toHaveBeenCalled();
   });
 
-  it("blocks any general-path edit of a SUPER_ADMIN target, including name-only changes", async () => {
-    const test = harness({ target: target({ role: "SUPER_ADMIN" }), activeSuperAdminCount: 2 });
+  it("checks the combined manager count once when removing the last active manager", async () => {
+    const test = harness({
+      target: target({ role: "SUPER_ADMIN" }),
+      activeAdminCount: 0,
+      activeSuperAdminCount: 1,
+    });
+    await expect(updateAccountCore(principal(), "target-1", {
+      name: "최고관리자",
+      email: "target@example.test",
+      role: "MANAGER",
+      teacherId: null,
+      isActive: true,
+    }, test.client)).rejects.toMatchObject({ code: "LAST_ACTIVE_MANAGER" });
+    expect(test.calls).toEqual(["advisory-lock", "actor-check", "target-lock", "manager-count"]);
+    expect(test.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows general-path edits of a SUPER_ADMIN target, including password reset", async () => {
+    // SUPER_ADMIN 행도 일반 행처럼 편집할 수 있다 (이름만 변경 포함).
+    const edit = harness({ target: target({ role: "SUPER_ADMIN" }), activeSuperAdminCount: 2 });
     await expect(updateAccountCore(principal(), "target-1", {
       name: "이름만 변경",
       email: "target@example.test",
       role: "SUPER_ADMIN",
       teacherId: null,
       isActive: true,
-    }, test.client)).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(test.userUpdate).not.toHaveBeenCalled();
-  });
+    }, edit.client)).resolves.toBeUndefined();
+    expect(edit.userUpdate).toHaveBeenCalled();
 
-  it("checks LAST_ACTIVE_SUPER_ADMIN before the general-path blanket (defense-in-depth)", async () => {
-    // 실제 운영에서는 본인 제거가 본인 보호에, 타인 제거가 blanket에 먼저 걸리므로 이 검사는
-    // 일반 경로에서 도달하지 않는다. 목 카운트로 판정 순서·코드만 검증한다.
-    const test = harness({
-      target: target({ id: "super-2", role: "SUPER_ADMIN" }),
-      activeSuperAdminCount: 1,
+    // ⑧ SUPER_ADMIN 대상 비밀번호 재설정이 된다.
+    const reset = harness({ target: target({ role: "SUPER_ADMIN" }) });
+    await expect(resetAccountPasswordCore(principal(), "target-1", "new-hash", reset.client))
+      .resolves.toBeUndefined();
+    expect(reset.userUpdate).toHaveBeenCalledWith({
+      where: { id: "target-1" },
+      data: { password: "new-hash", mustChangePassword: true, authVersion: { increment: 1 } },
     });
-    await expect(updateAccountCore(principal(), "super-2", {
-      name: "최고관리자2",
-      email: "super2@example.test",
-      role: "ADMIN",
-      teacherId: null,
-      isActive: true,
-    }, test.client)).rejects.toMatchObject({ code: "LAST_ACTIVE_SUPER_ADMIN" });
-    expect(test.calls).toEqual(["advisory-lock", "actor-check", "target-lock", "super-count"]);
-    expect(test.userUpdate).not.toHaveBeenCalled();
+    expect(reset.historyCreate).toHaveBeenCalledWith({
+      data: { targetUserId: "target-1", actorAdminId: "super-1", type: "PASSWORD_RESET" },
+    });
   });
 
   it("resets the hash, forces password change, increments authVersion, and records no credential value", async () => {
@@ -485,10 +624,12 @@ describe("account mutation core", () => {
   });
 });
 
-describe("last ADMIN concurrency model", () => {
-  it("serializes competing ADMIN demotions so exactly one succeeds and one active ADMIN remains", async () => {
-    // P2: 강등 행위자는 SUPER_ADMIN이다. P1의 ADMIN 상호 강등(행위자 무효화로 1건만 성공)과
-    // 달리, P2에서는 두 번째 강등이 LAST_ACTIVE_ADMIN으로 거부된다.
+describe("last manager concurrency model", () => {
+  it("serializes competing demotions so the last active manager survives", async () => {
+    // 단순화 결정(ADR-071): 마지막 관리 가능 계정 가드는 활성 ADMIN + 활성
+    // SUPER_ADMIN 합산이다. 행위자(SUPER_ADMIN)는 강등 대상이 아니며, 세 건의
+    // 동시 강등 중 앞의 두 건만 성공하고 마지막 한 건이 LAST_ACTIVE_MANAGER으로
+    // 거부돼 활성 관리자 1명이 남는다.
     const users = new Map<string, StoredUser>([
       ["super-1", target({ id: "super-1", email: "super@example.test", role: "SUPER_ADMIN" })],
       ["admin-a", target({ id: "admin-a", email: "a@example.test", role: "ADMIN" })],
@@ -513,8 +654,11 @@ describe("last ADMIN concurrency model", () => {
             user: {
               findUnique: vi.fn(async ({ where }: { where: { id: string } }) => users.get(where.id)),
               findFirst: vi.fn(async () => null),
-              count: vi.fn(async ({ where }: { where: { role?: string; isActive?: boolean } }) =>
-                [...users.values()].filter((user) => user.role === where.role && user.isActive === where.isActive).length),
+              count: vi.fn(async ({ where }: { where: { role?: { in?: string[] } | string; isActive?: boolean } }) =>
+                [...users.values()].filter((user) => {
+                  const roles = typeof where.role === "object" ? where.role.in ?? [] : [where.role];
+                  return roles.includes(user.role) && user.isActive === where.isActive;
+                }).length),
               update: vi.fn(async ({ where, data }: { where: { id: string }; data: Partial<StoredUser> }) => {
                 users.set(where.id, { ...users.get(where.id)!, ...data });
               }),
@@ -543,12 +687,19 @@ describe("last ADMIN concurrency model", () => {
       teacherId: null,
       isActive: true,
     }, client);
+    const demoteSelf = updateAccountCore(principal("super-1"), "super-1", {
+      name: "최고관리자",
+      email: "super@example.test",
+      role: "MANAGER",
+      teacherId: null,
+      isActive: true,
+    }, client);
 
-    const results = await Promise.allSettled([demoteB, demoteA]);
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const results = await Promise.allSettled([demoteB, demoteA, demoteSelf]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
     const rejected = results.filter((result) => result.status === "rejected");
     expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "LAST_ACTIVE_ADMIN" });
-    expect([...users.values()].filter((user) => user.role === "ADMIN" && user.isActive)).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "LAST_ACTIVE_MANAGER" });
+    expect([...users.values()].filter((user) => (user.role === "ADMIN" || user.role === "SUPER_ADMIN") && user.isActive)).toHaveLength(1);
   });
 });

@@ -14,8 +14,8 @@ import { deliverIssuedInvitation } from "@/server/accounts/invitation-delivery";
 import { AccountMutationError } from "@/server/accounts/mutations";
 
 /**
- * P3 관리자 초대 액션 (SUPER_ADMIN 전용 + INVALID 거부 — requireInvitationPrincipal).
- * 모드 가드를 재사용하지 않는다 (게이트 7).
+ * P3 관리자 초대 액션 (ADMIN 또는 SUPER_ADMIN — requireInvitationPrincipal,
+ * 단순화 결정 ADR-071).
  *
  * 원본 토큰은 같은 요청의 발송 어댑터에만 전달한다.
  */
@@ -35,7 +35,6 @@ export type InvitationRowActionState = {
 function invitationErrorMessage(error: InvitationError): string {
   switch (error.code) {
     case "INVITATION_FORBIDDEN":
-    case "INVITATION_MODE_INVALID":
       return "초대 관리 권한을 다시 확인해주세요.";
     case "INVITATION_EMAIL_ACTIVE":
       return "이미 활성화된 계정이 있는 이메일입니다. 역할 변경은 계정 관리에서 수행해주세요.";
@@ -95,9 +94,6 @@ export async function issueInvitation(
       }
       if (error.code === "TEACHER_NOT_AVAILABLE") {
         return { formError: "선택한 선생님을 계정에 연결할 수 없습니다. 활성 상태와 기존 연결을 확인해주세요.", values };
-      }
-      if (error.code === "SUPER_ADMIN_FORBIDDEN") {
-        return { formError: "최고관리자 계정은 일반 경로로 생성할 수 없습니다.", values };
       }
       return { formError: "초대 관리 권한을 다시 확인해주세요.", values };
     }

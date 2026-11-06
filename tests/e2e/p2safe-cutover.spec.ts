@@ -4,15 +4,18 @@ import { expect, test, type Page } from "@playwright/test";
 import { assertSafeE2eDatabaseUrls } from "./support/db-safety";
 
 /**
- * P2-S 전환 안전장치 — 실제 HTTP 요청과 브라우저를 통한 권한·계정 관리 검증.
+ * 단순화 결정(ADR-071) — 계정 관리는 전환 모드와 무관함을 실제 HTTP 요청과
+ * 브라우저를 통해 검증한다.
  *
  * 이 스펙은 서버 가드·액션·DB 수준이 아니라 실제 Next.js 서버(next start 3대)와
  * 브라우저 상호작용을 검증한다. 서버 3대는 하네스가 미리 띄운다:
- * - LEGACY_ADMIN 모드 (P2SAFE_LEGACY_URL): 전환 전 계약
- * - SUPER_ADMIN 모드 (P2SAFE_SUPERADMIN_URL): P2 전환 이후 계약
- * - INVALID 모드 (P2SAFE_INVALID_URL): 오타·미등록 설정의 fail-closed 동작
+ * - LEGACY_ADMIN 모드 (P2SAFE_LEGACY_URL)
+ * - SUPER_ADMIN 모드 (P2SAFE_SUPERADMIN_URL)
+ * - INVALID 모드 (P2SAFE_INVALID_URL): 오타·미등록 설정
  * 각 서버는 같은 격리 PG를 보지만 포트가 달라 오리진이 분리되고, 모드는 서버별
  * 환경변수로 고정된다. 이 스펙은 모드를 바꾸지 않는다 (서버 재시작·재배포 영역).
+ * 단순화 결정 이후 모드는 계정 관리 접근을 바꾸지 않는다 — 세 서버 모두에서
+ * ADMIN·SUPER_ADMIN이 계정을 관리할 수 있음을 검증한다.
  *
  * 안전 가드: Preview/Production DB 접속 금지, 격리 PG·루프백 오리진만 허용,
  * 합성 계정만 사용, afterAll에서 합성 데이터 정리.
@@ -132,7 +135,7 @@ async function createUserViaUi(
 }
 
 const p2safeSuite = p2safeEnvReady ? test.describe.serial : test.describe.skip;
-p2safeSuite("P2-S 전환 안전장치 HTTP/E2E", () => {
+p2safeSuite("단순화 결정(ADR-071) — 계정 관리는 모드와 무관하다 (HTTP/E2E)", () => {
   test.beforeAll(async () => {
     const passwordHash = await hash(userPassword, 4);
     const teacher = await prisma.teacher.create({
@@ -246,19 +249,30 @@ p2safeSuite("P2-S 전환 안전장치 HTTP/E2E", () => {
     ).toBe(2);
   });
 
-  test("시나리오 2 — LEGACY 모드에서 일반 ADMIN의 SUPER_ADMIN 생성·승격이 불가하다", async ({ page }) => {
+  test("시나리오 2 — LEGACY 모드에서 일반 ADMIN의 SUPER_ADMIN 생성·승격이 가능하다", async ({ page }) => {
     await login(page, LEGACY_URL, `admin-${suffix}@p2safe.test`, userPassword);
     await page.goto(`${LEGACY_URL}/accounts/new`);
     const options = await page.locator("#role option").evaluateAll((elements) =>
       elements.map((element) => (element as HTMLOptionElement).value),
     );
-    expect(options).not.toContain("SUPER_ADMIN");
+    expect(options).toContain("SUPER_ADMIN");
     expect(options).toEqual(expect.arrayContaining(["ADMIN", "MANAGER", "TEACHER", "STAFF"]));
 
-    // 시드된 SUPER_ADMIN 행: LEGACY 모드에서 ADMIN은 상세를 볼 수 있으나(전환 전
-    // ADMIN 관리 범위), 수정 폼은 제출 수단이 없는 읽기 전용이다.
+    // ADMIN이 SUPER_ADMIN 계정을 직접 생성한다 (비밀번호 없이 비활성 생성).
+    await page.getByLabel("이름 *", { exact: true }).fill(`P2safe LEGACY 신규 최고관리자 ${suffix}`);
+    await page.getByLabel(/이메일/).fill(`legacy-super-${suffix}@p2safe.test`);
+    await page.getByLabel(/역할/).selectOption("SUPER_ADMIN");
+    await page.getByRole("button", { name: "계정 생성" }).click();
+    await expect(page).toHaveURL(/\/accounts\/(?!new$)[^/?]+$/);
+    const created = await prisma.user.findUniqueOrThrow({ where: { email: `legacy-super-${suffix}@p2safe.test` } });
+    ids.users.push(created.id);
+    expect(created.role).toBe("SUPER_ADMIN");
+    expect(created.password).toBeNull();
+    expect(created.isActive).toBe(false);
+
+    // 시드된 SUPER_ADMIN 행도 일반 행처럼 편집할 수 있다 (읽기 전용이 아니다).
     await page.goto(`${LEGACY_URL}/accounts/${superId}/edit`);
-    await expect(page.locator('button[type="submit"]')).toHaveCount(0);
+    await expect(page.locator('button[type="submit"]')).toHaveCount(1);
   });
 
   test("시나리오 3 — SUPER_ADMIN 모드에서 SUPER_ADMIN이 계정을 생성·수정·비활성화한다", async ({ page }) => {
@@ -304,17 +318,23 @@ p2safeSuite("P2-S 전환 안전장치 HTTP/E2E", () => {
     ).toBe(1);
   });
 
-  test("시나리오 4 — SUPER_ADMIN 모드에서 ADMIN의 계정 관리가 차단되고 DB가 불변이다", async ({ page }) => {
+  test("시나리오 4 — SUPER_ADMIN 모드에서 ADMIN의 계정 관리가 허용된다", async ({ page }) => {
     const usersBefore = await prisma.user.count();
-    const auditsBefore = await prisma.userAccountChange.count();
     await login(page, SUPERADMIN_URL, `admin-${suffix}@p2safe.test`, userPassword);
     await page.goto(`${SUPERADMIN_URL}/dashboard`);
-    expect(await page.content()).not.toContain('href="/accounts"');
-    await expectDenied(page, `${SUPERADMIN_URL}/accounts`);
-    await expectDenied(page, `${SUPERADMIN_URL}/accounts/new`);
-    await expectDenied(page, `${SUPERADMIN_URL}/accounts/${superCreatedId}`);
-    expect(await prisma.user.count()).toBe(usersBefore);
-    expect(await prisma.userAccountChange.count()).toBe(auditsBefore);
+    expect(await page.content()).toContain('href="/accounts"');
+    expect((await page.goto(`${SUPERADMIN_URL}/accounts`))?.status()).toBe(200);
+    expect((await page.goto(`${SUPERADMIN_URL}/accounts/new`))?.status()).toBe(200);
+    expect((await page.goto(`${SUPERADMIN_URL}/accounts/${superCreatedId}`))?.status()).toBe(200);
+    const created = await createUserViaUi(
+      page,
+      SUPERADMIN_URL,
+      `super-admin-created-${suffix}@p2safe.test`,
+      `P2safe ADMIN 생성 ${suffix}`,
+      "STAFF",
+    );
+    expect(created.role).toBe("STAFF");
+    expect(await prisma.user.count()).toBe(usersBefore + 1);
   });
 
   test("시나리오 5 — ADMIN의 기존 수업·예약·금융 화면이 SUPER_ADMIN 모드에서도 정상 접근된다", async ({ page }) => {
@@ -448,14 +468,14 @@ p2safeSuite("P2-S 전환 안전장치 HTTP/E2E", () => {
     await expectDenied(page, `${SUPERADMIN_URL}/account/history`);
   });
 
-  test("INVALID 모드 — 설정이 잘못되면 SUPER_ADMIN·ADMIN 모두 계정 관리에 접근할 수 없다", async ({ page }) => {
+  test("INVALID 모드 — 설정이 잘못돼도 SUPER_ADMIN·ADMIN 모두 계정 관리에 접근할 수 있다", async ({ page }) => {
     await login(page, INVALID_URL, `super-${suffix}@p2safe.test`, userPassword);
     expect((await page.goto(`${INVALID_URL}/dashboard`))?.status()).toBe(200);
-    await expectDenied(page, `${INVALID_URL}/accounts`);
+    expect((await page.goto(`${INVALID_URL}/accounts`))?.status()).toBe(200);
     await page.goto(`${INVALID_URL}/dashboard`);
-    expect(await page.content()).not.toContain('href="/accounts"');
+    expect(await page.content()).toContain('href="/accounts"');
 
     await login(page, INVALID_URL, `admin-${suffix}@p2safe.test`, userPassword);
-    await expectDenied(page, `${INVALID_URL}/accounts`);
+    expect((await page.goto(`${INVALID_URL}/accounts`))?.status()).toBe(200);
   });
 });

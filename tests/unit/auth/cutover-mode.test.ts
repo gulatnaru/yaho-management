@@ -91,26 +91,30 @@ async function runGuard(mode: string | undefined, principal: typeof principalHol
   return requireAccountManagementPrincipal();
 }
 
-describe("P2-S account management guard by cutover mode", () => {
-  it("allows only ADMIN in LEGACY_ADMIN mode", async () => {
+describe("단순화 결정(ADR-071) — 계정 관리 가드는 역할만 본다 (모드 무관)", () => {
+  it("allows ADMIN and SUPER_ADMIN in LEGACY_ADMIN mode", async () => {
     await expect(runGuard("LEGACY_ADMIN", principalFor("ADMIN"))).resolves.toMatchObject({ role: "ADMIN" });
-    for (const role of ["SUPER_ADMIN", "MANAGER", "TEACHER", "STAFF"]) {
+    await expect(runGuard("LEGACY_ADMIN", principalFor("SUPER_ADMIN"))).resolves.toMatchObject({ role: "SUPER_ADMIN" });
+    for (const role of ["MANAGER", "TEACHER", "STAFF"]) {
       await expect(runGuard("LEGACY_ADMIN", principalFor(role))).rejects.toThrow("NOT_FOUND");
     }
   });
 
-  it("allows only SUPER_ADMIN in SUPER_ADMIN mode", async () => {
+  it("allows ADMIN and SUPER_ADMIN in SUPER_ADMIN mode", async () => {
     await expect(runGuard("SUPER_ADMIN", principalFor("SUPER_ADMIN"))).resolves.toMatchObject({
       role: "SUPER_ADMIN",
     });
-    for (const role of ["ADMIN", "MANAGER", "TEACHER", "STAFF"]) {
+    await expect(runGuard("SUPER_ADMIN", principalFor("ADMIN"))).resolves.toMatchObject({ role: "ADMIN" });
+    for (const role of ["MANAGER", "TEACHER", "STAFF"]) {
       await expect(runGuard("SUPER_ADMIN", principalFor(role))).rejects.toThrow("NOT_FOUND");
     }
   });
 
-  it("denies every role when the mode is invalid or unregistered", async () => {
+  it("allows ADMIN and SUPER_ADMIN even when the mode is invalid or unregistered", async () => {
     for (const mode of ["BOGUS_MODE", undefined]) {
-      for (const role of ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEACHER", "STAFF"]) {
+      await expect(runGuard(mode, principalFor("SUPER_ADMIN"))).resolves.toMatchObject({ role: "SUPER_ADMIN" });
+      await expect(runGuard(mode, principalFor("ADMIN"))).resolves.toMatchObject({ role: "ADMIN" });
+      for (const role of ["MANAGER", "TEACHER", "STAFF"]) {
         await expect(runGuard(mode, principalFor(role))).rejects.toThrow("NOT_FOUND");
       }
     }

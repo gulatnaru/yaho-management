@@ -7,10 +7,9 @@ import { AccountForm } from "../../../accounts/_components/account-form";
 type EditAccountPageProps = { params: Promise<{ id: string }> };
 
 export default async function EditAccountPage({ params }: EditAccountPageProps) {
-  // P2-S: 계정 관리 진입점은 모드별 가드(requireAccountManagementPrincipal)를 쓴다.
-  // LEGACY_ADMIN 모드에서는 ADMIN이, SUPER_ADMIN 모드에서는 SUPER_ADMIN이 진입한다.
-  // 본인 보호는 폼·코어에서 처리한다 — SUPER_ADMIN 본인 행은 폼이 읽기 전용으로
-  // 렌더링하고, 코어는 본인 변경을 거부한다.
+  // 단순화 결정(ADR-071): 계정 관리 진입점은 역할만 보는 가드
+  // (requireAccountManagementPrincipal — ADMIN 또는 SUPER_ADMIN)를 쓴다.
+  // 모드는 판정하지 않으며, SUPER_ADMIN 행도 일반 폼으로 편집할 수 있다.
   await requireAccountManagementPrincipal();
   const { id } = await params;
   const detail = await getAccountDetail(id);

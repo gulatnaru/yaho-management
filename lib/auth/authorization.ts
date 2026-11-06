@@ -2,7 +2,6 @@ import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db/prisma";
-import { resolveAccountCutoverMode } from "@/lib/auth/cutover-mode";
 import { isOperationalPrincipal } from "@/lib/auth/principal";
 import {
   resolveSessionPrincipal,
@@ -97,35 +96,23 @@ export async function getOptionalOperationalPrincipal(): Promise<
 }
 
 /**
- * P2-S 전환 안전장치 — 계정 관리 전용 모드 가드. P2의 requireSuperAdminPrincipal
- * 단일 계약을 모드별 계약으로 대체한다. 판정은 lib/auth/cutover-mode.ts의
- * resolveAccountCutoverMode() 하나만 쓰며, 계층별로 다른 판정을 두지 않는다.
- * - LEGACY_ADMIN 모드: ADMIN만 계정 관리를 수행한다 (P2 전환 전 상태).
- * - SUPER_ADMIN 모드: SUPER_ADMIN만 일반 계정 관리를 수행한다 (P2 계약).
- * - 미등록·잘못된 설정(INVALID): 전원 거부한다 (fail-closed, notFound 위장).
- * SUPER_ADMIN 계정이 DB에 존재한다는 사실만으로는 전환되지 않는다 —
- * 모드는 환경변수 설정 + 배포로만 바뀌고, 코드가 스스로 뒤집지 않는다.
- * 코어(server/accounts/mutations.ts)도 트랜잭션 안에서 모드를 다시 읽어
- * 행위자를 재검증하므로, 가드 우회 호출은 코어에서 한 번 더 걸러진다.
+ * 단순화 결정(ADR-071) — 계정 관리 가드는 역할만 본다. ADMIN 또는 SUPER_ADMIN이면
+ * 계정 관리를 수행할 수 있다 (활성 + mustChangePassword false는
+ * requireCurrentPrincipal이, live 행 재확인은 코어가 담당한다).
+ * 전환 모드(LEGACY_ADMIN/SUPER_ADMIN/INVALID)는 계정 관리 경로에서 판정하지 않는다 —
+ * 미등록·오타 모드(INVALID)에서도 계정 관리가 끊기지 않는다.
+ * 모드 판정 자체는 cutover-mode.ts에 남아 P7 잔존 코드만 참조한다.
  */
 export async function requireAccountManagementPrincipal(): Promise<
   AdminPrincipal | SuperAdminPrincipal
 > {
-  const principal = await requireCurrentPrincipal();
-  const mode = resolveAccountCutoverMode();
-  if (mode === "LEGACY_ADMIN" && principal.role === "ADMIN") {
-    return principal;
-  }
-  if (mode === "SUPER_ADMIN" && principal.role === "SUPER_ADMIN") {
-    return principal;
-  }
-  notFound();
+  return requireAdminOrSuperAdminPrincipal();
 }
 
 /**
- * P1 금융·운영 ADMIN 진입점용 가드. requireAdminPrincipal을 전역으로 확장하지 않는다 —
- * 전역 확장은 계정 관리 API까지 SUPER_ADMIN에게 의도치 않게 개방하기 때문이다.
- * 계정 관리 진입점은 P2-S부터 requireAccountManagementPrincipal(모드별)로 전환됐다.
+ * P1 금융·운영 ADMIN 진입점용 가드. 단순화 결정(ADR-071): 계정 관리 진입점도
+ * 이 가드와 동일한 역할 판정(ADMIN 또는 SUPER_ADMIN)을 쓰며,
+ * requireAccountManagementPrincipal이 이 함수에 위임한다.
  * 메뉴 노출이 이 가드를 대체하지 않는다.
  */
 export async function requireAdminOrSuperAdminPrincipal(): Promise<SuperAdminPrincipal | AdminPrincipal> {
@@ -153,19 +140,13 @@ export async function requireSuperAdminPrincipal(): Promise<SuperAdminPrincipal>
 }
 
 /**
- * P3 초대 전용 가드 — 모드 가드(requireAccountManagementPrincipal)를 재사용하지 않는다.
- * 모드 가드는 LEGACY 모드에서 ADMIN을 허용하므로, 초대 진입점에 재사용하면
- * LEGACY ADMIN에게 초대 발급 권한이 열리는 정반대 결과가 된다 (게이트 7).
- * 초대 생성·취소·재발급·목록은 모든 모드에서 SUPER_ADMIN 전용이며,
- * 미등록·잘못된 설정(INVALID)에서는 SUPER_ADMIN이라도 전원 거부(fail-closed)한다.
- * LEGACY 모드 + SUPER_ADMIN 존재 시 발급 가능 (로그인은 계정 관리 가드와 무관).
+ * P3 초대 전용 가드 — 단순화 결정(ADR-071): ADMIN 또는 SUPER_ADMIN이 초대를
+ * 발급·취소·재발급·조회할 수 있다. 전환 모드는 판정하지 않는다 (INVALID
+ * 모드에서도 초대 발급이 끊기지 않는다). requireAccountManagementPrincipal과
+ * 동일한 역할 판정이며, 진입점만 분리한다.
  */
-export async function requireInvitationPrincipal(): Promise<SuperAdminPrincipal> {
-  const principal = await requireSuperAdminPrincipal();
-  if (resolveAccountCutoverMode() === "INVALID") {
-    notFound();
-  }
-  return principal;
+export async function requireInvitationPrincipal(): Promise<SuperAdminPrincipal | AdminPrincipal> {
+  return requireAdminOrSuperAdminPrincipal();
 }
 
 function ensureResourcePrincipal(principal: CurrentPrincipal): CurrentPrincipal {

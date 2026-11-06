@@ -1,20 +1,19 @@
 /**
- * P2-S 전환 안전장치 — 모드별 계정 관리 계약을 격리 PostgreSQL 16에서 검증한다.
+ * 단순화 결정(ADR-071) — 계정 관리는 전환 모드와 무관함을 격리 PostgreSQL 16에서 검증한다.
  *
- * P2 파일(rbac-p2-accounts.test.ts)은 SUPER_ADMIN 모드 전제의 P2 계약을 검증하고,
- * 이 파일은 LEGACY_ADMIN / SUPER_ADMIN / INVALID 모드 전환 자체를 검증한다.
- * 핵심 명제: SUPER_ADMIN 행이 DB에 존재해도 LEGACY 모드에서는 권한이 생기지 않으며
- * (자동 전환 부재), 모드 값은 호출 시점마다 다시 읽혀 같은 모듈 인스턴스에서도
- * 환경변수 교체가 즉시 반영된다.
+ * P2 파일(rbac-p2-accounts.test.ts)은 SUPER_ADMIN 모드 전제의 계정 관리 계약을 검증하고,
+ * 이 파일은 LEGACY_ADMIN / SUPER_ADMIN / INVALID 모드를 바꿔도 계정 관리 접근이
+ * 변하지 않음을 검증한다. 핵심 명제: 계정 관리 권한은 역할(ADMIN 또는 SUPER_ADMIN)만으로
+ * 정해지며, 모드 값은 계정 관리 경로에서 판정하지 않는다.
  *
  * 실행 환경: 독립 임시 PG16 (127.0.0.1:55432, DB/user yaho_e2e, DB 안전 게이트 통과 URL),
  * 기존 migration 15건 적용 + P1 draft migration 적용 상태. 실제 프로젝트 DB(Preview/Production)에는
  * 절대 접속하지 않는다. 합성 관리자 및 테스트 데이터만 사용한다.
  *
  * 검증 경계 (정직한 표기):
- * - 실제: 모드별 서버 가드(requireAccountManagementPrincipal), 계정 코어
- *   (assertAccountManagementActor — 트랜잭션 내 모드 재검증), 계정 쿼리·액션,
- *   실제 DB 쓰기 결과, 거부 시 DB 행·감사 불변, 모드 전환 시 동작 변경.
+ * - 실제: 모드 무관 서버 가드(requireAccountManagementPrincipal), 계정 코어
+ *   (assertAccountManagementActor — 역할만 판정), 계정 쿼리·액션,
+ *   실제 DB 쓰기 결과, 모드 전환 시 동작 불변.
  * - 스텁된 부분: 세션 전송 계층만 mock한다 (`@/auth`의 auth()가 합성 세션을 반환하고,
  *   실제 resolveSessionPrincipal이 격리 DB 행을 읽어 principal을 만든다). HTTP 요청 전송
  *   계층은 검증하지 않는다 — HTTP/E2E 배선은 tests/e2e/p2safe-cutover.spec.ts에서 검증한다.
@@ -169,7 +168,7 @@ afterAll(async () => {
   await db.$disconnect();
 }, 30000);
 
-describe.sequential("P2-S cutover mode contract (isolated PostgreSQL)", () => {
+describe.sequential("단순화 결정(ADR-071) — 계정 관리는 모드와 무관하다 (격리 PostgreSQL)", () => {
   it("LEGACY_ADMIN mode allows ADMIN management through actions, queries, and core", async () => {
     setMode("LEGACY_ADMIN");
     sessionHolder.userId = adminId;
@@ -233,47 +232,64 @@ describe.sequential("P2-S cutover mode contract (isolated PostgreSQL)", () => {
     expect(Array.isArray(await queries.listAvailableAccountTeachers())).toBe(true);
   });
 
-  it("LEGACY_ADMIN mode forbids SUPER_ADMIN creation and promotion", async () => {
+  it("LEGACY_ADMIN mode allows ADMIN to create and promote SUPER_ADMIN", async () => {
     setMode("LEGACY_ADMIN");
     sessionHolder.userId = adminId;
     sessionHolder.authVersion = 1;
     const actions = await freshActions();
     const mutations = await freshMutations();
-    const forgedEmail = `${run}-legacy-forged-super@example.test`;
+    const superEmail = `${run}-legacy-super@example.test`;
 
-    // (a) 서버 액션 경유 위조 페이로드: zod 검증 단계에서 거부된다.
-    const actionResult = await actions.createAccount(
+    // (a) 서버 액션 경유 생성: SUPER_ADMIN 역할이 zod 검증을 통과하고
+    // 비밀번호 없이 비활성으로 생성된다.
+    await expect(actions.createAccount(
       {},
-      accountForm({ name: "위조 최고관리자", email: forgedEmail, role: "SUPER_ADMIN", isActive: "on" }),
-    );
-    expect(actionResult.errors?.role).toBeDefined();
-    expect(await db.user.findUnique({ where: { email: forgedEmail } })).toBeNull();
+      accountForm({ name: "LEGACY 최고관리자", email: superEmail, role: "SUPER_ADMIN", isActive: "on" }),
+    )).rejects.toThrow(/^REDIRECT:\/accounts\//);
+    const actionCreated = await db.user.findUniqueOrThrow({ where: { email: superEmail } });
+    allIds.push(actionCreated.id);
+    expect(actionCreated.role).toBe("SUPER_ADMIN");
+    expect(actionCreated.isActive).toBe(false);
+    expect(
+      await db.userAccountChange.count({
+        where: { targetUserId: actionCreated.id, type: "CREATED", actorAdminId: adminId },
+      }),
+    ).toBe(1);
 
-    // (b) 코어 직접 호출: SUPER_ADMIN 생성·승격 blanket 거부, 행·감사 불변.
-    await expect(
-      mutations.createAccountCore(adminPrincipal(), {
-        name: "위조 최고관리자",
-        email: forgedEmail,
-        role: "SUPER_ADMIN",
-        teacherId: null,
-        isActive: true,
-        passwordHash: "synthetic-hash",
-      }),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    await expect(
-      mutations.updateAccountCore(adminPrincipal(), staffId, {
-        name: "합성 직원",
-        email: `${run}-staff@example.test`,
-        role: "SUPER_ADMIN",
-        teacherId: null,
-        isActive: true,
-      }),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(await db.user.findUnique({ where: { email: forgedEmail } })).toBeNull();
-    expect(await db.userAccountChange.count({ where: { nextEmail: forgedEmail } })).toBe(0);
+    // (b) 코어 직접 호출: ADMIN 행위자가 SUPER_ADMIN을 생성하고, 기존 STAFF를
+    // SUPER_ADMIN으로 승격한다.
+    const coreEmail = `${run}-legacy-core-super@example.test`;
+    const coreCreated = await mutations.createAccountCore(adminPrincipal(), {
+      name: "LEGACY 코어 최고관리자",
+      email: coreEmail,
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: true,
+      passwordHash: "synthetic-hash",
+    });
+    allIds.push(coreCreated.id);
+    expect((await db.user.findUniqueOrThrow({ where: { email: coreEmail } })).role).toBe("SUPER_ADMIN");
+
+    const promoteTarget = await mutations.createAccountCore(adminPrincipal(), {
+      name: "LEGACY 승격 대상",
+      email: `${run}-legacy-promote@example.test`,
+      role: "STAFF",
+      teacherId: null,
+      isActive: true,
+      passwordHash: null,
+    });
+    allIds.push(promoteTarget.id);
+    await mutations.updateAccountCore(adminPrincipal(), promoteTarget.id, {
+      name: "LEGACY 승격 대상",
+      email: `${run}-legacy-promote@example.test`,
+      role: "SUPER_ADMIN",
+      teacherId: null,
+      isActive: true,
+    });
+    expect((await snapshotUser(promoteTarget.id)).role).toBe("SUPER_ADMIN");
   });
 
-  it("LEGACY_ADMIN mode denies a SUPER_ADMIN actor even though the row exists (no auto-transition)", async () => {
+  it("LEGACY_ADMIN mode allows a SUPER_ADMIN actor (role-based, no mode gate)", async () => {
     setMode("LEGACY_ADMIN");
     sessionHolder.userId = superId;
     sessionHolder.authVersion = 1;
@@ -281,31 +297,33 @@ describe.sequential("P2-S cutover mode contract (isolated PostgreSQL)", () => {
     const actions = await freshActions();
     const mutations = await freshMutations();
     const queries = await freshQueries();
-    const staffBefore = await snapshotUser(staffId);
 
-    // 가드·액션·쿼리·코어 전 계층에서 거부된다. DB 행 존재만으로는 권한이 생기지 않는다.
-    await expect(authorization.requireAccountManagementPrincipal()).rejects.toThrow("NOT_FOUND");
+    // 가드·액션·쿼리·코어 전 계층에서 허용된다. DB 행 존재 여부와 무관하게 역할이 권한이다.
+    await expect(authorization.requireAccountManagementPrincipal()).resolves.toMatchObject({
+      role: "SUPER_ADMIN",
+    });
+    const newEmail = `${run}-legacy-super-created@example.test`;
     await expect(actions.createAccount(
       {},
-      accountForm({ name: "위조", email: `${run}-legacy-super-forged@example.test`, role: "STAFF" }),
-    )).rejects.toThrow("NOT_FOUND");
-    await expect(queries.listAccounts()).rejects.toThrow("NOT_FOUND");
-    await expect(queries.getAccountDetail(staffId)).rejects.toThrow("NOT_FOUND");
-    await expect(
-      mutations.createAccountCore(superPrincipal(), {
-        name: "위조 계정",
-        email: `${run}-legacy-super-forged@example.test`,
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      }),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(await snapshotUser(staffId)).toEqual(staffBefore);
-    expect(await db.user.findUnique({ where: { email: `${run}-legacy-super-forged@example.test` } })).toBeNull();
+      accountForm({ name: "LEGACY SUPER 생성", email: newEmail, role: "STAFF" }),
+    )).rejects.toThrow(/^REDIRECT:\/accounts\//);
+    const created = await db.user.findUniqueOrThrow({ where: { email: newEmail } });
+    allIds.push(created.id);
+    const accounts = await queries.listAccounts();
+    expect(accounts.some((account) => account.id === superId)).toBe(true);
+    const coreCreated = await mutations.createAccountCore(superPrincipal(), {
+      name: "LEGACY SUPER 코어 생성",
+      email: `${run}-legacy-super-core@example.test`,
+      role: "STAFF",
+      teacherId: null,
+      isActive: true,
+      passwordHash: null,
+    });
+    allIds.push(coreCreated.id);
+    expect((await db.user.findUniqueOrThrow({ where: { id: coreCreated.id } })).role).toBe("STAFF");
   });
 
-  it("SUPER_ADMIN mode allows SUPER_ADMIN management and denies ADMIN (mode switch proof)", async () => {
+  it("SUPER_ADMIN mode allows SUPER_ADMIN and ADMIN management (mode switch no longer changes access)", async () => {
     setMode("SUPER_ADMIN");
     sessionHolder.userId = superId;
     sessionHolder.authVersion = 1;
@@ -320,70 +338,69 @@ describe.sequential("P2-S cutover mode contract (isolated PostgreSQL)", () => {
     expect(created.isActive).toBe(false);
     expect(created.password).toBeNull();
 
-    // 같은 파일 실행 중 모드를 바꿨을 뿐인데 ADMIN은 즉시 차단된다.
+    // 같은 파일 실행 중 모드를 바꿨을 뿐인데 ADMIN도 즉시 계정 관리를 수행한다.
     sessionHolder.userId = adminId;
     const adminActions = await freshActions();
     const adminMutations = await freshMutations();
     const adminQueries = await freshQueries();
-    const staffBefore = await snapshotUser(staffId);
+    const adminEmail = `${run}-super-admin-created@example.test`;
     await expect(adminActions.createAccount(
       {},
-      accountForm({ name: "위조", email: `${run}-super-admin-forged@example.test`, role: "STAFF" }),
-    )).rejects.toThrow("NOT_FOUND");
-    await expect(adminQueries.listAccounts()).rejects.toThrow("NOT_FOUND");
-    await expect(
-      adminMutations.createAccountCore(adminPrincipal(), {
-        name: "위조 계정",
-        email: `${run}-super-admin-forged@example.test`,
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      }),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(await snapshotUser(staffId)).toEqual(staffBefore);
-    expect(await db.user.findUnique({ where: { email: `${run}-super-admin-forged@example.test` } })).toBeNull();
+      accountForm({ name: "ADMIN 생성", email: adminEmail, role: "STAFF" }),
+    )).rejects.toThrow(/^REDIRECT:\/accounts\//);
+    const adminCreated = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
+    allIds.push(adminCreated.id);
+    expect((await adminQueries.listAccounts()).some((account) => account.id === adminId)).toBe(true);
+    const adminCoreCreated = await adminMutations.createAccountCore(adminPrincipal(), {
+      name: "ADMIN 코어 생성",
+      email: `${run}-super-admin-core@example.test`,
+      role: "STAFF",
+      teacherId: null,
+      isActive: true,
+      passwordHash: null,
+    });
+    allIds.push(adminCoreCreated.id);
+    expect((await db.user.findUniqueOrThrow({ where: { id: adminCoreCreated.id } })).role).toBe("STAFF");
   });
 
-  it("INVALID mode denies every actor at guards and core", async () => {
+  it("INVALID mode still allows ADMIN and SUPER_ADMIN management (mode ignored)", async () => {
     setMode("BOGUS_MODE");
     const queries = await freshQueries();
     const mutations = await freshMutations();
 
     sessionHolder.userId = superId;
     sessionHolder.authVersion = 1;
-    await expect(queries.listAccounts()).rejects.toThrow("NOT_FOUND");
-    await expect(
-      mutations.createAccountCore(superPrincipal(), {
-        name: "위조 계정",
-        email: `${run}-invalid-forged@example.test`,
-        role: "STAFF",
-        teacherId: null,
-        isActive: true,
-        passwordHash: null,
-      }),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
+    expect((await queries.listAccounts()).some((account) => account.id === superId)).toBe(true);
+    const superCreated = await mutations.createAccountCore(superPrincipal(), {
+      name: "INVALID SUPER 생성",
+      email: `${run}-invalid-super@example.test`,
+      role: "STAFF",
+      teacherId: null,
+      isActive: true,
+      passwordHash: null,
+    });
+    allIds.push(superCreated.id);
+    expect((await db.user.findUniqueOrThrow({ where: { id: superCreated.id } })).role).toBe("STAFF");
 
     sessionHolder.userId = adminId;
     const adminQueries = await freshQueries();
-    await expect(adminQueries.listAccounts()).rejects.toThrow("NOT_FOUND");
-    expect(await db.user.findUnique({ where: { email: `${run}-invalid-forged@example.test` } })).toBeNull();
+    expect((await adminQueries.listAccounts()).some((account) => account.id === adminId)).toBe(true);
   });
 
-  it("mode flips take effect on the same query module instance (no module-level caching)", async () => {
+  it("mode flips no longer change account management access", async () => {
     sessionHolder.userId = adminId;
     sessionHolder.authVersion = 1;
     const queries = await freshQueries();
 
-    // 모듈 인스턴스를 갈아끼우지 않고 환경변수만 바꿔도 판정이 따라간다.
+    // 모듈 인스턴스를 갈아끼우지 않고 환경변수만 바꿔도 계정 관리 접근은 변하지 않는다.
     setMode("LEGACY_ADMIN");
     expect((await queries.listAccounts()).some((account) => account.id === adminId)).toBe(true);
     setMode("SUPER_ADMIN");
-    await expect(queries.listAccounts()).rejects.toThrow("NOT_FOUND");
+    expect((await queries.listAccounts()).some((account) => account.id === adminId)).toBe(true);
     setMode("LEGACY_ADMIN");
     expect((await queries.listAccounts()).some((account) => account.id === adminId)).toBe(true);
     setMode("BOGUS_MODE");
-    await expect(queries.listAccounts()).rejects.toThrow("NOT_FOUND");
+    expect((await queries.listAccounts()).some((account) => account.id === adminId)).toBe(true);
   });
 
   it("own history is mode-independent (OQ-12 contract holds in LEGACY_ADMIN mode)", async () => {

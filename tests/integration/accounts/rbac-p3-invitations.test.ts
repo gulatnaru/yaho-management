@@ -7,7 +7,8 @@
  *
  * 검증 경계 (정직한 표기):
  * - 실제: 초대 코어(발급·재발급·해지·수락), 감사 원자성, 토큰 해시 저장, 조건부
- *   업데이트 동시성, 모드별 발급·수락 차단, credential 로그인 가능 상태
+ *   업데이트 동시성, 모드 무관 발급·수락 (단순화 결정 ADR-071: ADMIN도 발급하고
+ *   SUPER_ADMIN 역할로도 발급·수락한다), credential 로그인 가능 상태
  *   (authenticateOperator + 실제 bcrypt 해시), 관리자 액션 배선.
  * - 스텁된 부분: 초대 사용 게이트는 승인된 상태, 발송은 ACCEPTED로 mock하고, 세션 전송 계층을 mock한다
  *   (`@/auth`의 auth()가 합성 세션을 반환하고 실제 resolveSessionPrincipal이 격리 DB 행을
@@ -256,31 +257,33 @@ describe.sequential("P3 초대 — 격리 PG 통합", () => {
     }
   });
 
-  it("모드 매트릭스: LEGACY+SUPER_ADMIN 발급 허용, LEGACY+ADMIN 거부, INVALID+SUPER_ADMIN 발급·수락 차단", async () => {
+  it("모드 무관 초대: LEGACY·INVALID 모드에서도 ADMIN·SUPER_ADMIN 발급·수락이 된다", async () => {
     const { issueInvitationCore, acceptInvitationCore } = await freshInvitations();
     setMode("LEGACY_ADMIN");
     const legacyOk = await issueInvitationCore(superPrincipal(), { name: "직원7", email: `${run}-staff7@example.test`, role: "STAFF", teacherId: null }, db as never);
     createdInvitationIds.push(legacyOk.invitationId);
     createdUserIds.push(legacyOk.targetUserId);
-    await expect(
-      issueInvitationCore(adminPrincipal(), { name: "x", email: `${run}-staff7b@example.test`, role: "STAFF", teacherId: null }, db as never),
-    ).rejects.toMatchObject({ code: "INVITATION_FORBIDDEN" });
+    const legacyAdmin = await issueInvitationCore(adminPrincipal(), { name: "x", email: `${run}-staff7b@example.test`, role: "STAFF", teacherId: null }, db as never);
+    createdInvitationIds.push(legacyAdmin.invitationId);
+    createdUserIds.push(legacyAdmin.targetUserId);
     setMode("BOGUS_MODE");
-    await expect(
-      issueInvitationCore(superPrincipal(), { name: "x", email: `${run}-staff7c@example.test`, role: "STAFF", teacherId: null }, db as never),
-    ).rejects.toMatchObject({ code: "INVITATION_MODE_INVALID" });
-    await expect(acceptInvitationCore({ token: legacyOk.token, passwordHash: "x" }, db as never)).rejects.toMatchObject({
-      code: "INVITATION_INVALID",
-    });
+    const invalidOk = await issueInvitationCore(superPrincipal(), { name: "x", email: `${run}-staff7c@example.test`, role: "STAFF", teacherId: null }, db as never);
+    createdInvitationIds.push(invalidOk.invitationId);
+    createdUserIds.push(invalidOk.targetUserId);
+    const accepted = await acceptInvitationCore({ token: legacyOk.token, passwordHash: "x" }, db as never);
+    expect(accepted.userId).toBe(legacyOk.targetUserId);
+    expect((await db.user.findUniqueOrThrow({ where: { id: legacyOk.targetUserId } })).isActive).toBe(true);
     setMode("SUPER_ADMIN");
   });
 
-  it("일반 초대 경로의 SUPER_ADMIN 지정·활성 이메일 초대·역할 불일치 재초대는 거부된다", async () => {
+  it("일반 초대 경로의 SUPER_ADMIN 지정은 발급되고, 활성 이메일 초대·역할 불일치 재초대는 거부된다", async () => {
     const { issueInvitationCore } = await freshInvitations();
-    await expect(
-      issueInvitationCore(superPrincipal(), { name: "x", email: `${run}-super-x@example.test`, role: "SUPER_ADMIN", teacherId: null } as never, db as never),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(await db.user.findUnique({ where: { email: `${run}-super-x@example.test` } })).toBeNull();
+    const issued = await issueInvitationCore(superPrincipal(), { name: "x", email: `${run}-super-x@example.test`, role: "SUPER_ADMIN", teacherId: null } as never, db as never);
+    createdInvitationIds.push(issued.invitationId);
+    createdUserIds.push(issued.targetUserId);
+    const target = await db.user.findUniqueOrThrow({ where: { email: `${run}-super-x@example.test` } });
+    expect(target.role).toBe("SUPER_ADMIN");
+    expect(target.isActive).toBe(false);
     await expect(
       issueInvitationCore(superPrincipal(), { name: "x", email: `${run}-super@example.test`, role: "STAFF", teacherId: null }, db as never),
     ).rejects.toMatchObject({ code: "INVITATION_EMAIL_ACTIVE" });
@@ -290,6 +293,26 @@ describe.sequential("P3 초대 — 격리 PG 통합", () => {
     await expect(
       issueInvitationCore(superPrincipal(), { name: "직원8", email: `${run}-staff8@example.test`, role: "MANAGER", teacherId: null }, db as never),
     ).rejects.toMatchObject({ code: "INVITATION_ROLE_MISMATCH" });
+  });
+
+  it("ADMIN이 SUPER_ADMIN 역할로 초대를 발급하고 수락까지 된다", async () => {
+    const { issueInvitationCore, acceptInvitationCore } = await freshInvitations();
+    const { authenticateOperator } = await freshCredentials();
+    const email = `${run}-super-invited@example.test`;
+    const password = "P3-super-invite-1!";
+    const issued = await issueInvitationCore(adminPrincipal(), { name: "초대 최고관리자", email, role: "SUPER_ADMIN", teacherId: null } as never, db as never);
+    createdInvitationIds.push(issued.invitationId);
+    createdUserIds.push(issued.targetUserId);
+    const beforeUser = await db.user.findUniqueOrThrow({ where: { id: issued.targetUserId } });
+    expect(beforeUser.role).toBe("SUPER_ADMIN");
+    expect(beforeUser.isActive).toBe(false);
+    const accepted = await acceptInvitationCore({ token: issued.token, passwordHash: await hash(password, 12) }, db as never);
+    expect(accepted.userId).toBe(issued.targetUserId);
+    const afterUser = await db.user.findUniqueOrThrow({ where: { id: issued.targetUserId } });
+    expect(afterUser.role).toBe("SUPER_ADMIN");
+    expect(afterUser.isActive).toBe(true);
+    const login = await authenticateOperator({ email, password }, db as never);
+    expect(login?.id).toBe(issued.targetUserId);
   });
 
   it("TEACHER 초대: 선생님 연결이 유지된 채 수락·로그인 가능하고, 미선택은 거부된다", async () => {
@@ -310,7 +333,7 @@ describe.sequential("P3 초대 — 격리 PG 통합", () => {
     expect((await authenticateOperator({ email, password }, db as never))?.id).toBe(issued.targetUserId);
   });
 
-  it("관리자 액션 배선: SUPER_ADMIN 발급은 토큰 없이 성공하고, ADMIN 발급은 404 가드로 차단된다", async () => {
+  it("관리자 액션 배선: SUPER_ADMIN·ADMIN 발급 모두 토큰 없이 성공한다", async () => {
     const actions = await freshInvitationActions();
     sessionHolder.userId = superId;
     sessionHolder.authVersion = 1;
@@ -328,10 +351,18 @@ describe.sequential("P3 초대 — 격리 PG 통합", () => {
     expect(target.isActive).toBe(false);
 
     sessionHolder.userId = adminId;
-    await expect(
-      actions.issueInvitation({}, accountForm({ name: "직원10", email: `${run}-staff10@example.test`, role: "STAFF" })),
-    ).rejects.toThrow("NOT_FOUND");
-    expect(await db.user.findUnique({ where: { email: `${run}-staff10@example.test` } })).toBeNull();
+    const adminEmail = `${run}-staff10@example.test`;
+    const adminResult = await actions.issueInvitation(
+      {},
+      accountForm({ name: "직원10", email: adminEmail, role: "STAFF" }),
+    );
+    expect(adminResult.success).toBe(true);
+    expect(JSON.stringify(adminResult)).not.toContain("token");
+    const adminRow = await db.adminInvitation.findFirstOrThrow({ where: { email: adminEmail } });
+    createdInvitationIds.push(adminRow.id);
+    const adminTarget = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
+    createdUserIds.push(adminTarget.id);
+    expect(adminTarget.isActive).toBe(false);
     sessionHolder.userId = superId;
   });
 });

@@ -14,9 +14,8 @@ type TeacherOption = { id: string; name: string };
 export type AccountFormDefaultValues = {
   name: string;
   email: string;
-  // P2: SUPER_ADMIN 행은 상세 화면에서 조회되지만 일반 경로로는 변경할 수 없으므로,
-  // 폼은 읽기 전용으로 렌더링하고 제출 수단을 제공하지 않는다 (서버 코어 거부와 이중 방어).
-  role: AccountRole | "SUPER_ADMIN";
+  // 단순화 결정(ADR-071): SUPER_ADMIN 행도 일반 경로로 편집할 수 있다.
+  role: AccountRole;
   teacherId: string;
   isActive: boolean;
 };
@@ -29,10 +28,10 @@ type AccountFormProps = {
 };
 
 const ROLE_LABELS: Record<AccountRole, string> = {
+  SUPER_ADMIN: "최고관리자",
   ADMIN: "관리자",
   MANAGER: "준관리자",
   TEACHER: "선생님",
-  // P2: 일반 생성·수정 선택지에서 SUPER_ADMIN은 제외된다 (코어에서 서버 강제 거부).
   STAFF: "직원",
 };
 
@@ -54,44 +53,10 @@ export function AccountForm({
 }: AccountFormProps) {
   const action = mode === "edit" && accountId ? updateAccount.bind(null, accountId) : createAccount;
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
-  const [role, setRole] = useState<AccountRole | "SUPER_ADMIN">(defaultValues.role);
+  const [role, setRole] = useState<AccountRole>(defaultValues.role);
 
   const value = <K extends keyof AccountFormDefaultValues>(key: K) =>
     state.values?.[key] ?? defaultValues[key];
-
-  // P2: 최고관리자 행은 일반 경로로 어떤 변경도 할 수 없으므로 폼 자체를 제출하지 않는다.
-  // 본인 보호(protectAdminSelf)는 P2에서 소멸했다 — ADMIN은 계정 관리에 접근하지 않고,
-  // SUPER_ADMIN 본인 행도 이 읽기 전용 분기로 처리된다.
-  if (mode === "edit" && defaultValues.role === "SUPER_ADMIN") {
-    return (
-      <div className="max-w-xl space-y-6">
-        <div className="space-y-1.5">
-          <Label htmlFor="name">이름</Label>
-          <Input defaultValue={defaultValues.name} disabled id="name" name="name" />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="email">이메일</Label>
-          <Input defaultValue={defaultValues.email} disabled id="email" name="email" type="email" />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="role">역할</Label>
-          <Input defaultValue="최고관리자" disabled id="role" name="role" />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Checkbox defaultChecked={defaultValues.isActive} disabled id="isActive" name="isActive" />
-          <Label htmlFor="isActive">활성 계정</Label>
-        </div>
-
-        <p className="text-sm text-slate-500" role="note">
-          최고관리자 계정은 일반 경로로 변경할 수 없습니다. 최고관리자 권한 변경·복구는
-          별도 고위험 절차(P3-2/P7) 대상입니다.
-        </p>
-      </div>
-    );
-  }
 
   return (
     <form action={formAction} className="max-w-xl space-y-6" noValidate>

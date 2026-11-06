@@ -11,10 +11,10 @@ import { issueInvitation, type InvitationFormState } from "../actions";
 type TeacherOption = { id: string; name: string };
 
 const ROLE_LABELS: Record<AccountRole, string> = {
+  SUPER_ADMIN: "최고관리자",
   ADMIN: "관리자",
   MANAGER: "준관리자",
   TEACHER: "선생님",
-  // P3: 일반 초대 경로의 역할 선택지에 SUPER_ADMIN은 없다 (코어에서 서버 강제 거부).
   STAFF: "직원",
 };
 

@@ -21,16 +21,16 @@ type StoredUser = {
   authVersion: number;
 };
 
-// P2-S: 코어 행위자는 전환 모드에 따라 달라진다. 기존 P2 테스트는 SUPER_ADMIN
-// 모드를 전제로 하므로 파일 기본 모드를 SUPER_ADMIN으로 두고, 모드별 신규
-// 테스트에서만 임시로 바꾼 뒤 afterEach로 복원한다.
+// 단순화 결정(ADR-071): 코어 행위자는 역할만 본다 (ADMIN 또는 SUPER_ADMIN).
+// 전환 모드는 판정하지 않으므로, 이 파일은 모드와 무관하게 동작한다.
+// 아래 beforeAll/afterEach는 환경변수가 남아 있는 경우를 정리할 뿐 모드를 고정하지 않는다.
 const CUTOVER_ENV = "YAHO_ADMIN_CUTOVER_MODE";
 const originalCutoverMode = process.env[CUTOVER_ENV];
 beforeAll(() => {
-  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
+  delete process.env[CUTOVER_ENV];
 });
 afterEach(() => {
-  process.env[CUTOVER_ENV] = "SUPER_ADMIN";
+  delete process.env[CUTOVER_ENV];
 });
 afterAll(() => {
   if (originalCutoverMode === undefined) delete process.env[CUTOVER_ENV];
@@ -104,15 +104,15 @@ const updateInput = {
   teacherId: null,
 };
 
-describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor)", () => {
-  it("rejects ADMIN and STAFF actors at the core before any write (SUPER_ADMIN mode)", async () => {
+describe("단순화 결정(ADR-071) — ADMIN·SUPER_ADMIN 계정 관리 허용 (서버 강제, 모드 무관)", () => {
+  it("allows ADMIN actors and rejects STAFF actors at the core before any write", async () => {
     const adminActor = harness({
       actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
     });
     await expect(
       createAccountCore({ userId: "admin-1", role: "ADMIN", teacherId: null } as never, { ...createInput, role: "STAFF" }, adminActor.client as never),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(adminActor.userCreate).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ id: "created-1" });
+    expect(adminActor.userCreate).toHaveBeenCalled();
 
     const staffActor = harness({
       actor: { id: "staff-1", email: "staff@example.test", role: "STAFF" },
@@ -123,7 +123,7 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
     expect(staffActor.userCreate).not.toHaveBeenCalled();
   });
 
-  it("allows an ADMIN actor in LEGACY_ADMIN mode and denies a SUPER_ADMIN actor there", async () => {
+  it("allows ADMIN and SUPER_ADMIN actors in LEGACY_ADMIN mode", async () => {
     process.env[CUTOVER_ENV] = "LEGACY_ADMIN";
     const legacy = harness({
       actor: { id: "admin-1", email: "admin@example.test", role: "ADMIN" },
@@ -136,25 +136,27 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
     const superInLegacy = harness();
     await expect(
       createAccountCore(principal(), { ...createInput, role: "STAFF" }, superInLegacy.client as never),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(superInLegacy.userCreate).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ id: "created-1" });
+    expect(superInLegacy.userCreate).toHaveBeenCalled();
   });
 
-  it("denies a SUPER_ADMIN actor when the cutover mode is invalid", async () => {
+  it("allows a SUPER_ADMIN actor even when the cutover mode is invalid", async () => {
     process.env[CUTOVER_ENV] = "bogus";
     const { client, userCreate } = harness();
     await expect(
       createAccountCore(principal(), { ...createInput, role: "STAFF" }, client as never),
-    ).rejects.toMatchObject({ code: "ACTOR_NOT_ACCOUNT_MANAGER" });
-    expect(userCreate).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ id: "created-1" });
+    expect(userCreate).toHaveBeenCalled();
   });
 
-  it("rejects general-path creation of SUPER_ADMIN before any write", async () => {
+  it("allows general-path creation of SUPER_ADMIN", async () => {
     const { client, userCreate } = harness();
     await expect(
       createAccountCore(principal(), { ...createInput, role: "SUPER_ADMIN" }, client as never),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(userCreate).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ id: "created-1" });
+    expect(userCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ role: "SUPER_ADMIN" }) }),
+    );
   });
 
   it("allows general-path creation of STAFF (no automatic ADMIN grant)", async () => {
@@ -167,7 +169,7 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
     );
   });
 
-  it("rejects promotion to SUPER_ADMIN via general update", async () => {
+  it("allows promotion to SUPER_ADMIN via general update", async () => {
     const { client, userUpdate } = harness();
     await expect(
       updateAccountCore(
@@ -176,11 +178,13 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
         { ...updateInput, role: "SUPER_ADMIN" },
         client as never,
       ),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(userUpdate).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
+    expect(userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ role: "SUPER_ADMIN" }) }),
+    );
   });
 
-  it("rejects any general-path edit of a SUPER_ADMIN target (demotion included)", async () => {
+  it("allows general-path edits of a SUPER_ADMIN target (demotion and name-only change included)", async () => {
     const { client, userUpdate } = harness({
       target: target({ role: "SUPER_ADMIN" }),
     });
@@ -191,7 +195,7 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
         { ...updateInput, role: "ADMIN" },
         client as never,
       ),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
+    ).resolves.toBeUndefined();
     await expect(
       updateAccountCore(
         principal(),
@@ -199,18 +203,20 @@ describe("P2 SUPER_ADMIN escalation blocking (server-enforced, SUPER_ADMIN actor
         { ...updateInput, role: "SUPER_ADMIN", name: "이름 변경" },
         client as never,
       ),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(userUpdate).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
+    expect(userUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects general-path password reset of a SUPER_ADMIN target", async () => {
+  it("allows general-path password reset of a SUPER_ADMIN target", async () => {
     const { client, userUpdate } = harness({
       target: target({ role: "SUPER_ADMIN" }),
     });
     await expect(
       resetAccountPasswordCore(principal(), "target-1", "hashed", client as never),
-    ).rejects.toMatchObject({ code: "SUPER_ADMIN_FORBIDDEN" });
-    expect(userUpdate).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
+    expect(userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ password: "hashed" }) }),
+    );
   });
 
   it("preserves existing ADMIN->STAFF role change behavior (not a privilege grant)", async () => {
@@ -243,10 +249,10 @@ describe("P1 role validation (OQ-4 option B: role required; P2 keeps it, drops t
     ).toBe(false);
   });
 
-  it("rejects SUPER_ADMIN at the validation layer (general selection excludes it)", () => {
+  it("accepts SUPER_ADMIN at the validation layer (general selection includes it)", async () => {
     expect(
       accountCreateSchema.safeParse({ ...base, role: "SUPER_ADMIN" }).success,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       accountUpdateSchema.safeParse({
         name: "대상",
@@ -255,7 +261,7 @@ describe("P1 role validation (OQ-4 option B: role required; P2 keeps it, drops t
         teacherId: null,
         isActive: true,
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("accepts STAFF without a teacher link and still requires one for TEACHER", () => {

@@ -43,9 +43,8 @@ const ACCOUNT_SUMMARY_SELECT = {
 } as const;
 
 /**
- * P2-S (모드별 계약): 계정 관리 조회는 requireAccountManagementPrincipal()로
- * 모드별 판정을 받는다. LEGACY_ADMIN 모드에서는 ADMIN이, SUPER_ADMIN 모드에서는
- * SUPER_ADMIN이 조회한다. 미등록·잘못된 설정이면 전원 거부(fail-closed)한다.
+ * 단순화 결정(ADR-071): 계정 관리 조회는 requireAccountManagementPrincipal()로
+ * 역할만 판정받는다 (ADMIN 또는 SUPER_ADMIN, 모드 무관).
  * 이 3개 쿼리가 목록·상세·생성 페이지의 실제 choke point이므로, 페이지 가드만
  * 바꾸는 부분 교체는 허용하지 않는다.
  */
