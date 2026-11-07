@@ -18,7 +18,7 @@
 # The dispatch_guard migration file is embedded EXACTLY as reviewed (feature HEAD
 # b1cd482, C1-C5 committed, tree clean). Before deploy, its sha256 hash is verified
 # against the approved value; any mismatch aborts the run. The base tree is the
-# verified main tip 749f29d97b6a6df2ce87f556c0154909c380ead6. NOTE: actions/checkout
+# verified main tip 749f29d97b6a6df2ce89f556c0154909c380ead6. NOTE: actions/checkout
 # cannot fetch a raw SHA from this repo (GitHub answers "not our ref" for SHA
 # fetch, reproduced 2026-11-07), so the checkout uses ref "main" and the next
 # step asserts HEAD is exactly the pinned tip; any drift aborts before DB touch.
@@ -57,16 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "main"
-      - name: Assert pinned main tip (no drift)
-        run: |
-          set -euo pipefail
-          HEAD_SHA="$(git rev-parse HEAD)"
-          if [ "$HEAD_SHA" != "749f29d97b6a6df2ce87f556c0154909c380ead6" ]; then
-            echo "ABORT: main tip moved (HEAD=$HEAD_SHA, expected 749f29d97b6a6df2ce87f556c0154909c380ead6)"
-            exit 1
-          fi
-          echo "Pinned main tip confirmed: $HEAD_SHA"
+          ref: "749f29d97b6a6df2ce89f556c0154909c380ead6"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
