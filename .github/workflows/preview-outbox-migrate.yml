@@ -17,9 +17,12 @@
 #   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
 # The dispatch_guard migration file is embedded EXACTLY as reviewed (feature HEAD
 # b1cd482, C1-C5 committed, tree clean). Before deploy, its sha256 hash is verified
-# against the approved value; any mismatch aborts the run. The base tree is pinned
-# to the verified main tip 749f29d97b6a6df2ce87f556c0154909c380ead6; it does not
-# auto-follow main. (Same pattern as the SS6 RBAC workflow: the feature branch is
+# against the approved value; any mismatch aborts the run. The base tree is the
+# verified main tip 749f29d97b6a6df2ce87f556c0154909c380ead6. NOTE: actions/checkout
+# cannot fetch a raw SHA from this repo (GitHub answers "not our ref" for SHA
+# fetch, reproduced 2026-11-07), so the checkout uses ref "main" and the next
+# step asserts HEAD is exactly the pinned tip; any drift aborts before DB touch.
+# (Same inline-file pattern as the SS6 RBAC workflow: the feature branch is
 # NOT pushed before the migration, so the runner cannot check it out.)
 # Prisma is pinned to 6.19.3 via npx (the isolated-verified version); no npm ci
 # is needed because migrate/db-execute do not require the repo's node_modules.
@@ -54,7 +57,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "749f29d97b6a6df2ce87f556c0154909c380ead6"
+          ref: "main"
+      - name: Assert pinned main tip (no drift)
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "749f29d97b6a6df2ce87f556c0154909c380ead6" ]; then
+            echo "ABORT: main tip moved (HEAD=$HEAD_SHA, expected 749f29d97b6a6df2ce87f556c0154909c380ead6)"
+            exit 1
+          fi
+          echo "Pinned main tip confirmed: $HEAD_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
