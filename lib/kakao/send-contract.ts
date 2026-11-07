@@ -21,7 +21,7 @@ export const dispatchContextSchema = z.object({
   const get = (type: string) => parts.find((part) => part.type === type)?.value;
   return context.variables.접수시각 === `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
 });
-const realDispatchContextSchema = z.object({
+export const realDispatchContextSchema = z.object({
   event: z.literal("application.received"), audience: z.literal("admin"),
   dedupeKey: z.string().regex(/^application\.received:[a-f0-9]{64}$/),
   recipientId: identifier, recipientVersion: identifier,

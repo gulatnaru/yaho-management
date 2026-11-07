@@ -1,11 +1,11 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { decryptSyntheticRecipient, dispatchContextSchema, dispatchPermitSchema } from "@/lib/kakao/send-contract";
+import { decryptSyntheticRecipient, dispatchContextSchema, dispatchPermitSchema, realDispatchContextSchema } from "@/lib/kakao/send-contract";
 import { evaluateSendGate } from "@/lib/kakao/send-config";
 import { evaluateSyntheticSendCost, type SyntheticQuote } from "@/server/kakao/budget";
 import { recipientAvailable } from "@/server/kakao/recipient-registration";
-import { nonceWithinHighWater } from "@/server/kakao/recipient-crypto";
+import { decryptInactiveRecipient, nonceWithinHighWater } from "@/server/kakao/recipient-crypto";
 import { PrismaDispatchRepository, type DispatchRepository } from "@/server/kakao/dispatch-repository";
 
 function period(now: Date): { day: string; month: string } {
@@ -15,11 +15,21 @@ function period(now: Date): { day: string; month: string } {
   return { month, day: `${month}-${get("day")}` };
 }
 class BudgetDenied extends Error {}
-type GuardInput = { dispatchId: string; claimToken: string; context: unknown; config: unknown; policy: unknown; quote: SyntheticQuote; now: Date; syntheticKey?: { keyVersion: string; key: Buffer; synthetic: true }; canIssue?: () => boolean };
-function authenticatedCiphertext(value: { ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array; keyVersion: string }, id: string, version: string, key: GuardInput["syntheticKey"]): boolean {
-  if (!key || key.synthetic !== true || key.keyVersion !== value.keyVersion || !Buffer.isBuffer(key.key) || key.key.length !== 32) return false;
+type GuardInput = { dispatchId: string; claimToken: string; context: unknown; config: unknown; policy: unknown; quote: SyntheticQuote; now: Date; recipientKey?: { keyVersion: string; key: Buffer; synthetic?: true }; canIssue?: () => boolean };
+type GuardExpectations = { kind: "mock" | "real"; policyVersion: "g2-v1" | "g4-v1"; verificationMethod: "synthetic_call" | "operator_call"; verificationEvidenceId: "mock_ownership_v1" | "operator_call_verified"; ownershipEventType: "synthetic_ownership_confirmed" | "recipient_ownership_confirmed"; requireSyntheticKey: boolean };
+const MOCK_EXPECTATIONS: GuardExpectations = { kind: "mock", policyVersion: "g2-v1", verificationMethod: "synthetic_call", verificationEvidenceId: "mock_ownership_v1", ownershipEventType: "synthetic_ownership_confirmed", requireSyntheticKey: true };
+const REAL_EXPECTATIONS: GuardExpectations = { kind: "real", policyVersion: "g4-v1", verificationMethod: "operator_call", verificationEvidenceId: "operator_call_verified", ownershipEventType: "recipient_ownership_confirmed", requireSyntheticKey: false };
+function authenticatedCiphertext(value: { ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array; keyVersion: string }, id: string, version: string, key: GuardInput["recipientKey"], requireSynthetic: boolean): boolean {
+  if (!key || (requireSynthetic ? key.synthetic !== true : key.synthetic === true) || key.keyVersion !== value.keyVersion || !Buffer.isBuffer(key.key) || key.key.length !== 32) return false;
   try {
-    const plaintext = decryptSyntheticRecipient({ ciphertext: Buffer.from(value.ciphertext), nonce: Buffer.from(value.nonce), tag: Buffer.from(value.tag) }, key.key, { environment: "preview", registrationId: id, registrationVersion: version, keyVersion: value.keyVersion }, { counterCommitted: true, counterCurrent: true, nonceUnused: true, keyActive: true, recoveryVerified: true, registrationActive: true, rotationComplete: true });
+    const binding = { environment: "preview", registrationId: id, registrationVersion: version, keyVersion: value.keyVersion } as const;
+    const ciphertext = { ciphertext: Buffer.from(value.ciphertext), nonce: Buffer.from(value.nonce), tag: Buffer.from(value.tag) };
+    // Real branch uses the real (non-synthetic) AES-256-GCM primitive from
+    // recipient-crypto.ts; the mock branch keeps decryptSyntheticRecipient.
+    // AAD "yaho-kakao-recipient-v1" is identical on both sides.
+    const plaintext = requireSynthetic
+      ? decryptSyntheticRecipient(ciphertext, key.key, binding, { counterCommitted: true, counterCurrent: true, nonceUnused: true, keyActive: true, recoveryVerified: true, registrationActive: true, rotationComplete: true })
+      : decryptInactiveRecipient(ciphertext, key.key, binding);
     try { return plaintext.length > 0; } finally { plaintext.fill(0); }
   } catch { return false; }
 }
@@ -42,7 +52,7 @@ export async function acquireDispatchPermit(repository: DispatchRepository | Pri
     if (state.runtime.nonceHighWater === undefined || state.nonceHighWaters?.[state.runtime.keyVersion] !== state.runtime.nonceHighWater || !nonceWithinHighWater(key.data.ciphertext.nonce, state.runtime.nonceHighWater)) return null;
     const verification = z.object({ evidence: z.object({ id: z.literal("mock_ownership_v1"), method: z.literal("synthetic_call"), synthetic: z.literal(true), success: z.literal(true), registrationId: z.string(), version: z.string(), verifierId: z.string(), verifiedAt: z.date() }) }).passthrough().safeParse(recipient.registration);
     if (!verification.success || !state.ownershipEvidence?.some((entry) => { const candidate = verification.data.evidence; const saved = z.object({ id: z.literal("mock_ownership_v1"), method: z.literal("synthetic_call"), synthetic: z.literal(true), success: z.literal(true), registrationId: z.string(), version: z.string(), verifierId: z.string(), verifiedAt: z.date() }).strict().safeParse(entry); return saved.success && saved.data.registrationId === candidate.registrationId && saved.data.version === candidate.version && saved.data.verifierId === candidate.verifierId && saved.data.verifiedAt.getTime() === candidate.verifiedAt.getTime(); })) return null;
-    if (!authenticatedCiphertext(key.data.ciphertext, recipient.id, recipient.version, input.syntheticKey)) return null;
+    if (!authenticatedCiphertext(key.data.ciphertext, recipient.id, recipient.version, input.recipientKey, true)) return null;
     const fixed = dispatchContextSchema.safeParse(dispatch.context);
     if (!fixed.success || outbox.dedupeKey !== parsed.data.dedupeKey || JSON.stringify(fixed.data) !== JSON.stringify(parsed.data)) return null;
     const own = state.slots.filter((s) => s.dispatchId === dispatch.id);
@@ -86,8 +96,13 @@ export async function markDispatchUnknown(repository: DispatchRepository, input:
 
 /** WIP Prisma path; requires a separately validated database before wiring. */
 export async function acquirePrismaDispatchPermit(repository: import("@/server/kakao/dispatch-repository").PrismaDispatchRepository, input: GuardInput) {
-  const parsed = dispatchContextSchema.safeParse(input.context);
-  if (!parsed.success || !(input.now instanceof Date) || !Number.isFinite(input.now.getTime())) return null;
+  // Mock-first branch selection (same rule as the worker): a mock context also
+  // parses as a real context, so mock success wins; both failing is null.
+  const mockParsed = dispatchContextSchema.safeParse(input.context);
+  const realParsed = mockParsed.success ? null : realDispatchContextSchema.safeParse(input.context);
+  const parsed = mockParsed.success ? mockParsed : realParsed;
+  const expectations: GuardExpectations = mockParsed.success ? MOCK_EXPECTATIONS : REAL_EXPECTATIONS;
+  if (!parsed || !parsed.success || !(input.now instanceof Date) || !Number.isFinite(input.now.getTime())) return null;
   try { return await repository.transaction(async (tx) => {
     type Runtime = { environment: "preview"; blocked: boolean; activationEpoch: Date | null; providerId: string | null; namespace: string; recipientVersion: string | null; templateVersion: string | null; costPolicyVersion: string | null; policyVersion: string | null; keyVersion: string | null; nonceHighWater: bigint; nonceCurrent: boolean; recoveryVerified: boolean; rotationComplete: boolean };
     const [runtime] = await tx.$queryRaw<Runtime[]>`SELECT "environment", "blocked", "activationEpoch", "providerId", "namespace", "recipientVersion", "templateVersion", "costPolicyVersion", "policyVersion", "keyVersion", "nonceHighWater", "nonceCurrent", "recoveryVerified", "rotationComplete" FROM "NotificationRuntimeConfig" WHERE "environment" = 'preview' FOR UPDATE`;
@@ -106,12 +121,12 @@ export async function acquirePrismaDispatchPermit(repository: import("@/server/k
     type Dispatch = { id: string; outboxId: string; recipientId: string; recipientVersion: string; templateId: string; templateVersion: string; submittedAt: Date; environment: string; providerId: string; clientKey: string; slotCount: number; auditSequence: number; reconciliationState: string };
     const [dispatch] = await tx.$queryRaw<Dispatch[]>`SELECT "id", "outboxId", "recipientId", "recipientVersion", "templateId", "templateVersion", "submittedAt", "environment", "providerId", "clientKey", "slotCount", "auditSequence", "reconciliationState" FROM "NotificationDispatch" WHERE "id" = ${input.dispatchId} FOR UPDATE`;
     if (!user || !recipient || !dispatch || dispatch.outboxId !== outbox.id || dispatch.recipientId !== recipient.id || recipient.userId !== user.id || user.role !== "ADMIN" || !user.isActive || user.mustChangePassword) return null;
-    if (recipient.environment !== "preview" || recipient.service !== "application.received" || recipient.state !== "active" || recipient.id !== parsed.data.recipientId || recipient.version !== parsed.data.recipientVersion || dispatch.recipientVersion !== recipient.version || !recipient.ciphertext?.length || recipient.nonce?.length !== 12 || recipient.tag?.length !== 16 || !recipient.keyVersion || recipient.verificationMethod !== "synthetic_call" || recipient.verificationEvidenceId !== "mock_ownership_v1" || !recipient.verifiedBy || !recipient.verifiedAt) return null;
-    if (!runtime.nonceCurrent || !runtime.recoveryVerified || !runtime.rotationComplete || !runtime.keyVersion || runtime.keyVersion !== recipient.keyVersion || runtime.recipientVersion !== recipient.version || runtime.templateVersion !== parsed.data.templateVersion || runtime.costPolicyVersion !== "g2-v1" || runtime.policyVersion !== "g2-v1" || !runtime.namespace || dispatch.clientKey !== `${runtime.namespace}:${outbox.dedupeKey}`) return null;
+    if (recipient.environment !== "preview" || recipient.service !== "application.received" || recipient.state !== "active" || recipient.id !== parsed.data.recipientId || recipient.version !== parsed.data.recipientVersion || dispatch.recipientVersion !== recipient.version || !recipient.ciphertext?.length || recipient.nonce?.length !== 12 || recipient.tag?.length !== 16 || !recipient.keyVersion || recipient.verificationMethod !== expectations.verificationMethod || recipient.verificationEvidenceId !== expectations.verificationEvidenceId || !recipient.verifiedBy || !recipient.verifiedAt) return null;
+    if (!runtime.nonceCurrent || !runtime.recoveryVerified || !runtime.rotationComplete || !runtime.keyVersion || runtime.keyVersion !== recipient.keyVersion || runtime.recipientVersion !== recipient.version || runtime.templateVersion !== parsed.data.templateVersion || runtime.costPolicyVersion !== expectations.policyVersion || runtime.policyVersion !== expectations.policyVersion || !runtime.namespace || dispatch.clientKey !== `${runtime.namespace}:${outbox.dedupeKey}`) return null;
     if (!nonceWithinHighWater(recipient.nonce, runtime.nonceHighWater)) return null;
-    const evidence = await tx.$queryRaw<{ eventId: string }[]>`SELECT "eventId" FROM "NotificationAudit" WHERE "environment" = 'preview' AND "eventType" = 'synthetic_ownership_confirmed' AND "registrationId" = ${recipient.id} AND "toState" = ${recipient.version} AND "actorId" = ${recipient.verifiedBy} AND "evidenceId" = 'mock_ownership_v1' AND "occurredAt" = ${recipient.verifiedAt} LIMIT 1`;
+    const evidence = await tx.$queryRaw<{ eventId: string }[]>`SELECT "eventId" FROM "NotificationAudit" WHERE "environment" = 'preview' AND "eventType" = ${expectations.ownershipEventType} AND "registrationId" = ${recipient.id} AND "toState" = ${recipient.version} AND "actorId" = ${recipient.verifiedBy} AND "evidenceId" = ${expectations.verificationEvidenceId} AND "occurredAt" = ${recipient.verifiedAt} LIMIT 1`;
     if (!evidence.length) return null;
-    if (!authenticatedCiphertext({ ciphertext: recipient.ciphertext, nonce: recipient.nonce, tag: recipient.tag, keyVersion: recipient.keyVersion }, recipient.id, recipient.version, input.syntheticKey)) return null;
+    if (!authenticatedCiphertext({ ciphertext: recipient.ciphertext, nonce: recipient.nonce, tag: recipient.tag, keyVersion: recipient.keyVersion }, recipient.id, recipient.version, input.recipientKey, expectations.requireSyntheticKey)) return null;
     if (!runtime.activationEpoch || !evaluateSendGate({ config: input.config, runtime: { environment: runtime.environment, provider: runtime.providerId, blocked: runtime.blocked, activationEpoch: runtime.activationEpoch }, policy: input.policy, occurredAt: outbox.occurredAt }).allowed) return null;
     if (dispatch.environment !== "preview" || dispatch.providerId !== "solapi" || dispatch.templateId !== parsed.data.templateId || dispatch.templateVersion !== parsed.data.templateVersion || dispatch.submittedAt.getTime() !== parsed.data.submittedAt.getTime() || outbox.dedupeKey !== parsed.data.dedupeKey) return null;
     if (outbox.status !== "processing" || outbox.claimToken !== input.claimToken || !outbox.leaseExpiresAt || outbox.leaseExpiresAt <= input.now || outbox.occurredAt > input.now || input.now.getTime() >= outbox.occurredAt.getTime() + 86_400_000) return null;
@@ -120,8 +135,8 @@ export async function acquirePrismaDispatchPermit(repository: import("@/server/k
     if (rows.length !== dispatch.slotCount || rows.length >= 5 || rows.some((s, i) => s.sequence !== i + 1 || s.status !== "rejected")) return null;
     const { day, month } = period(input.now);
     const dayId = randomUUID(); const monthId = randomUUID();
-    await tx.$executeRaw`INSERT INTO "NotificationBudgetPeriod" ("id", "environment", "service", "periodType", "periodKey", "policyVersion") VALUES (${dayId}, 'preview', 'application.received', 'day', ${day}, 'g2-v1') ON CONFLICT ("environment", "service", "periodType", "periodKey") DO NOTHING`;
-    await tx.$executeRaw`INSERT INTO "NotificationBudgetPeriod" ("id", "environment", "service", "periodType", "periodKey", "policyVersion") VALUES (${monthId}, 'preview', 'application.received', 'month', ${month}, 'g2-v1') ON CONFLICT ("environment", "service", "periodType", "periodKey") DO NOTHING`;
+    await tx.$executeRaw`INSERT INTO "NotificationBudgetPeriod" ("id", "environment", "service", "periodType", "periodKey", "policyVersion") VALUES (${dayId}, 'preview', 'application.received', 'day', ${day}, ${expectations.policyVersion}) ON CONFLICT ("environment", "service", "periodType", "periodKey") DO NOTHING`;
+    await tx.$executeRaw`INSERT INTO "NotificationBudgetPeriod" ("id", "environment", "service", "periodType", "periodKey", "policyVersion") VALUES (${monthId}, 'preview', 'application.received', 'month', ${month}, ${expectations.policyVersion}) ON CONFLICT ("environment", "service", "periodType", "periodKey") DO NOTHING`;
     type Period = { id: string; requestCount: number; revision: number; planApplied: boolean; reservedMilliKrw: bigint; confirmedMilliKrw: bigint; otherMilliKrw: bigint; lookupReservedMilliKrw: bigint; lookupConfirmedMilliKrw: bigint };
     const [daily] = await tx.$queryRaw<Period[]>`SELECT "id", "requestCount", "revision", "planApplied", "reservedMilliKrw", "confirmedMilliKrw", "otherMilliKrw", "lookupReservedMilliKrw", "lookupConfirmedMilliKrw" FROM "NotificationBudgetPeriod" WHERE "environment" = 'preview' AND "service" = 'application.received' AND "periodType" = 'day' AND "periodKey" = ${day} FOR UPDATE`;
     const [monthly] = await tx.$queryRaw<Period[]>`SELECT "id", "requestCount", "revision", "planApplied", "reservedMilliKrw", "confirmedMilliKrw", "otherMilliKrw", "lookupReservedMilliKrw", "lookupConfirmedMilliKrw" FROM "NotificationBudgetPeriod" WHERE "environment" = 'preview' AND "service" = 'application.received' AND "periodType" = 'month' AND "periodKey" = ${month} FOR UPDATE`;
@@ -146,7 +161,7 @@ export async function acquirePrismaDispatchPermit(repository: import("@/server/k
     const dayChanged = await tx.$executeRaw`UPDATE "NotificationBudgetPeriod" SET "requestCount" = "requestCount" + 1, "reservedMilliKrw" = "reservedMilliKrw" + ${BigInt(reservation.amount)}, "revision" = "revision" + 1 WHERE "id" = ${daily.id} AND "revision" = ${daily.revision}`;
     const monthChanged = await tx.$executeRaw`UPDATE "NotificationBudgetPeriod" SET "requestCount" = "requestCount" + 1, "reservedMilliKrw" = "reservedMilliKrw" + ${BigInt(reservation.amount)}, "carryMilliKrw" = ${carried.message}, "lookupCarryMilliKrw" = ${carried.lookup}, "otherMilliKrw" = ${BigInt(planAndExtras)}, "planApplied" = true, "revision" = "revision" + 1 WHERE "id" = ${monthly.id} AND "revision" = ${monthly.revision}`;
     if (dayChanged !== 1 || monthChanged !== 1) throw new Error("Budget changed.");
-    await tx.$executeRaw`INSERT INTO "NotificationAudit" ("id", "eventId", "environment", "outboxId", "dispatchId", "slotId", "eventType", "sequence", "toState", "policyVersion", "occurredAt") VALUES (${auditId}, ${auditId}, 'preview', ${outbox.id}, ${dispatch.id}, ${slotId}, 'permit_issued', ${dispatch.auditSequence + 1}, 'in_flight', 'g2-v1', ${input.now})`;
+    await tx.$executeRaw`INSERT INTO "NotificationAudit" ("id", "eventId", "environment", "outboxId", "dispatchId", "slotId", "eventType", "sequence", "toState", "policyVersion", "occurredAt") VALUES (${auditId}, ${auditId}, 'preview', ${outbox.id}, ${dispatch.id}, ${slotId}, 'permit_issued', ${dispatch.auditSequence + 1}, 'in_flight', ${expectations.policyVersion}, ${input.now})`;
     return permit.data;
   }); } catch (error) { if (error instanceof BudgetDenied) return null; throw error; }
 }

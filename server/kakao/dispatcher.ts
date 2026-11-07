@@ -7,6 +7,8 @@ import { prisma } from "@/lib/db/prisma";
 import { PrismaOutboxStore } from "@/lib/kakao/outbox-store";
 import { assertApprovedSupabaseProjectRef, assertApprovedRuntimeDatabaseIdentity, prismaSchemaTargetFromDatabaseUrl, type RuntimeDatabaseIdentity } from "@/lib/e2e/preview-safety";
 import { getSyntheticTestDependencies } from "@/server/kakao/dispatch-test-source";
+import { buildRealSafe, readRealSendEnv } from "@/server/kakao/real-send-wiring";
+import { PrismaDispatchRepository } from "@/server/kakao/dispatch-repository";
 
 // G2 fixture only. This interface is not a proof of any deployed DB identity.
 export type SyntheticDependencies = {
@@ -87,13 +89,22 @@ export async function dispatchPreview(request: Request): Promise<Response> {
     assertApprovedRuntimeDatabaseIdentity(rows[0], projectRef, fingerprint, schema);
     const deadline = started + 20000;
     if (deadline - performance.now() <= 12000) return reply("budget", 503);
+    // Real send (PLAN §2.2, corrected path — see build report): resolve the
+    // real safe right after the identity checks and before any sweep or
+    // budget check. A missing/invalid real configuration fails closed
+    // without touching the outbox (no sweep, no budget checks on this path).
+    const realEnv = readRealSendEnv(process.env);
+    const realSafe = realEnv ? await buildRealSafe(new PrismaDispatchRepository(prisma), realEnv) : null;
+    if (!realSafe) return Response.json({ code: "batch_failed", detail: "실 발송 설정을 확인할 수 없습니다" }, { status: 503, headers: { "cache-control": "no-store" } });
     const store = new PrismaOutboxStore(prisma);
     try { await recoverStaleProcessing(store, new Date()); } catch { return reply("sweep_failed", 503); }
     if (deadline - performance.now() <= 10000) return reply("budget", 503);
-    // No persistent Preview key or safety configuration is supplied here;
-    // the worker rejects before claiming a row.
+    // canIssue uses the performance clock because `deadline` above is a
+    // performance.now() timestamp; a Date.now() comparison against it would
+    // always be false and refuse every permit.
     const result = await processOutboxBatch(store, {
       provider: null, now: new Date(), limit: 1,
+      safe: { ...realSafe, canIssue: () => performance.now() < deadline - 10000 },
     });
     return result.error ? reply("batch_failed", 503) : reply("ok", 200, result.outcomes.length);
   } catch { return reply("unavailable", 503); }

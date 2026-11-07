@@ -46,6 +46,17 @@ export async function consumeSyntheticNonce(repository: import("@/server/kakao/d
   });
 }
 
+/** The durable nonce counter is shared by mock and real recipient encryption. */
+export async function consumeRecipientNonce(repository: import("@/server/kakao/dispatch-repository").PrismaDispatchRepository, value: unknown): Promise<bigint> {
+  return consumeSyntheticNonce(repository, value);
+}
+
+/** Assignment delegation is independent of the ownership evidence type. */
+export async function setPrismaRecipientAssignment(repository: import("@/server/kakao/dispatch-repository").PrismaDispatchRepository, value: unknown): Promise<void> {
+  const { setPrismaSyntheticRecipientAssignment } = await import("@/server/kakao/recipient-storage-prisma");
+  return setPrismaSyntheticRecipientAssignment(repository, value);
+}
+
 /** Prisma block-command adapter; all effects use the caller's single transaction. */
 export class PrismaRuntimeRepository implements RuntimeRepository {
   constructor(private readonly repository: import("@/server/kakao/dispatch-repository").PrismaDispatchRepository) {}

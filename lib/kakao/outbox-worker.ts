@@ -1,7 +1,8 @@
 import { isExplicitSendDisabled } from "@/lib/kakao/send-config";
 import type { NotificationProvider } from "@/lib/kakao/notify";
-import { normalizeProviderResult } from "@/lib/kakao/send-contract";
+import { dispatchContextSchema, normalizeProviderResult, realDispatchContextSchema } from "@/lib/kakao/send-contract";
 import { MockProvider } from "@/lib/kakao/providers/mock";
+import { SolapiAdapter } from "@/lib/kakao/providers/solapi";
 import { acquireDispatchPermit } from "@/server/kakao/dispatch-guard";
 import { InMemoryOutboxStore, PrismaOutboxStore } from "@/lib/kakao/outbox-store";
 import { PrismaDispatchRepository } from "@/server/kakao/dispatch-repository";
@@ -51,8 +52,10 @@ export type OutboxBatchOptions = {
   limit?: number;
   safe?: {
     repository: Parameters<typeof acquireDispatchPermit>[0];
-    prepare: (row: OutboxRow) => Promise<Omit<Parameters<typeof acquireDispatchPermit>[1], "claimToken" | "now">>;
-    provider: MockProvider;
+    // Nullable: a real prepare returns null when its preconditions fail
+    // (PLAN §1 step 4.2); the worker treats null as failed/store_error.
+    prepare: (row: OutboxRow) => Promise<Omit<Parameters<typeof acquireDispatchPermit>[1], "claimToken" | "now"> | null>;
+    provider: MockProvider | SolapiAdapter;
     clock: () => Date;
     retryAfter?: () => unknown;
     canIssue?: () => boolean;
@@ -78,7 +81,7 @@ export async function processOutboxBatch(store: OutboxStore, options: OutboxBatc
   const sameRepository = safe && (store instanceof InMemoryOutboxStore
     ? store.usesRepository(safe.repository)
     : store instanceof PrismaOutboxStore && safe.repository instanceof PrismaDispatchRepository && store.usesClient(safe.repository));
-  if (!safe || !sameRepository || !(safe.provider instanceof MockProvider)) return { outcomes, error: "guard_unavailable" };
+  if (!safe || !sameRepository || !(safe.provider instanceof MockProvider || safe.provider instanceof SolapiAdapter)) return { outcomes, error: "guard_unavailable" };
   let rows: OutboxRow[];
   try {
     rows = await store.claimDue(options.limit ?? 100, options.now);
@@ -106,9 +109,27 @@ export async function processOutboxBatch(store: OutboxStore, options: OutboxBatc
         continue;
       }
       const prepared = await safe.prepare(row);
+      // Explicit prepare-null: failed/store_error, no send, no permit, no
+      // provider call, no row state change (row stays processing; the sweep
+      // recovers it to pending after lease expiry). Prepare-null is NOT
+      // terminal — it must not become a terminal state.
+      if (!prepared) {
+        outcomes.push({ rowId: row.id, status: "failed", reason: "store_error" });
+        continue;
+      }
       if (isExplicitSendDisabled(prepared.config, prepared.policy)) {
         const saved = await store.markSkipped(row.id, claimToken, "send_disabled", safe.clock());
         outcomes.push({ rowId: row.id, status: "skipped", rowStatus: saved.status, attemptCount: saved.attemptCount });
+        continue;
+      }
+      // Context–provider correspondence (mock-first: a mock context also
+      // parses as a real context). Mismatch or unparsable context fails
+      // closed before any permit or provider call.
+      const isMockContext = dispatchContextSchema.safeParse(prepared.context).success;
+      const isRealContext = !isMockContext && realDispatchContextSchema.safeParse(prepared.context).success;
+      const isRealProvider = safe.provider instanceof SolapiAdapter;
+      if ((isRealContext !== isRealProvider) || (!isMockContext && !isRealContext)) {
+        outcomes.push({ rowId: row.id, status: "failed", reason: "store_error" });
         continue;
       }
       let deadlineDenied = false;
@@ -125,7 +146,7 @@ export async function processOutboxBatch(store: OutboxStore, options: OutboxBatc
       }
       let result: ReturnType<typeof normalizeProviderResult>;
       try {
-        result = normalizeProviderResult(await MockProvider.prototype.send.call(safe.provider, permit));
+        result = normalizeProviderResult(await safe.provider.send(permit));
       } catch {
         result = { status: "unknown" };
       }

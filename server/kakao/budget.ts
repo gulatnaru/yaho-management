@@ -12,6 +12,7 @@ export const MONTH_REQUEST_MAX = 200;
 const money = z.number().int().nonnegative().safe();
 const quote = z.object({ send: z.literal(15000), requiredRequestFee: money, lookup: z.literal(500), monthlyPlan: z.literal(1000000), setup: z.literal(0), planApproved: z.literal(true) }).strict();
 export type SyntheticQuote = z.infer<typeof quote>;
+export const REAL_QUOTE: SyntheticQuote = { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true };
 export type BudgetExposure = { dayRequests: number; monthRequests: number; message: number; total: number };
 const exposureSchema = z.object({ dayRequests: money, monthRequests: money, message: money, total: money }).strict().refine((x) => x.message <= x.total);
 
