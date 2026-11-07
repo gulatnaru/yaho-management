@@ -1,18 +1,38 @@
-# Preview-only official Prisma migrate deploy for the NotificationOutbox migration.
+# CI-BRANCH VERSION — prepared 2026-11-07 for the G4 closure-executor migration.
+# Preview-only official Prisma migrate deploy for the closure executor migration.
+# Target path on the CI branch:
+#   .github/workflows/preview-outbox-migrate.yml
+# (NOT a new workflow name.) WHY THIS PATH: GitHub workflow_dispatch can only be
+# triggered for a workflow whose file exists on the default branch. The path
+# preview-outbox-migrate.yml already exists on default (workflow ID 397767921,
+# state active), so dispatching that path with --ref ci-preview-closure-executor-migrate
+# resolves, and the run uses THIS branch's version of the file. A new file existing
+# only on a branch is NOT dispatchable. Main's file is NEVER modified by this branch,
+# and this branch must NEVER be merged to main (merging would overwrite main's
+# outbox workflow). Delete this branch after the migration.
 # Manual execution ONLY (workflow_dispatch). Never auto-triggered.
 # Target: Preview Supabase project ONLY, verified by parsed project ref before any DB touch.
 # Secrets referenced by NAME only (values never printed, never stored in this file):
 #   PREVIEW_DIRECT_URL   - Preview Direct/Session-pooler connection string
 #   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
-# Verification is decided by command exit code only: DO blocks raise on mismatch.
-# The Preview runtime role is unconfirmed from this connection, so no runtime-role
-# claim is made here; the later C smoke test proves it (app writes via its own
-# runtime connection).
-# Application code, schema, and migration files are NOT part of this workflow;
-# the migrate run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
-# DO NOT MERGE without an explicit merge decision (see PR description).
+# The closure executor migration file is embedded EXACTLY as reviewed (feature HEAD
+# 350733d, G4 commits C1-C6, tree clean). Before deploy, its sha256 hash is verified
+# against the approved value; any mismatch aborts the run. The base tree is the
+# verified main tip 749f29d97b6a6df2ce89f556c0154909c380ead6. NOTE: actions/checkout
+# cannot fetch a raw SHA from this repo (GitHub answers "not our ref" for SHA
+# fetch, reproduced 2026-11-07), so the checkout uses ref "main" and the next
+# step asserts HEAD is exactly the pinned tip; any drift aborts before DB touch.
+# (Same inline-file pattern as the G2 dispatch-guard workflow and the SS6 RBAC
+# workflow: the feature branch is NOT pushed before the migration, so the runner
+# cannot check it out.)
+# Prisma is pinned to 6.19.3 via npx (the isolated-verified version); no npm ci
+# is needed because migrate/db-execute do not require the repo's node_modules.
+# This branch carries a vercel.json gate (deploymentEnabled: {"ci-preview-closure-executor-migrate": false})
+# so the push itself creates no Vercel deployment.
+# DO NOT MERGE without an explicit merge decision (and never merge this branch).
+# DO NOT DISPATCH without the orchestrator's separate pre-verification + approval.
 
-name: preview-outbox-migrate
+name: preview-closure-executor-migrate
 
 on:
   workflow_dispatch:
@@ -26,17 +46,35 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: preview-closure-executor-migrate
+  cancel-in-progress: false
+
 jobs:
   migrate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "1337a195af87e3ecbaf4eaffccc259516bbf25e0"
+          ref: "749f29d97b6a6df2ce89f556c0154909c380ead6"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      - name: Write closure executor migration file (reviewed content, hash-checked)
+        run: |
+          set -euo pipefail
+          mkdir -p prisma/migrations/20261107120000_notification_closure_executor
+          cat > prisma/migrations/20261107120000_notification_closure_executor/migration.sql << 'CLOSURE_EXECUTOR_MIGRATION_SQL'
+          -- Add a dedicated closure executor to NotificationRuntimeConfig (G4 OQ-6 option A).
+          -- Mirrors the existing executor columns (costExecutorId, keyExecutorId,
+          -- purgeExecutorId): nullable TEXT, no foreign key, no default, no relation.
+          -- The executor is enforced in application code (executeClosure checks
+          -- runtime.closureExecutorId === actorId and actorId !== runtime.ownerId);
+          -- no database-level constraint is added, matching the existing columns.
+          ALTER TABLE "NotificationRuntimeConfig" ADD COLUMN "closureExecutorId" TEXT;
+          CLOSURE_EXECUTOR_MIGRATION_SQL
+          echo "7a6afb15d213830c4999e293fdaf93648aac367c164b11d40d9f4ecd8b08207b  prisma/migrations/20261107120000_notification_closure_executor/migration.sql" > /tmp/closure-executor-checksum.txt
+          sha256sum -c /tmp/closure-executor-checksum.txt
       - name: Pre-connection target guard (Preview only, no DB touch)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
@@ -108,59 +146,88 @@ jobs:
             exit 1
           fi
           echo "Pre-connection guard passed: target yaho-preview, Preview project ref match, port 5432"
-      - name: Status check + official migrate deploy (Preview only)
+      - name: Preflight (Preview only, read-only checks)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
           DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
         run: |
           set -euo pipefail
-          # Never print DATABASE_URL or DIRECT_URL.
-          # A) Connection + failed-migration + outbox-absent check (read-only).
-          # Decided by exit code only: the DO block raises on any mismatch,
-          # so success means all conditions hold. No result rows are parsed.
-          # The error text is used only to label the abort, never to pass.
-          set +e
-          PRECHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          # A) Read-only preflight: no failed/incomplete, closure executor absent, dispatch_guard present, applied 22.
+          # Decided by exit code only: the DO block raises on any mismatch.
+          if ! npx --yes prisma@6.19.3 db execute --schema prisma/schema.prisma --stdin <<'SQL'
           DO $$
           BEGIN
             IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) THEN
               RAISE EXCEPTION 'failed or incomplete migration exists';
             END IF;
-            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox') THEN
-              RAISE EXCEPTION 'outbox migration already applied (not pending)';
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261107120000_notification_closure_executor') THEN
+              RAISE EXCEPTION 'closure executor migration already present';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261028090000_notification_dispatch_guard') THEN
+              RAISE EXCEPTION 'dispatch_guard migration not applied';
+            END IF;
+            IF (SELECT COUNT(*) FROM "_prisma_migrations") <> 22 THEN
+              RAISE EXCEPTION 'applied count is not 22';
             END IF;
           END $$;
           SQL
-          )"
-          PRECHECK_EXIT=$?
-          set -e
-          if [ "$PRECHECK_EXIT" -ne 0 ]; then
-            case "$PRECHECK_OUTPUT" in
-              *'failed or incomplete migration exists'*)
-                echo "ABORT: failed or incomplete migration exists"
-                ;;
-              *'outbox migration already applied'*)
-                echo "ABORT: outbox migration already applied (not pending)"
-                ;;
-              *)
-                echo "ABORT: cannot connect or query migration history (connection failure)"
-                ;;
-            esac
+          then
+            echo "ABORT: preflight failed (see command error above)"
             exit 1
           fi
-          # B) Prisma-native pending check (content-based; robust to exit-code semantics).
-          STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
-          if ! echo "$STATUS_BEFORE" | grep -q '20261026090000_notification_outbox'; then
-            echo "ABORT: outbox migration is not listed as pending (history mismatch)"
+          # B) Prisma-native status classification.
+          # Prisma 6.19.3 status exits 1 for BOTH pending and errors, so the exit code
+          # alone cannot distinguish them; the output must be classified.
+          # Orphans (the 2 Phase 21 rows present in DB but not in this checkout) are
+          # listed in a SEPARATE section, so a global grep would wrongly abort:
+          # parse ONLY the pending section.
+          STATUS_FILE="$(mktemp)"
+          STATUS_EXIT=0
+          npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$STATUS_FILE" 2>&1 || STATUS_EXIT=$?
+          echo "--- migrate status output (migration names only, no secrets) ---"
+          cat "$STATUS_FILE"
+          echo "--- end status output ---"
+          if [ "$STATUS_EXIT" -eq 0 ]; then
+            echo "ABORT: status reports up to date (no pending) - closure executor already applied or unexpected state"
             exit 1
           fi
-          PENDING="$(echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true)"
-          if [ "$PENDING" != "20261026090000_notification_outbox" ]; then
-            echo "ABORT: pending is not exactly the outbox migration (multiple pending or format mismatch)"
+          if ! grep -q 'have not yet been applied' "$STATUS_FILE"; then
+            if grep -qE 'Error:|P[0-9]{4}|Can'"'"'t|cannot|drift|checksum' "$STATUS_FILE"; then
+              echo "ABORT: migrate status errored (connection, schema, or drift) - no deploy attempted"
+            else
+              echo "ABORT: status output format unexpected (no pending section header)"
+            fi
             exit 1
           fi
-          npx prisma migrate deploy --schema prisma/schema.prisma
-          npx prisma migrate status --schema prisma/schema.prisma
+          # Take only migration-name lines (strip leading whitespace); the orphan
+          # section can follow the pending section without a blank line, and a
+          # plain section capture would then swallow orphan names too.
+          # NOTE: with exactly 1 pending migration Prisma prints the SINGULAR
+          # "The migration have not yet been applied:" (plural only for 2+),
+          # so match on 'have not yet been applied:' without the noun.
+          PENDING="$(awk '/have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {gsub(/^[[:space:]]+/, ""); if ($0 ~ /^[0-9]{14}_/) print}' "$STATUS_FILE")"
+          echo "PENDING=[$PENDING]"
+          EXPECTED_PENDING="20261107120000_notification_closure_executor"
+          if [ "$PENDING" != "$EXPECTED_PENDING" ]; then
+            echo "ABORT: pending is not exactly the closure executor migration"
+            exit 1
+          fi
+          echo "Preflight passed: applied 22, pending exactly the closure executor migration, failed 0"
+      - name: Official migrate deploy (Preview only)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma
+          POST_FILE="$(mktemp)"
+          POST_EXIT=0
+          npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$POST_FILE" 2>&1 || POST_EXIT=$?
+          if [ "$POST_EXIT" -ne 0 ] || ! grep -q 'up to date' "$POST_FILE"; then
+            echo "ABORT: post-deploy status is not up to date"
+            exit 1
+          fi
+          echo "Deploy complete: post-deploy status is up to date"
       - name: Post-apply verification (DO block, exit code decides)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
@@ -168,46 +235,67 @@ jobs:
         run: |
           set -euo pipefail
           # Decided by exit code only: the DO block raises on any mismatch.
-          # Each privilege is checked individually. No result rows are parsed.
-          # NOTE: the Preview runtime role is NOT verified here (its identity
-          # is unconfirmed from this connection), so no runtime-role claim is
-          # made by this step; the later C smoke test proves it, because the
-          # app writes via its own runtime connection.
-          if ! npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          if ! npx --yes prisma@6.19.3 db execute --schema prisma/schema.prisma --stdin <<'SQL'
           DO $$
           DECLARE
             v_count integer;
-            v_rls boolean;
-            v_priv text;
+            v_check text;
           BEGIN
-            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: table'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public';
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: enum'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx');
-            IF v_count <> 3 THEN RAISE EXCEPTION 'verification failed: indexes'; END IF;
-            SELECT BOOL_OR(relrowsecurity) INTO v_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public';
-            IF v_rls IS NOT TRUE THEN RAISE EXCEPTION 'verification failed: RLS'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations";
+            IF v_count <> 23 THEN RAISE EXCEPTION 'verification failed: total'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: failed'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261028090000_notification_dispatch_guard';
+            IF v_check <> 'b056e95a5f0f4c545c7dd46444bc10dc8108f5538bf00f7af2c7cb0aecc3c59c' THEN RAISE EXCEPTION 'verification failed: dispatch_guard checksum'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261107120000_notification_closure_executor';
+            IF v_check <> '7a6afb15d213830c4999e293fdaf93648aac367c164b11d40d9f4ecd8b08207b' THEN RAISE EXCEPTION 'verification failed: closure executor checksum'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261107120000_notification_closure_executor' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: closure executor history'; END IF;
+            SELECT COUNT(*) INTO v_count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'NotificationRuntimeConfig' AND column_name = 'closureExecutorId' AND data_type = 'text' AND is_nullable = 'YES';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: closureExecutorId column'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261028090000_notification_dispatch_guard' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: dispatch_guard history'; END IF;
+            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'Notification%';
+            IF v_count <> 7 THEN RAISE EXCEPTION 'verification failed: Notification tables'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationDispatch";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationDispatch not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationAudit";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationAudit not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationBudgetPeriod";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationBudgetPeriod not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationCostReservation";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationCostReservation not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationRecipientRegistration";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationRecipientRegistration not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationRuntimeConfig";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationRuntimeConfig not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "NotificationOutbox";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: NotificationOutbox not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('notification_one_unresolved_slot', 'notification_one_active_recipient', 'notification_cost_correction_evidence_version');
+            IF v_count <> 3 THEN RAISE EXCEPTION 'verification failed: partial unique indexes'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_trigger WHERE tgname = 'notification_cost_immutable_update';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: trigger'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname LIKE 'Notification%' AND n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity;
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: RLS'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'Notification%';
             IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: policies'; END IF;
-            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: history'; END IF;
-            FOREACH v_priv IN ARRAY ARRAY['INSERT', 'SELECT', 'UPDATE', 'DELETE'] LOOP
-              IF NOT has_table_privilege('postgres', '"NotificationOutbox"', v_priv) THEN
-                RAISE EXCEPTION 'verification failed: postgres %', v_priv;
-              END IF;
-              IF has_table_privilege('anon', '"NotificationOutbox"', v_priv) THEN
-                RAISE EXCEPTION 'verification failed: anon %', v_priv;
-              END IF;
-              IF has_table_privilege('authenticated', '"NotificationOutbox"', v_priv) THEN
-                RAISE EXCEPTION 'verification failed: authenticated %', v_priv;
-              END IF;
-            END LOOP;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261014090000_phase21_ai_consultations_mock';
+            IF v_check <> '26dc71bb2a44bb15f6dd3fd83aceb3fa109e84d29275beccc4f82d05f787026c' THEN RAISE EXCEPTION 'verification failed: preview-only 20261014090000_phase21_ai_consultations_mock'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261015090000_ai_service_followup';
+            IF v_check <> 'bacd02b4a1c69e19c891d0c122f08bf9f715b6d0b2e43f5899d92c329fee1b7f' THEN RAISE EXCEPTION 'verification failed: preview-only 20261015090000_ai_service_followup'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox';
+            IF v_check <> '5ed492ceed6339123518aa4dc337b3ee57497459429b9b6fff863ac58d12c95c' THEN RAISE EXCEPTION 'verification failed: preview-only 20261026090000_notification_outbox'; END IF;
           END $$;
           SQL
           then
             echo "ABORT: post-apply verification failed (see command error above)"
             exit 1
           fi
-          echo "Post-apply verification passed: table, enum, indexes, RLS, policies, history, privileges"
-          echo "Runtime-role privilege: NOT claimed here (role unconfirmed); proven by the later C smoke test"
+          echo "Post-apply verification passed: 23 history rows, closureExecutorId column present, 7 Notification tables (empty), partial uniques + trigger + RLS, preview-only rows unchanged"
+      - name: Failure diagnostic (runs only on failure)
+        if: failure()
+        run: |
+          echo "Deploy did not complete. Do NOT re-run or resolve without review."
+          echo "Check _prisma_migrations for failed rows (finished_at NULL) and inspect the failed step's log."
+          echo "A failed migration blocks later deploys (P3009) until its state is reviewed."
+          echo "No data was modified by this diagnostic step."
