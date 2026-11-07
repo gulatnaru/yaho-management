@@ -288,6 +288,36 @@ export async function closeSyntheticUnconfirmed(repository: DispatchRepository, 
   });
 }
 
+/** Prisma twin of closeSyntheticUnconfirmed. Never changes cost, slot, or outbox. Delivery evidence is preserved: a finalStatus of delivered/delivery_failed/not_sent survives closure; only null/unknown becomes unknown. */
+export async function closePrismaUnconfirmed(repository: PrismaDispatchRepository, value: unknown): Promise<void> {
+  const command = closeCommand.parse(value);
+  await repository.transaction(async (tx) => {
+    const [runtime] = await tx.$queryRaw<{ ownerId: string | null; policyVersion: string | null; revision: number }[]>`SELECT "ownerId", "policyVersion", "revision" FROM "NotificationRuntimeConfig" WHERE "environment" = 'preview' FOR UPDATE`;
+    if (!runtime?.ownerId || !runtime.policyVersion) throw new Error("Closure authority unavailable.");
+    const [dispatch] = await tx.$queryRaw<{ id: string; outboxId: string; reconciliationState: string; finalStatus: string | null; unknownSince: Date | null; reviewed7dAt: Date | null; responsibilityReviewedAt: Date | null; closedAt: Date | null; auditSequence: number }[]>`SELECT "id", "outboxId", "reconciliationState", "finalStatus", "unknownSince", "reviewed7dAt", "responsibilityReviewedAt", "closedAt", "auditSequence" FROM "NotificationDispatch" WHERE "id" = ${command.dispatchId} FOR UPDATE`;
+    if (!dispatch) throw new Error("Dispatch unavailable.");
+    const [outbox] = await tx.$queryRaw<{ status: string }[]>`SELECT "status" FROM "NotificationOutbox" WHERE "id" = ${dispatch.outboxId} FOR UPDATE`;
+    if (!outbox) throw new Error("Dispatch unavailable.");
+    const users = await tx.$queryRaw<{ id: string; role: string; isActive: boolean; mustChangePassword: boolean }[]>`SELECT "id", "role", "isActive", "mustChangePassword" FROM "User" WHERE "id" IN (${runtime.ownerId}, ${command.actorId}) ORDER BY "id" FOR UPDATE`;
+    const authorized = (actorId: string) => users.some((u) => u.id === actorId && u.role === "ADMIN" && u.isActive && !u.mustChangePassword);
+    if (!authorized(runtime.ownerId) || !authorized(command.actorId)) throw new Error("Closure authority unavailable.");
+    const [approval] = await tx.$queryRaw<{ actorId: string | null; dispatchId: string | null; commandId: string | null; evidenceId: string | null }[]>`SELECT "actorId", "dispatchId", "commandId", "evidenceId" FROM "NotificationAudit" WHERE "eventId" = ${command.approvalId} AND "environment" = 'preview' AND "eventType" = 'closure_approved'`;
+    if (!approval || approval.actorId !== runtime.ownerId || approval.dispatchId !== dispatch.id || approval.commandId !== command.commandId || approval.evidenceId !== command.evidenceId) throw new Error("Closure approval unavailable.");
+    const [existing] = await tx.$queryRaw<{ eventType: string; dispatchId: string | null; actorId: string | null; approvalId: string | null; evidenceId: string | null }[]>`SELECT "eventType", "dispatchId", "actorId", "approvalId", "evidenceId" FROM "NotificationAudit" WHERE "eventId" = ${command.commandId}`;
+    if (existing) {
+      if (existing.eventType !== "closed_unconfirmed" || existing.dispatchId !== dispatch.id || existing.actorId !== command.actorId || existing.approvalId !== command.approvalId || existing.evidenceId !== command.evidenceId) throw new Error("Command conflict.");
+      return;
+    }
+    if (dispatch.reconciliationState !== "unknown" || !dispatch.unknownSince || command.at.getTime() - dispatch.unknownSince.getTime() < 30 * 86400000 || !dispatch.reviewed7dAt || dispatch.reviewed7dAt.getTime() - dispatch.unknownSince.getTime() < 7 * 86400000 || dispatch.reviewed7dAt > command.at || !dispatch.responsibilityReviewedAt || dispatch.responsibilityReviewedAt.getTime() - dispatch.unknownSince.getTime() < 30 * 86400000 || dispatch.responsibilityReviewedAt > command.at || !["sent", "failed"].includes(outbox.status) || command.nextReviewAt <= command.at || command.nextReviewAt.getTime() - command.at.getTime() > 30 * 86400000) throw new Error("Closure conditions unavailable.");
+    const preserveFinalStatus = dispatch.finalStatus === "delivered" || dispatch.finalStatus === "delivery_failed" || dispatch.finalStatus === "not_sent";
+    const changed = preserveFinalStatus
+      ? await tx.$executeRaw`UPDATE "NotificationDispatch" SET "reconciliationState" = 'closed_unconfirmed', "closedAt" = ${command.at}, "approvalId" = ${command.approvalId}, "nextReviewAt" = ${command.nextReviewAt}, "auditSequence" = "auditSequence" + 1 WHERE "id" = ${dispatch.id} AND "auditSequence" = ${dispatch.auditSequence}`
+      : await tx.$executeRaw`UPDATE "NotificationDispatch" SET "reconciliationState" = 'closed_unconfirmed', "finalStatus" = 'unknown', "closedAt" = ${command.at}, "approvalId" = ${command.approvalId}, "nextReviewAt" = ${command.nextReviewAt}, "auditSequence" = "auditSequence" + 1 WHERE "id" = ${dispatch.id} AND "auditSequence" = ${dispatch.auditSequence}`;
+    if (changed !== 1) throw new Error("Dispatch changed.");
+    await tx.$executeRaw`INSERT INTO "NotificationAudit" ("id", "eventId", "environment", "eventType", "outboxId", "dispatchId", "sequence", "actorId", "commandId", "approvalId", "evidenceId", "policyVersion", "revisionBefore", "revisionAfter", "occurredAt") VALUES (${command.commandId}, ${command.commandId}, 'preview', 'closed_unconfirmed', ${dispatch.outboxId}, ${dispatch.id}, ${dispatch.auditSequence + 1}, ${command.actorId}, ${command.commandId}, ${command.approvalId}, ${command.evidenceId}, ${runtime.policyVersion}, ${runtime.revision}, ${runtime.revision}, ${command.at})`;
+  });
+}
+
 /** Prisma partial diagnostic purge; no slot, reservation, or dedupe row is deleted. */
 export async function purgePrismaDetails(repository: PrismaDispatchRepository, value: unknown): Promise<void> {
   const command = purgeCommand.parse(value);
