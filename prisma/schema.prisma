@@ -1266,6 +1266,8 @@ model NotificationRuntimeConfig {
   nonceCurrent Boolean @default(false)
   recoveryVerified Boolean @default(false)
   rotationComplete Boolean @default(false)
+  updatedAt DateTime @updatedAt
+}
 
 
 // Phase21: isolated synthetic consultation domain. No customer/payment relationships.
