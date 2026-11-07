@@ -31,7 +31,7 @@ async function fixture(mock: unknown, beforeCommit?: (state: CoreState) => void)
   const safe = { repository, provider: new MockProvider(mock), clock: () => at, prepare: async (row: import("@/lib/kakao/outbox").OutboxRow) => {
     const fixed = await prepareSyntheticDispatch(repository, { rowId: row.id, claimToken: row.claimToken!, submission: { id: input.entityId, submittedAt: at, personalDataPurgedAt: null } });
     if (!fixed) throw new Error("Synthetic dispatch unavailable.");
-    return { ...fixed, syntheticKey: { key, keyVersion: "k1", synthetic: true as const }, config: { mode: "live", enabled: true, provider: "solapi", environment: "preview" }, policy: { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null }, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } as const };
+    return { ...fixed, recipientKey: { key, keyVersion: "k1", synthetic: true as const }, config: { mode: "live", enabled: true, provider: "solapi", environment: "preview" }, policy: { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null }, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } as const };
   } };
   return { store, repository, input, safe };
 }

@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runtimeDatabaseIdentityFingerprint } from "@/lib/e2e/preview-safety";
 
 const fake = vi.hoisted(() => ({ identity: vi.fn(), sweep: vi.fn(), batch: vi.fn() }));
+const wiring = vi.hoisted(() => ({ readEnv: vi.fn(), buildSafe: vi.fn() }));
 vi.mock("@/lib/db/prisma", () => ({ prisma: { $queryRaw: fake.identity } }));
+vi.mock("@/server/kakao/real-send-wiring", () => ({ readRealSendEnv: wiring.readEnv, buildRealSafe: wiring.buildSafe }));
 vi.mock("@/lib/kakao/outbox-worker", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/kakao/outbox-worker")>();
   return { ...original, recoverStaleProcessing: fake.sweep, processOutboxBatch: fake.batch };
@@ -21,6 +23,10 @@ function setup() {
   vi.stubEnv("DATABASE_URL", "postgresql://synthetic@db.syntheticpreview.supabase.co/synthetic");
   vi.stubEnv("KAKAO_PREVIEW_DB_IDENTITY_SHA256", runtimeDatabaseIdentityFingerprint(identity, "syntheticpreview"));
   fake.identity.mockResolvedValue([identity]); fake.sweep.mockResolvedValue([]); fake.batch.mockResolvedValue({ outcomes: [], error: "guard_unavailable" });
+  // G4 step 4: the dispatcher resolves a real safe before sweeping; stub it
+  // so these tests keep exercising sweep/budget/batch orchestration.
+  wiring.readEnv.mockReturnValue({ apiKey: "k", apiSecret: "s", pfId: "pf", templateId: "t", recipientKey: Buffer.alloc(32, 1) });
+  wiring.buildSafe.mockResolvedValue({ repository: {}, prepare: async () => null, provider: {}, clock: () => new Date() });
   return new Request("http://fixture.invalid", { headers: { authorization: `Bearer ${secret}` } });
 }
 describe("actual manual GET with fake Prisma and worker", () => {
@@ -43,7 +49,7 @@ describe("actual manual GET with fake Prisma and worker", () => {
     expect(fake.sweep).toHaveBeenCalledTimes(1); expect(fake.batch).toHaveBeenCalledTimes(1);
     expect(fake.sweep.mock.invocationCallOrder[0]).toBeLessThan(fake.batch.mock.invocationCallOrder[0]);
     expect(fake.batch.mock.calls[0][1]).toMatchObject({ limit: 1, provider: null });
-    expect(fake.batch.mock.calls[0][1].safe).toBeUndefined();
+    expect(fake.batch.mock.calls[0][1].safe.canIssue).toBeTypeOf("function");
   });
   it("does not process a batch when sweep fails", async () => {
     const request = setup(); fake.sweep.mockRejectedValueOnce(new Error("fixture"));

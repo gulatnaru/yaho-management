@@ -60,6 +60,8 @@ describe("SolapiLookupClient.lookupByMessageId", () => {
     ["2000", "unknown"],
     ["3000", "unknown"],
     ["3001", "delivery_failed"],
+    ["3014", "unknown"],
+    ["3048", "unknown"],
     ["3999", "delivery_failed"],
     ["1000", "unknown"],
     ["2001", "unknown"],

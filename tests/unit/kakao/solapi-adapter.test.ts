@@ -117,7 +117,7 @@ describe("SolapiAdapter request", () => {
 });
 
 describe("SolapiAdapter response mapping", () => {
-  it.each(["1010", "1011", "1042", "1043", "1057", "1157", "3010", "3013", "3103", "3105", "3117", "1026", "1069", "1030", "1031", "3107", "3108", "3040", "3063"])(
+  it.each(["1010", "1011", "1042", "1043", "1057", "1157", "3010", "3013", "3103", "3105", "3117", "1026", "1030", "1031", "3107", "3108", "3040", "3063"])(
     "maps failedMessageList code %s to definite_rejection",
     async (code) => {
       const statusMessage = code === "3040" ? "등록되지 않은 발신번호입니다." : "x";
@@ -127,6 +127,11 @@ describe("SolapiAdapter response mapping", () => {
       expect(calls).toHaveLength(1);
     },
   );
+
+  it("maps failed code 1069 to unknown (F-2: removed from DEFINITE_REJECTION_CODES)", async () => {
+    const { transport } = recordingTransport({ status: 200, body: failedBody("1069") });
+    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "unknown", code: "provider_result_unknown" });
+  });
 
   it("maps an unmapped failed code to unknown", async () => {
     const { transport } = recordingTransport({ status: 200, body: failedBody("9999") });
@@ -143,11 +148,11 @@ describe("SolapiAdapter response mapping", () => {
     await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "unknown", code: "provider_result_unknown" });
   });
 
-  it("maps a response without our recipient to unknown", async () => {
+  it("accepts a 1-item messageList by position even when its `to` differs (F-1: `to` is not matched)", async () => {
     const body = acceptedBody();
     body.messageList[0]!.to = "01099999999";
     const { transport } = recordingTransport({ status: 200, body });
-    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "unknown", code: "provider_result_unknown" });
+    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "accepted", providerId: "solapi", ref: REAL_REF, phase: "awaiting_final" });
   });
 
   it("maps a body without groupInfo to unknown", async () => {
@@ -200,6 +205,37 @@ describe("SolapiAdapter response mapping", () => {
   });
 });
 
+describe("SolapiAdapter F-1 messageList position matching", () => {
+  function f1Body(messageList: unknown[]) {
+    return { groupInfo: { groupId: GROUP_ID, status: "SENDING" }, failedMessageList: [], messageList };
+  }
+
+  it("accepts a 1-item messageList WITHOUT `to` (ref = messageId, 31-char M4V)", async () => {
+    const { transport, calls } = recordingTransport({ status: 200, body: f1Body([{ messageId: REAL_REF, statusCode: "2000", statusMessage: "정상 접수" }]) });
+    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "accepted", providerId: "solapi", ref: REAL_REF, phase: "awaiting_final" });
+    expect(REAL_REF).toHaveLength(31);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps a 0-item messageList to unknown/provider_result_unknown", async () => {
+    const { transport } = recordingTransport({ status: 200, body: f1Body([]) });
+    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "unknown", code: "provider_result_unknown" });
+  });
+
+  it("maps a 2-item messageList to unknown/provider_result_unknown", async () => {
+    const { transport } = recordingTransport({ status: 200, body: f1Body([
+      { to: "01012345678", messageId: REAL_REF, statusCode: "2000" },
+      { to: "01012345678", messageId: FAILED_REF, statusCode: "2000" },
+    ]) });
+    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "unknown", code: "provider_result_unknown" });
+  });
+
+  it("accepts a 1-item messageList WITH `to`", async () => {
+    const { transport } = recordingTransport({ status: 200, body: acceptedBody() });
+    await expect(makeAdapter(transport).send(realPermit)).resolves.toEqual({ status: "accepted", providerId: "solapi", ref: REAL_REF, phase: "awaiting_final" });
+  });
+});
+
 describe("SolapiAdapter guards", () => {
   it("does not call the transport for an invalid permit", async () => {
     const { transport, calls } = recordingTransport({ status: 200, body: acceptedBody() });
@@ -236,25 +272,27 @@ describe("SolapiAdapter guards", () => {
   });
 });
 
-describe("SolapiAdapter worker guard (V7b)", () => {
-  it("is rejected by the worker guard: the adapter can never be reached through processOutboxBatch", async () => {
+describe("SolapiAdapter worker guard (V7b, G4 step 4)", () => {
+  it("is accepted by the worker gate but fails closed without a real prepare", async () => {
     const at = new Date("2026-10-28T00:00:00Z");
     const state: CoreState = { outboxes: [], dispatches: [], slots: [], audits: [], recipients: [], runtime: null, lookupApprovals: [], lookups: [], closureApprovals: [], purgeApprovals: [], costApprovals: [], monthlyAdditionalCosts: {} };
     const repository = new InMemoryDispatchRepository(state);
     const store = new InMemoryOutboxStore(repository);
     const input = buildOutboxInput("application.received", `c${"3".repeat(24)}`, "created", "admin", at);
     await store.enqueue(input);
-    const { transport } = recordingTransport({ status: 200, body: acceptedBody() });
+    const { transport, calls } = recordingTransport({ status: 200, body: acceptedBody() });
     const adapter = makeAdapter(transport);
-    // The safe type says MockProvider; the runtime guard is what rejects any
-    // other provider instance, so the cast is the point of this test.
+    // G4 step 4 accepts SolapiAdapter at the worker gate; the real prepare
+    // (buildRealSafe) is what gates an actual send. A bare adapter whose
+    // prepare fails still fails closed with no transport call.
     const safe = {
       repository,
-      provider: adapter as unknown as import("@/lib/kakao/providers/mock").MockProvider,
+      provider: adapter,
       clock: () => at,
       prepare: async () => { throw new Error("prepare must not run"); },
     };
-    await expect(processOutboxBatch(store, { provider: null, now: at, safe })).resolves.toEqual({ outcomes: [], error: "guard_unavailable" });
-    expect(await store.findByDedupeKey(input.dedupeKey)).toMatchObject({ status: "pending", claimToken: null });
+    await expect(processOutboxBatch(store, { provider: null, now: at, safe })).resolves.toMatchObject({ outcomes: [{ status: "failed", reason: "store_error" }] });
+    expect(calls).toHaveLength(0);
+    expect(await store.findByDedupeKey(input.dedupeKey)).toMatchObject({ status: "processing", attemptCount: 0 });
   });
 });

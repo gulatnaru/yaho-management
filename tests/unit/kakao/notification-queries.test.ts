@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const { auth, query } = vi.hoisted(() => ({ auth: vi.fn(), query: vi.fn() }));
-vi.mock("@/lib/auth/authorization", () => ({ requireAdminPrincipal: auth }));
+vi.mock("@/lib/auth/authorization", () => ({ requireAdminPrincipal: auth, requireAdminOrSuperAdminPrincipal: auth }));
 vi.mock("@/lib/db/prisma", () => ({ prisma: { $queryRaw: query } }));
 import { getNotificationHistory, getNotificationSummary } from "@/server/kakao/notification-queries";
 import { budgetLevels } from "@/app/(admin)/reservation-applications/_components/notification-budget";

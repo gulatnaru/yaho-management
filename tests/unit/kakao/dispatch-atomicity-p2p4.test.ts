@@ -10,29 +10,29 @@ import { activateStoredSyntheticRecipient, decryptStoredSyntheticRecipient, regi
 const at = new Date("2026-10-28T00:00:00Z");
 const context = { event: "application.received", audience: "admin", dedupeKey: `application.received:${"a".repeat(64)}`, recipientId: "r1", recipientVersion: "v1", submittedAt: at, templateId: "mock_application_received_v1", templateVersion: "g2-v1", variables: { 접수시각: "2026-10-28 09:00" } } as const;
 const target = { id: "u1", role: "ADMIN" as const, isActive: true, mustChangePassword: false };
-const syntheticKey = randomBytes(32);
-const encrypted = encryptSyntheticRecipient(Buffer.from("synthetic-recipient"), syntheticKey, 1n, { environment: "preview", registrationId: "r1", registrationVersion: "v1", keyVersion: "k1" }, { counterCommitted: true, counterCurrent: true, nonceUnused: true, keyActive: true, recoveryVerified: true, registrationActive: true, rotationComplete: true });
+const recipientKey = randomBytes(32);
+const encrypted = encryptSyntheticRecipient(Buffer.from("synthetic-recipient"), recipientKey, 1n, { environment: "preview", registrationId: "r1", registrationVersion: "v1", keyVersion: "k1" }, { counterCommitted: true, counterCurrent: true, nonceUnused: true, keyActive: true, recoveryVerified: true, registrationActive: true, rotationComplete: true });
 const registration = { environment: "preview", service: "application.received", id: "r1", version: "v1", userId: "u1", purposeVersion: "p1", policyVersion: "p1", state: "active", ciphertext: { ...encrypted, keyVersion: "k1", synthetic: true }, evidence: { id: "mock_ownership_v1", method: "synthetic_call", synthetic: true, success: true, registrationId: "r1", version: "v1", verifiedAt: at, verifierId: "u1" } };
 const initial: CoreState = { users: [target], ownershipEvidence: [registration.evidence], nonceHighWaters: { k1: 1n }, lookupApprovals: [], lookups: [], closureApprovals: [], purgeApprovals: [], costApprovals: [], recipients: [{ id: "r1", version: "v1", userId: "u1", registration, target }], runtime: { environment: "preview", provider: "solapi", namespace: "preview_g2", blocked: false, activationEpoch: at, revision: 1, keyVersion: "k1", nonceHighWater: 1n, nonceCurrent: true, recoveryVerified: true, rotationComplete: true }, outboxes: [{ id: "outbox1", dedupeKey: context.dedupeKey, occurredAt: at, status: "processing", claimToken: "claim1", leaseExpiresAt: new Date(at.getTime() + 300000) }], dispatches: [{ id: "dispatch1", outboxId: "outbox1", clientKey: `preview_g2:${context.dedupeKey}`, context, slotCount: 0, auditSequence: 0, state: "ready", unknownSince: null }], slots: [], audits: [], monthlyAdditionalCosts: {} };
-const input = { syntheticKey: { key: syntheticKey, keyVersion: "k1", synthetic: true as const }, dispatchId: "dispatch1", claimToken: "claim1", context, now: at, config: { mode: "live", enabled: true, provider: "solapi", environment: "preview" }, policy: { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null }, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } as const };
+const input = { recipientKey: { key: recipientKey, keyVersion: "k1", synthetic: true as const }, dispatchId: "dispatch1", claimToken: "claim1", context, now: at, config: { mode: "live", enabled: true, provider: "solapi", environment: "preview" }, policy: { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null }, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } as const };
 describe("synthetic in-memory issuance", () => {
   it("does not retarget an existing dispatch when a replacement is activated", async () => {
     const replacementEvidence = { ...registration.evidence, registrationId: "r2", version: "v2" };
     const db = new InMemoryDispatchRepository({ ...initial, ownershipEvidence: [registration.evidence, replacementEvidence], nonceHighWaters: { k1: 1n }, runtime: { ...initial.runtime!, ownerId: target.id, nonceHighWater: 1n } });
     await revokeStoredSyntheticRecipient(db, { registrationId: "r1", actorId: "u1", reason: "replaced", at });
-    await registerStoredSyntheticRecipient(db, { registrationId: "r2", version: "v2", userId: "u1", actorId: "u1", purposeVersion: "p1", policyVersion: "p1", key: input.syntheticKey, at });
+    await registerStoredSyntheticRecipient(db, { registrationId: "r2", version: "v2", userId: "u1", actorId: "u1", purposeVersion: "p1", policyVersion: "p1", key: input.recipientKey, at });
     await verifyStoredSyntheticRecipient(db, { registrationId: "r2", actorId: "u1", evidence: replacementEvidence, at });
-    await activateStoredSyntheticRecipient(db, { registrationId: "r2", actorId: "u1", key: input.syntheticKey, at });
+    await activateStoredSyntheticRecipient(db, { registrationId: "r2", actorId: "u1", key: input.recipientKey, at });
     expect(await acquireDispatchPermit(db, input)).toBeNull();
     const state = await db.snapshot(); expect(state.dispatches[0].context).toEqual(context); expect(state.slots).toHaveLength(0);
   });
   it("decrypts only for a current issued slot and refuses after withdrawal", async () => {
     const db = new InMemoryDispatchRepository({ ...initial, runtime: { ...initial.runtime!, ownerId: target.id, nonceHighWater: 1n } });
     const permit = await acquireDispatchPermit(db, input); expect(permit).not.toBeNull();
-    const plaintext = await decryptStoredSyntheticRecipient(db, { permit, key: input.syntheticKey, now: at });
+    const plaintext = await decryptStoredSyntheticRecipient(db, { permit, key: input.recipientKey, now: at });
     try { expect(plaintext.equals(Buffer.from("synthetic-recipient"))).toBe(true); } finally { plaintext.fill(0); }
     await revokeStoredSyntheticRecipient(db, { registrationId: "r1", actorId: "u1", reason: "withdrawn", at });
-    await expect(decryptStoredSyntheticRecipient(db, { permit, key: input.syntheticKey, now: at })).rejects.toThrow();
+    await expect(decryptStoredSyntheticRecipient(db, { permit, key: input.recipientKey, now: at })).rejects.toThrow();
   });
   it("serializes revocation with permit issuance and blocks every later permit", async () => {
     const db = new InMemoryDispatchRepository({ ...initial, runtime: { ...initial.runtime!, ownerId: target.id, nonceHighWater: 1n } });
@@ -52,9 +52,9 @@ describe("synthetic in-memory issuance", () => {
     expect((await db.snapshot()).slots).toHaveLength(0);
   });
   it("fails closed when the recipient key is missing or incorrect", async () => {
-    for (const syntheticKey of [undefined, { key: randomBytes(32), keyVersion: "k1", synthetic: true as const }]) {
+    for (const recipientKey of [undefined, { key: randomBytes(32), keyVersion: "k1", synthetic: true as const }]) {
       const db = new InMemoryDispatchRepository(initial);
-      expect(await acquireDispatchPermit(db, { ...input, syntheticKey })).toBeNull();
+      expect(await acquireDispatchPermit(db, { ...input, recipientKey })).toBeNull();
       expect((await db.snapshot()).slots).toHaveLength(0);
     }
   });
@@ -68,7 +68,7 @@ describe("synthetic in-memory issuance", () => {
     expect(await acquireDispatchPermit(stale, input)).toBeNull();
     const db = new InMemoryDispatchRepository(initial); const permit = await acquireDispatchPermit(db, input); expect(permit).not.toBeNull();
     await db.transaction(async (state) => { state.runtime!.nonceHighWater = 0n; });
-    await expect(decryptStoredSyntheticRecipient(db, { permit, key: input.syntheticKey, now: at })).rejects.toThrow();
+    await expect(decryptStoredSyntheticRecipient(db, { permit, key: input.recipientKey, now: at })).rejects.toThrow();
   });
   it("does not expose a mutable transaction result as repository state", async () => {
     const db = new InMemoryDispatchRepository(initial);

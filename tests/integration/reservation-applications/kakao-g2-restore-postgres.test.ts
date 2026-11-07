@@ -81,7 +81,7 @@ const c2AuditId = `${runId}-c2-purge`;
 const c3AuditId = `${runId}-c3-slot`;
 const c4AuditId = `${runId}-c4-lookup`;
 const c5AuditId = `${runId}-c5-nonce`;
-const syntheticKey = randomBytes(32);
+const recipientKey = randomBytes(32);
 const dryRunConfig = { mode: "dry-run", enabled: false, provider: "solapi", environment: "preview" } as const;
 const liveConfig = { mode: "live", enabled: true, provider: "solapi", environment: "preview" } as const;
 const policy = { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null } as const;
@@ -370,7 +370,7 @@ async function probeWorkerNoSend(expectedOutcomes: unknown[]): Promise<void> {
         prepare: async () => ({
           dispatchId: mainDispatchId,
           context: S.mainContext!,
-          syntheticKey: { key: syntheticKey, keyVersion, synthetic: true as const },
+          recipientKey: { key: recipientKey, keyVersion, synthetic: true as const },
           config: dryRunConfig,
           policy,
           quote,
@@ -511,7 +511,7 @@ afterAll(async () => {
     () => rmSync(dumpPath, { force: true }),
     () => rmSync(mirrorPath, { force: true }),
     () => rmSync(tmpDir, { force: true, recursive: true }),
-    () => syntheticKey.fill(0),
+    () => recipientKey.fill(0),
   ]) {
     try {
       cleanup();
@@ -588,7 +588,7 @@ describe.sequential("G2 restore PostgreSQL evidence", () => {
     await source.user.create({ data: { id: userRevoked, email: `${userRevoked}@example.test`, name: "synthetic", role: "ADMIN" } });
     const encrypted = encryptSyntheticRecipient(
       Buffer.from("synthetic-recipient"),
-      syntheticKey,
+      recipientKey,
       1n,
       { environment: "preview", registrationId: recipientActive, registrationVersion: "v1", keyVersion },
       { counterCommitted: true, counterCurrent: true, nonceUnused: true, keyActive: true, recoveryVerified: true, registrationActive: true, rotationComplete: true },
@@ -707,7 +707,7 @@ describe.sequential("G2 restore PostgreSQL evidence", () => {
     expect(
       decryptSyntheticRecipient(
         { ciphertext: Buffer.from(row!.ciphertext!), nonce: Buffer.from(row!.nonce!), tag: Buffer.from(row!.tag!) },
-        syntheticKey,
+        recipientKey,
         { environment: "preview", registrationId: recipientActive, registrationVersion: "v1", keyVersion },
         { counterCommitted: true, counterCurrent: true, nonceUnused: true, keyActive: true, recoveryVerified: true, registrationActive: true, rotationComplete: true },
       ).toString("utf8"),
@@ -998,7 +998,7 @@ describe.sequential("G2 restore PostgreSQL evidence", () => {
     const permit = await acquireDispatchPermit(repository, {
       dispatchId: mainDispatchId,
       context: { ...S.mainContext!, recipientVersion: "v9" },
-      syntheticKey: { key: syntheticKey, keyVersion, synthetic: true as const },
+      recipientKey: { key: recipientKey, keyVersion, synthetic: true as const },
       config: liveConfig,
       policy,
       quote,
@@ -1025,7 +1025,7 @@ describe.sequential("G2 restore PostgreSQL evidence", () => {
           prepare: async () => ({
             dispatchId: mainDispatchId,
             context: S.mainContext!,
-            syntheticKey: { key: syntheticKey, keyVersion, synthetic: true as const },
+            recipientKey: { key: recipientKey, keyVersion, synthetic: true as const },
             config: dryRunConfig,
             policy,
             quote,

@@ -24,7 +24,7 @@ export async function createP5Fixture(mock: unknown) {
   const safe = { repository, provider: new MockProvider(mock), clock: () => p5At, prepare: async (row: OutboxRow) => {
     const fixed = await prepareSyntheticDispatch(repository, { rowId: row.id, claimToken: row.claimToken!, submission: { id: row.entityId, submittedAt: p5At, personalDataPurgedAt: null } });
     if (!fixed) throw new Error("Synthetic dispatch unavailable.");
-    return { ...fixed, syntheticKey: { key, keyVersion: "k1", synthetic: true as const }, config: { mode: "live", enabled: true, provider: "solapi", environment: "preview" }, policy: { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null }, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } as const };
+    return { ...fixed, recipientKey: { key, keyVersion: "k1", synthetic: true as const }, config: { mode: "live", enabled: true, provider: "solapi", environment: "preview" }, policy: { mode: "single_synthetic_only", activeEnvironment: "preview", otherEnvironmentActive: false, arrangement: "unresolved", previewAllocation: null, productionAllocation: null }, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } as const };
   } };
   return { store, repository, input, safe };
 }

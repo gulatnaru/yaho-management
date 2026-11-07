@@ -64,8 +64,9 @@ describe("route synthetic integration", () => {
     const prepare = deps.safe.prepare;
     deps.safe = { ...deps.safe, prepare: async (row) => {
       const value = await prepare(row);
-      if (kind === "missing-key") return { ...value, syntheticKey: undefined };
-      if (kind === "key-version") return { ...value, syntheticKey: { ...value.syntheticKey!, keyVersion: "other" } };
+      if (!value) throw new Error("Synthetic dispatch unavailable.");
+      if (kind === "missing-key") return { ...value, recipientKey: undefined };
+      if (kind === "key-version") return { ...value, recipientKey: { ...value.recipientKey!, keyVersion: "other" } };
       if (kind === "missing-config") return { ...value, config: undefined };
       if (kind === "off") return { ...value, config: { ...value.config as object, enabled: false } };
       return value;
@@ -90,7 +91,7 @@ describe("route synthetic integration", () => {
   });
   it("cannot enable an OFF configuration through request headers", async () => {
     const { deps, request, repository } = await setup(); const prepare = deps.safe.prepare;
-    deps.safe = { ...deps.safe, prepare: async (row) => ({ ...await prepare(row), config: { mode: "live", enabled: false, provider: "solapi", environment: "preview" } }) };
+    deps.safe = { ...deps.safe, prepare: async (row) => { const value = await prepare(row); if (!value) throw new Error("Synthetic dispatch unavailable."); return { ...value, config: { mode: "live", enabled: false, provider: "solapi", environment: "preview" } }; } };
     const send = vi.spyOn(MockProvider.prototype, "send");
     const forged = new Request("http://fixture.invalid", { headers: { authorization: request().headers.get("authorization")!, "x-test-config": "enabled", "x-test-key": "synthetic" } });
     await GET(forged); expect(send).not.toHaveBeenCalled(); expect((await repository.snapshot()).slots).toHaveLength(0);
