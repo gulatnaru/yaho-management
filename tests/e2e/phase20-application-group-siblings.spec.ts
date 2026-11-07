@@ -62,6 +62,11 @@ test.describe("Phase 20 group sibling boundary", () => {
   });
 
   test("B. does not reveal a completion guide without its short capability", async ({ page }) => {
+    // Preview-only: the generic bank guide is hidden only when VERCEL_ENV is
+    // "preview" (canShowGenericApplicationCompletionGuide). Locally the guide
+    // is shown by design, so this assertion is skipped outside the Preview
+    // E2E runner instead of asserting Preview behavior against local env.
+    test.skip(process.env.PLAYWRIGHT_PREVIEW_E2E !== "1", "Preview-only completion guide behavior");
     await page.goto("/apply/complete");
     expect(await page.getByText("무통장 입금 안내").count().then(Boolean)).toBe(false);
   });
