@@ -1,19 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { encryptSyntheticRecipient } from "@/lib/kakao/send-contract";
 import { MockProvider } from "@/lib/kakao/providers/mock";
-// NOTE (G2 dispatch integration): the lookup-delivery tests of the kakao
-// original ("retains closure and terminal outbox after bound late acceptance
-// and lookup", "reconciles %s without another send or releasing reservations"
-// — 5 runtime cases) are excluded here. They call pollDeliveryResult with
-// MockLookupProvider, and the lookup path (server/kakao/reconcile.ts +
-// lib/kakao/providers/mock-lookup.ts) is DEFERRED by SPEC §7.5, so those
-// modules are not ported. The remaining lookup-reservation assertions in
-// this file exercise budget.ts via the in-memory repository and are kept.
+import { MockLookupProvider } from "@/lib/kakao/providers/mock-lookup";
 import { buildOutboxInput } from "@/lib/kakao/outbox";
 import { InMemoryOutboxStore, PrismaOutboxStore, type OutboxDbClient } from "@/lib/kakao/outbox-store";
 import { processOutboxBatch, recoverStaleProcessing } from "@/lib/kakao/outbox-worker";
 import { acquireDispatchPermit } from "@/server/kakao/dispatch-guard";
 import { prepareSyntheticDispatch } from "@/server/kakao/dispatch-prepare";
+import { pollDeliveryResult } from "@/server/kakao/reconcile";
+import { recordLateResult } from "@/server/kakao/late-result";
 import { InMemoryDispatchRepository, type CoreState } from "@/server/kakao/dispatch-repository";
 
 const at = new Date("2026-10-28T00:00:00Z");
@@ -374,6 +369,44 @@ describe("P5 synthetic worker", () => {
     try {
       await processOutboxBatch(store, { provider: null, now: at, safe: { ...safe, prepare: async (row) => ({ ...await original(row), config: { mode: "live", enabled: true, provider: "solapi", environment: "production" } }) } });
       expect(spy).not.toHaveBeenCalled(); expect((await repository.snapshot()).slots).toHaveLength(0);
+    } finally { spy.mockRestore(); }
+  });
+  it("retains closure and terminal outbox after bound late acceptance and lookup", async () => {
+    const ref = `g2ref_${"c".repeat(32)}`;
+    const { store, repository, input, safe } = await fixture({ code: "S_UNKNOWN" });
+    const [claim] = await store.claimDue(1, at); const prepared = await safe.prepare(claim);
+    const permit = await acquireDispatchPermit(repository, { ...prepared, claimToken: claim.claimToken!, now: at });
+    expect(permit).not.toBeNull();
+    await store.markFailed(claim.id, claim.claimToken!, "provider_result_unknown", null);
+    await expect(recordLateResult(repository, { ...permit!, slotId: "other_slot" }, { status: "accepted", providerId: "solapi", ref, phase: "accepted" }, at)).rejects.toThrow();
+    expect((await repository.snapshot()).slots[0].status).toBe("unknown");
+    await repository.transaction(async (state) => { state.dispatches[0].state = "closed_unconfirmed"; state.dispatches[0].finalStatus = "unknown"; });
+    await recordLateResult(repository, permit, { status: "accepted", providerId: "solapi", ref, phase: "accepted" }, at);
+    const command = { commandId: "lookup1", slotId: permit!.slotId, now: at, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } };
+    expect(await pollDeliveryResult(repository, command, new MockLookupProvider({ code: "L_DELIVERED", ref }))).toBe("recorded");
+    const state = await repository.snapshot();
+    expect(state.dispatches[0]).toMatchObject({ state: "closed_unconfirmed", finalStatus: "delivered" });
+    expect(state.slots).toMatchObject([{ status: "accepted", reserved: 15000, providerRef: ref }]);
+    expect(await store.findByDedupeKey(input.dedupeKey)).toMatchObject({ status: "failed", nextRetryAt: null });
+    expect((await processOutboxBatch(store, { provider: null, now: at, safe })).outcomes).toEqual([]);
+  });
+  it.each(["L_DELIVERED", "L_FAILED", "L_PENDING", "L_NOT_FOUND"] as const)("reconciles %s without another send or releasing reservations", async (code) => {
+    const ref = `g2ref_${"a".repeat(32)}`;
+    const { store, repository, input, safe } = await fixture({ code: "S_ACCEPTED", ref });
+    await processOutboxBatch(store, { provider: null, now: at, safe });
+    const before = await repository.snapshot(); const slotId = before.slots[0].id;
+    const command = { commandId: "lookup1", slotId, now: at, quote: { send: 15000, requiredRequestFee: 0, lookup: 500, monthlyPlan: 1000000, setup: 0, planApproved: true } };
+    const spy = vi.spyOn(MockProvider.prototype, "send");
+    try {
+      const result = await pollDeliveryResult(repository, command, new MockLookupProvider({ code, ref }));
+      expect(result).toBe(code === "L_DELIVERED" || code === "L_FAILED" ? "recorded" : "unknown");
+      expect(spy).not.toHaveBeenCalled();
+      const state = await repository.snapshot();
+      expect(state.slots).toHaveLength(1); expect(state.slots[0].reserved).toBe(15000);
+      expect(state.lookups).toMatchObject([{ status: "unknown", reserved: 500 }]);
+      expect(await store.findByDedupeKey(input.dedupeKey)).toMatchObject({ status: "sent", providerRef: ref });
+      if (code === "L_DELIVERED" || code === "L_FAILED") expect(state.dispatches[0].finalStatus).toBe(code === "L_DELIVERED" ? "delivered" : "delivery_failed");
+      else expect(state.dispatches[0].finalStatus).toBeUndefined();
     } finally { spy.mockRestore(); }
   });
   it("makes no network request while processing a mock acceptance", async () => {
