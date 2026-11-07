@@ -208,6 +208,7 @@ model User {
   verifiedApplicationDeposits   ApplicationDeposit[]               @relation("ApplicationDepositConfirmedBy")
   returnedApplicationFunds      ApplicationReturn[]                @relation("ApplicationReturnProcessedBy")
   applicationSettingsUpdates    ReservationApplicationSettings[]   @relation("ApplicationSettingsUpdatedBy")
+  notificationRegistrations      NotificationRecipientRegistration[]
 }
 
 model UserAccountChange {
@@ -1050,9 +1051,9 @@ enum NotificationOutboxStatus {
 
 // Minimal metadata only: no names, phones, amounts, customer tokens, URLs or financial
 // details. Global dedupeKey uniqueness prevents a second row on repeated enqueue.
-// NOTE (outbox integration): the kakao model also has `dispatch` and `audits`
-// relations, removed here because their target models (dispatch_guard migration)
-// are not ported. The write helper and tests do not use those relations.
+// NOTE (G2 dispatch integration): the `dispatch` and `audits` relations were removed
+// during the outbox integration because their target models were not ported yet.
+// They are restored here together with the dispatch_guard migration (6 tables).
 model NotificationOutbox {
   id String @id @default(cuid())
   eventKind String
@@ -1071,6 +1072,191 @@ model NotificationOutbox {
   leaseExpiresAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  dispatch NotificationDispatch?
+  audits NotificationAudit[]
   @@index([status, nextRetryAt])
   @@index([status, leaseExpiresAt])
+}
+
+// Number-bearing data is confined to this registration; references never cascade.
+model NotificationRecipientRegistration {
+  id String @id @default(cuid())
+  environment String
+  service String
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  version String
+  state String
+  purposeVersion String
+  policyVersion String
+  ciphertext Bytes?
+  nonce Bytes?
+  tag Bytes?
+  keyVersion String?
+  verificationMethod String?
+  verificationEvidenceId String?
+  verifiedBy String?
+  verifiedAt DateTime?
+  activatedAt DateTime?
+  revokedAt DateTime?
+  purgedAt DateTime?
+  dispatches NotificationDispatch[]
+  audits NotificationAudit[]
+  @@unique([environment, userId, version])
+}
+
+model NotificationDispatch {
+  id String @id @default(cuid())
+  outboxId String @unique
+  outbox NotificationOutbox @relation(fields: [outboxId], references: [id], onDelete: Restrict)
+  environment String
+  clientKey String
+  providerId String
+  recipientId String
+  recipient NotificationRecipientRegistration @relation(fields: [recipientId], references: [id], onDelete: Restrict)
+  recipientVersion String
+  templateId String
+  templateVersion String
+  submittedAt DateTime
+  slotCount Int @default(0)
+  auditSequence Int @default(0)
+  reconciliationState String
+  finalStatus String?
+  unknownSince DateTime?
+  lastCheckedAt DateTime?
+  nextReviewAt DateTime?
+  reviewedAt DateTime?
+  reviewed7dAt DateTime?
+  responsibilityReviewedAt DateTime?
+  closedAt DateTime?
+  approvalId String?
+  evidenceId String?
+  completedAt DateTime?
+  purgeDueAt DateTime?
+  policyVersion String
+  purgeScope String?
+  purgedAt DateTime?
+  purgeState String?
+  slots NotificationCostReservation[]
+  audits NotificationAudit[]
+}
+
+model NotificationAudit {
+  id String @id @default(cuid())
+  eventId String @unique
+  environment String
+  registrationId String?
+  registration NotificationRecipientRegistration? @relation(fields: [registrationId], references: [id], onDelete: Restrict)
+  outboxId String?
+  outbox NotificationOutbox? @relation(fields: [outboxId], references: [id], onDelete: Restrict)
+  dispatchId String?
+  dispatch NotificationDispatch? @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
+  slotId String?
+  slot NotificationCostReservation? @relation(fields: [slotId], references: [id], onDelete: Restrict)
+  costOperationId String?
+  eventType String
+  sequence Int?
+  fromState String?
+  toState String?
+  code String?
+  providerRef String?
+  actorId String?
+  commandId String?
+  approvalId String?
+  evidenceId String?
+  payloadBinding String?
+  policyVersion String?
+  keyVersion String?
+  revisionBefore Int?
+  revisionAfter Int?
+  occurredAt DateTime
+  purgedAt DateTime?
+  @@unique([dispatchId, sequence])
+  @@index([dispatchId, occurredAt])
+  @@index([commandId])
+}
+
+model NotificationBudgetPeriod {
+  id String @id @default(cuid())
+  environment String
+  service String
+  periodType String
+  periodKey String
+  policyVersion String
+  requestCount Int @default(0)
+  reservedMilliKrw BigInt @default(0)
+  confirmedMilliKrw BigInt @default(0)
+  carryMilliKrw BigInt @default(0)
+  otherMilliKrw BigInt @default(0)
+  revision Int @default(0)
+  planApplied Boolean @default(false)
+  archivedConfirmedMilliKrw BigInt @default(0)
+  lookupReservedMilliKrw BigInt @default(0)
+  lookupConfirmedMilliKrw BigInt @default(0)
+  lookupCarryMilliKrw BigInt @default(0)
+  lookupArchivedConfirmedMilliKrw BigInt @default(0)
+  @@unique([environment, service, periodType, periodKey])
+}
+
+// The row is the issued slot as well as its cost reservation; it is never
+// deleted merely because cost detail or the recipient number is purged.
+model NotificationCostReservation {
+  id String @id @default(cuid())
+  dispatchId String
+  dispatch NotificationDispatch @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
+  entryKind String @default("SEND_SLOT")
+  operationKey String? @unique
+  sourceSlotId String?
+  sourceCostId String?
+  correctionVersion String?
+  evidenceVerifiedAt DateTime?
+  expectedCostRevision Int?
+  expectedPeriodRevision Int?
+  revision Int @default(0)
+  sequence Int?
+  status String
+  issuedAt DateTime
+  resultAt DateTime?
+  providerRef String?
+  resultCode String?
+  dayKey String
+  monthKey String
+  reservedMilliKrw BigInt?
+  confirmedMilliKrw BigInt?
+  adjustmentMilliKrw BigInt?
+  adjustmentCommandId String?
+  adjustmentApprovalId String?
+  adjustmentEvidenceId String?
+  costState String
+  evidenceId String?
+  carriedThroughMonth String?
+  detailPurgedAt DateTime?
+  costSummaryPurgedAt DateTime?
+  audits NotificationAudit[]
+  @@unique([dispatchId, sequence])
+  @@index([costState, monthKey])
+}
+
+model NotificationRuntimeConfig {
+  environment String @id
+  revision Int @default(0)
+  namespace String @unique
+  blocked Boolean @default(true)
+  blockReason String?
+  activationEpoch DateTime?
+  providerId String?
+  recipientVersion String?
+  templateVersion String?
+  costPolicyVersion String?
+  policyVersion String?
+  ownerId String?
+  costExecutorId String?
+  keyExecutorId String?
+  purgeExecutorId String?
+  keyVersion String?
+  nonceHighWater BigInt @default(0)
+  nonceCurrent Boolean @default(false)
+  recoveryVerified Boolean @default(false)
+  rotationComplete Boolean @default(false)
+  updatedAt DateTime @updatedAt
 }
