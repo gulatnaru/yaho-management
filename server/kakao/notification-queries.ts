@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdminPrincipal } from "@/lib/auth/authorization";
+import { requireAdminOrSuperAdminPrincipal } from "@/lib/auth/authorization";
 import { buildDedupeKey } from "@/lib/kakao/notify";
 
 export type NotificationSummary = {
@@ -11,7 +11,7 @@ export type NotificationSummary = {
 
 /** Only normalized state leaves the server. Every entry point authorizes before querying. */
 export async function getNotificationSummary(submissionId: string): Promise<NotificationSummary | null> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const id = z.string().min(1).max(128).parse(submissionId);
   const key = buildDedupeKey("application.received", id, "created");
   const rows = await prisma.$queryRaw<NotificationSummary[]>`
@@ -25,21 +25,29 @@ export async function getNotificationSummary(submissionId: string): Promise<Noti
   return rows[0] ?? null;
 }
 
-export type NotificationHistoryRow = NotificationSummary & { entityId: string; occurredAt: Date; slotCount: number | null; unresolvedSlots: number; unresolvedCosts: number; unknownSince: Date | null; reviewed7dAt: Date | null; responsibilityReviewedAt: Date | null; nextReviewAt: Date | null };
+export type NotificationHistoryRow = NotificationSummary & { entityId: string; occurredAt: Date; slotCount: number | null; unresolvedSlots: number; unresolvedCosts: number; unknownSince: Date | null; reviewed7dAt: Date | null; responsibilityReviewedAt: Date | null; nextReviewAt: Date | null; dispatchId: string; unresolvedSlotId: string | null; lastLookupAt: Date | null; lookupApprovalState: "none" | "ready" | "used"; hasClosureApproval: boolean };
 
 const historyFilter = z.enum(["attention", "all", "failed", "skipped", "unknown"]);
 export async function getNotificationHistory(page: number, filter: string = "attention"): Promise<{ rows: NotificationHistoryRow[]; budget: BudgetSnapshot }> {
-  await requireAdminPrincipal();
+  await requireAdminOrSuperAdminPrincipal();
   const safePage = z.number().int().min(1).max(1000).parse(page);
   const safeFilter = historyFilter.parse(filter);
   const [rows, budget] = await Promise.all([prisma.$queryRaw<NotificationHistoryRow[]>`
     SELECT o."entityId", o."occurredAt", o."status"::text AS "status", o."attemptCount", GREATEST(o."updatedAt", COALESCE(a."lastAt", o."updatedAt")) AS "updatedAt", o."nextRetryAt", o."lastErrorCode",
-      s."issuedAt" AS "submittedAt", s."unresolvedSlots", s."unresolvedCosts", d."finalStatus", d."reconciliationState", d."slotCount", d."unknownSince", d."reviewed7dAt", d."responsibilityReviewedAt", d."nextReviewAt"
+      s."issuedAt" AS "submittedAt", s."unresolvedSlots", s."unresolvedCosts", d."finalStatus", d."reconciliationState", d."slotCount", d."unknownSince", d."reviewed7dAt", d."responsibilityReviewedAt", d."nextReviewAt",
+      d."id" AS "dispatchId", s."unresolvedSlotId", s."lastLookupAt", lk."lookupApprovalState", lk."hasClosureApproval"
     FROM "NotificationOutbox" o LEFT JOIN "NotificationDispatch" d ON d."outboxId" = o."id"
     LEFT JOIN LATERAL (SELECT MIN("issuedAt") FILTER (WHERE "entryKind" = 'SEND_SLOT') AS "issuedAt",
       COUNT(*) FILTER (WHERE "entryKind" = 'SEND_SLOT' AND "status" IN ('in_flight', 'unknown'))::int AS "unresolvedSlots",
-      COUNT(*) FILTER (WHERE "entryKind" IN ('SEND_SLOT', 'LOOKUP_COST') AND "reservedMilliKrw" > 0)::int AS "unresolvedCosts"
+      COUNT(*) FILTER (WHERE "entryKind" IN ('SEND_SLOT', 'LOOKUP_COST') AND "reservedMilliKrw" > 0)::int AS "unresolvedCosts",
+      MAX("id") FILTER (WHERE "entryKind" = 'SEND_SLOT' AND "status" IN ('in_flight', 'unknown')) AS "unresolvedSlotId",
+      MAX("issuedAt") FILTER (WHERE "entryKind" = 'LOOKUP_COST') AS "lastLookupAt"
       FROM "NotificationCostReservation" WHERE "dispatchId" = d."id") s ON true
+    LEFT JOIN LATERAL (SELECT CASE
+      WHEN NOT EXISTS (SELECT 1 FROM "NotificationAudit" ap WHERE ap."eventType" = 'lookup_approved' AND ap."slotId" = s."unresolvedSlotId" AND (ap."occurredAt" AT TIME ZONE 'Asia/Seoul')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date) THEN 'none'
+      WHEN EXISTS (SELECT 1 FROM "NotificationCostReservation" lc WHERE lc."dispatchId" = d."id" AND lc."entryKind" = 'LOOKUP_COST' AND lc."status" = 'in_flight') THEN 'used'
+      ELSE 'ready' END AS "lookupApprovalState",
+      EXISTS (SELECT 1 FROM "NotificationAudit" ca WHERE ca."eventType" = 'closure_approved' AND ca."dispatchId" = d."id") AS "hasClosureApproval") lk ON true
     LEFT JOIN LATERAL (SELECT MAX("occurredAt") AS "lastAt" FROM "NotificationAudit" WHERE ("outboxId" = o."id" OR "dispatchId" = d."id") AND ("toState" IS NOT NULL OR "eventType" IN ('outbox_claimed', 'outbox_recovered', 'outbox_failed', 'outbox_skipped', 'result_unknown', 'result_recorded', 'closed_unconfirmed'))) a ON true
     WHERE o."eventKind" = 'application.received' AND o."audience" = 'admin'
       AND (${safeFilter} = 'all' OR (${safeFilter} = 'failed' AND o."status" = 'failed') OR (${safeFilter} = 'skipped' AND o."status" = 'skipped')
@@ -51,6 +59,15 @@ export async function getNotificationHistory(page: number, filter: string = "att
 }
 
 export type BudgetSnapshot = { dayRequests: number; monthRequests: number; confirmed: bigint; reserved: bigint; carry: bigint; lookupConfirmed: bigint; lookupReserved: bigint; lookupCarry: bigint; other: bigint; blocked: boolean | null };
+
+export type NotificationPageContext = { ownerId: string | null; closureExecutorId: string | null; costExecutorId: string | null };
+
+/** Executor identities for the row-button visibility rules. The page supplies the principal; this only reads the runtime row. */
+export async function getNotificationPageContext(): Promise<NotificationPageContext> {
+  await requireAdminOrSuperAdminPrincipal();
+  const [row] = await prisma.$queryRaw<NotificationPageContext[]>`SELECT "ownerId", "closureExecutorId", "costExecutorId" FROM "NotificationRuntimeConfig" WHERE "environment" = 'preview'`;
+  return row ?? { ownerId: null, closureExecutorId: null, costExecutorId: null };
+}
 
 /** Same current-period aggregates and unresolved prior-month reservations used by the guard. */
 async function getNotificationBudget(now: Date): Promise<BudgetSnapshot> {
