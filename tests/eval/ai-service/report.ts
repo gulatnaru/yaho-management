@@ -57,7 +57,7 @@ function percentile(values: number[], p: number) {
 }
 
 export function aggregate(records: readonly QuestionRecord[], metadata: Pick<Summary, "mode" | "stopReason" | "totalCostKrw" | "unknownCostReserveKrw">): Summary {
-  const parsed = z.array(questionRecordSchema).max(120).parse(records);
+  const parsed = z.array(questionRecordSchema).max(140).parse(records);
   if (new Set(parsed.map(r => r.id)).size !== parsed.length) throw new Error("EVAL_REPORT_INVALID");
   const calculatedCost = metadata.mode === "live" ? parsed.reduce((sum, row) => sum + (row.usage
     ? conservativeKrw(EVAL_PRICE, row.usage.inputTokens, row.usage.outputTokens) : 0), 0) : 0;

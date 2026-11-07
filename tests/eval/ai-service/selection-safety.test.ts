@@ -21,12 +21,12 @@ describe("separate shared-policy evaluation path", () => {
             return envelope(scriptedCall(input.find(row => row.role === "user")!.content));
         });
         const result = await runSafetyEvaluation(fixtures, { transport });
-        expect(result.summary.questions).toBe(120); expect(fetcher).toHaveBeenCalledTimes(120);
-        expect(result.summary.modelCorrect).toBe(120);
-        expect(result.summary.finalSafe).toBe(120);
+        expect(result.summary.questions).toBe(134); expect(fetcher).toHaveBeenCalledTimes(134);
+        expect(result.summary.modelCorrect).toBe(134);
+        expect(result.summary.finalSafe).toBe(134);
         // A correct fake classifier alone is not evidence of final correctness or real model quality.
         expect(result.summary.finalCorrect).toBeGreaterThan(0);
-        expect(result.summary.finalCorrect).toBeLessThanOrEqual(120);
+        expect(result.summary.finalCorrect).toBeLessThanOrEqual(134);
         console.info("DEV_SAFETY_SUMMARY", JSON.stringify(result.summary), "DEV_FINAL_MISSES", result.records.filter(r => !r.finalCorrect).map(r => r.id));
     });
     it("counts wrong tools as wrong even when server prevents an unsafe response", async () => {

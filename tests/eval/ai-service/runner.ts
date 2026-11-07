@@ -17,7 +17,7 @@ import { MODEL, COST_CAP_KRW, EVAL_PRICE, MAX_REQUEST_KRW } from "./valuation";
 
 export { MODEL, COST_CAP_KRW, EVAL_PRICE, MAX_REQUEST_KRW } from "./valuation";
 export const LIVE_TIMEOUT_MS = 15_000;
-const optionsSchema = z.object({ mode: modeSchema, canary: z.number().int().min(1).max(120).optional() }).strict();
+const optionsSchema = z.object({ mode: modeSchema, canary: z.number().int().min(1).max(140).optional() }).strict();
 type Options = z.infer<typeof optionsSchema>;
 const fixtureSchema = z.object({
   id: z.string().regex(/^(?:program|schedule|availability|guidance|scope|boundary)-\d{2}$/), category: z.enum(CATEGORIES),
@@ -99,7 +99,7 @@ async function boundedClassify(provider: LlmProvider, question: string, catalog:
 
 export async function runEvaluation(input: Options, dependencies: Dependencies = {}): Promise<RunResult> {
   const options = optionsSchema.safeParse(input);
-  const parsedCases = z.array(fixtureSchema).min(1).max(120).safeParse(dependencies.cases ?? fixtures);
+  const parsedCases = z.array(fixtureSchema).min(1).max(140).safeParse(dependencies.cases ?? fixtures);
   const timeout = z.number().int().positive().max(LIVE_TIMEOUT_MS).safeParse(dependencies.timeoutMs ?? LIVE_TIMEOUT_MS);
   if (!options.success || !parsedCases.success || !timeout.success) throw new ConfigurationError("EVAL_OPTIONS_INVALID");
   const allCases = parsedCases.data as Fixture[];
@@ -235,7 +235,7 @@ export async function runnerMain(args: string[], dependencies: Dependencies = {}
     error(caught instanceof ConfigurationError ? {
       EVAL_KEY_MISSING: "EVAL_KEY_MISSING: live mode requires OPENAI_EVAL_API_KEY; no request was sent.\n",
       EVAL_KEY_INVALID: "EVAL_KEY_INVALID: invalid evaluation credential; no request was sent.\n",
-      EVAL_OPTIONS_INVALID: "EVAL_OPTIONS_INVALID: use [synthetic|live] [--canary 1..120].\n",
+      EVAL_OPTIONS_INVALID: "EVAL_OPTIONS_INVALID: use [synthetic|live] [--canary 1..140].\n",
     }[caught.code] : "EVAL_FAILED: evaluation stopped.\n");
     return 1;
   }

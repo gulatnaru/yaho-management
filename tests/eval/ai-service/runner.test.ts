@@ -16,11 +16,11 @@ function fakeFetch(response: unknown = envelope()) {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("manually authored synthetic fixtures", () => {
-  it("contains exactly 120 unique Korean questions with the required distribution", () => {
-    expect(fixtures).toHaveLength(120);
-    expect(new Set(fixtures.map(f => f.id)).size).toBe(120);
-    expect(new Set(fixtures.map(f => f.question)).size).toBe(120);
-    expect(CATEGORIES.map(c => fixtures.filter(f => f.category === c).length)).toEqual([12, 16, 16, 24, 24, 28]);
+  it("contains exactly 134 unique Korean questions with the required distribution", () => {
+    expect(fixtures).toHaveLength(134);
+    expect(new Set(fixtures.map(f => f.id)).size).toBe(134);
+    expect(new Set(fixtures.map(f => f.question)).size).toBe(134);
+    expect(CATEGORIES.map(c => fixtures.filter(f => f.category === c).length)).toEqual([12, 18, 17, 24, 26, 37]);
     for (const fixture of fixtures) {
       expect(fixture.question).toMatch(/[가-힣]/);
       expect(fixture.forbiddenCanaries.length).toBeGreaterThanOrEqual(3);
@@ -51,13 +51,13 @@ describe("offline evaluation runner", () => {
     const forbiddenFetch = vi.fn(() => { throw new Error("NETWORK_FORBIDDEN"); });
     vi.stubGlobal("fetch", forbiddenFetch);
     const result = await runEvaluation({ mode: "synthetic" });
-    expect(result.records).toHaveLength(120);
+    expect(result.records).toHaveLength(134);
     expect(result.records.filter(r => r.toolResult === "WRONG" || r.toolResult === "ERROR")).toEqual([]);
     expect(result.summary).toMatchObject({ mode: "synthetic", modelAccuracyPercent: 100, totalCostKrw: 0,
       canaryViolations: 0, inputTokens: 0, outputTokens: 0, stopReason: "COMPLETE" });
     expect(result.summary.serverBlocked).toBeGreaterThan(0);
-    expect(result.summary.finalSafe).toBe(120);
-    expect(result.summary.finalCorrect).toBeLessThan(120);
+    expect(result.summary.finalSafe).toBe(134);
+    expect(result.summary.finalCorrect).toBeLessThan(134);
     expect(forbiddenFetch).not.toHaveBeenCalled();
   });
   it("does not read expected outputs to generate actual tools or arguments", async () => {
@@ -97,7 +97,7 @@ describe("offline evaluation runner", () => {
     expect(JSON.stringify(result)).not.toContain("reservations");
     expect(JSON.stringify(result)).not.toContain("capacity");
   });
-  it.each([0, -1, 121, 1.5, NaN])("rejects invalid canary before dispatch: %s", async canary => {
+  it.each([0, -1, 141, 1.5, NaN])("rejects invalid canary before dispatch: %s", async canary => {
     const fetcher = fakeFetch();
     await expect(runEvaluation({ mode: "synthetic", canary }, { fetcher })).rejects.toThrow("EVAL_OPTIONS_INVALID");
     expect(fetcher).not.toHaveBeenCalled();

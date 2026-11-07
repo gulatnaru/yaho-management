@@ -121,8 +121,8 @@ describe("closed synthetic Skill test route", () => {
     });
 
     it("keeps real Skill and retention ingress locked even with a valid synthetic secret", async () => {
-        for (const route of [productionSkill, retentionGet, retentionPost]) {
-            const response = await route();
+        for (const call of [() => productionSkill(new Request("http://localhost")), () => retentionGet(), () => retentionPost()]) {
+            const response = await call();
             expect(response.status).toBe(503);
             expect(response.headers.get("cache-control")).toBe("no-store");
             expect(await response.json()).toEqual(skillReply());

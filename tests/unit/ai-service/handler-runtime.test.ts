@@ -26,8 +26,8 @@ function setup() {
 }
 describe("isolated Skill flow", () => {
     it("deployedingress andcron alwaysfailbefore body/DB/provider", async () => {
-        for (const fn of [skill, retention]) {
-            const r = await fn();
+        for (const call of [() => skill(new Request("http://localhost")), () => retention()]) {
+            const r = await call();
             expect(r.status).toBe(503);
             expect(r.headers.get("cache-control")).toBe("no-store");
             expect(await r.json()).toMatchObject({ version: "2.0" });

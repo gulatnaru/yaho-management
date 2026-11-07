@@ -8,6 +8,26 @@ export function normalizeUtterance(value: string): string {
 }
 const compact = (value: string) => normalizeUtterance(value).replace(/\s/g, "");
 
+/**
+ * Months requested by a compacted utterance, e.g. "12월" -> [12].
+ * The guard (no digit immediately before the month number) is required so
+ * "13월" is not misread as "3월". Implemented with a lookbehind instead of
+ * the consuming (?:^|[^\d]) prefix: after compaction there is no separator
+ * between adjacent months ("11월12월"), and the consuming prefix swallows
+ * the boundary so the second month is missed; the lookbehind finds both
+ * and agrees with the consuming form on every other input (verified:
+ * "12월" -> [12], "13월" -> [], "2026년12월" -> [12], "12월5일" -> [12]).
+ * Deduped, in first-seen order.
+ */
+export function extractRequestedMonths(compacted: string): number[] {
+    const months: number[] = [];
+    for (const match of compacted.matchAll(/(?<![0-9])(1[0-2]|[1-9])월/g)) {
+        const month = Number(match[1]);
+        if (!months.includes(month)) months.push(month);
+    }
+    return months;
+}
+
 /** Complete approved public scope, bounded by resultSchema. Never truncate before authorization. */
 export function selectionCatalog(value: unknown): ToolResult[] {
     const rows = z.array(resultSchema).max(2).parse(value);
@@ -65,6 +85,11 @@ export function authorizeSelection(utterance: string, selected: unknown, catalog
         const requestedDays = days.filter(day => q.includes(day));
         if (mentionedPrograms.size > 1 || mentionedClasses.size > 1 || requestedDays.length > 1) return { allowed: false };
         for (const day of requestedDays) rest = rest.split(day).join("");
+        const requestedMonths = extractRequestedMonths(q);
+        if (requestedMonths.length > 1) return { allowed: false };
+        const requestedMonth = requestedMonths[0] ?? null;
+        if (requestedMonth !== null) rest = rest.split(`${requestedMonth}월`).join("");
+        if (requestedMonth !== null && !classes.some(c => new Date(new Date(c.startsAt).getTime() + 9 * 3600000).getUTCMonth() + 1 === requestedMonth)) return { allowed: false };
         // Any unknown target, command, extra topic, negation or unsupported date survives this grammar.
         for (const word of queryWords) rest = rest.split(word).join("");
         if (rest.replace(/[?.!,。？！、:;"'()]/gu, "")) return { allowed: false };
@@ -72,16 +97,17 @@ export function authorizeSelection(utterance: string, selected: unknown, catalog
         const hasAvailability = availability.test(q), hasSchedule = schedule.test(q);
         const requestedProgram = [...mentionedPrograms][0];
         if (topics.length) {
-            if (topics.length !== 1 || hasAvailability || hasSchedule || introduction.test(q)) return { allowed: false };
+            if (topics.length !== 1 || hasAvailability || hasSchedule || requestedMonth !== null || introduction.test(q)) return { allowed: false };
             return call.name === "get_approved_guidance" && call.args.topic === topics[0] ? { allowed: true, call } : { allowed: false };
         }
         if (hasAvailability) {
             if (introduction.test(q) || call.name !== "get_class_availability") return { allowed: false };
             const candidates = classes.filter(c => (!requestedProgram || c.programHandle === requestedProgram)
                 && (!mentionedClasses.size || mentionedClasses.has(c.handle))
-                && (!requestedDays.length || requestedDays.includes(days[new Date(new Date(c.startsAt).getTime() + 9 * 3600000).getUTCDay()])));
+                && (!requestedDays.length || requestedDays.includes(days[new Date(new Date(c.startsAt).getTime() + 9 * 3600000).getUTCDay()]))
+                && (!requestedMonth || new Date(new Date(c.startsAt).getTime() + 9 * 3600000).getUTCMonth() + 1 === requestedMonth));
             // Never infer a target merely because the catalog happens to have one item.
-            return (requestedProgram || mentionedClasses.size || requestedDays.length) && candidates.length === 1 && candidates[0].handle === call.args.classHandle
+            return (requestedProgram || mentionedClasses.size || requestedDays.length || requestedMonth) && candidates.length === 1 && candidates[0].handle === call.args.classHandle
                 ? { allowed: true, call } : { allowed: false };
         }
         if (hasSchedule) {
@@ -89,7 +115,7 @@ export function authorizeSelection(utterance: string, selected: unknown, catalog
             return call.name === "list_public_classes" && call.args.programHandle === (requestedProgram ?? null)
                 ? { allowed: true, call } : { allowed: false };
         }
-        return /프로그램/.test(q) && !requestedDays.length && !mentionedClasses.size && call.name === "list_public_programs"
+        return /프로그램/.test(q) && !requestedDays.length && !mentionedClasses.size && !requestedMonth && call.name === "list_public_programs"
             ? { allowed: true, call } : { allowed: false };
     } catch { return { allowed: false }; }
 }
@@ -107,10 +133,19 @@ export async function executeSelection(utterance: string, selected: unknown, cat
         const bounded = selectionCatalog(catalog);
         const programs = bounded.flatMap(row => row.kind === "PROGRAMS" ? row.items : []);
         const classes = bounded.flatMap(row => row.kind === "CLASSES" ? row.items : []);
-        if (parsed.kind === "PROGRAMS" && parsed.items.some(p => !programs.some(approved => approved.handle === p.handle && approved.name === p.name && approved.description === p.description))) throw new ServiceDenied();
-        if (parsed.kind === "CLASSES" && parsed.items.some(c => !classes.some(approved => approved.handle === c.handle && approved.programHandle === c.programHandle && approved.startsAt === c.startsAt && approved.endsAt === c.endsAt && approved.location === c.location)
+        let replied = parsed;
+        if (parsed.kind === "CLASSES") {
+            const months = extractRequestedMonths(compact(utterance));
+            if (months.length === 1) {
+                const kept = parsed.items.filter(c => new Date(new Date(c.startsAt).getTime() + 9 * 3600000).getUTCMonth() + 1 === months[0]);
+                if (!kept.length) return { text: HANDOFF, category: "HUMAN_HANDOFF", policyRejected: false };
+                replied = { kind: "CLASSES", items: kept };
+            }
+        }
+        if (replied.kind === "PROGRAMS" && replied.items.some(p => !programs.some(approved => approved.handle === p.handle && approved.name === p.name && approved.description === p.description))) throw new ServiceDenied();
+        if (replied.kind === "CLASSES" && replied.items.some(c => !classes.some(approved => approved.handle === c.handle && approved.programHandle === c.programHandle && approved.startsAt === c.startsAt && approved.endsAt === c.endsAt && approved.location === c.location)
             || decision.call.name === "list_public_classes" && decision.call.args.programHandle !== null && c.programHandle !== decision.call.args.programHandle)) throw new ServiceDenied();
-        const text = groundedReply(parsed);
+        const text = groundedReply(replied);
         return { text, category: text === HANDOFF ? "HUMAN_HANDOFF" : facts.kind, policyRejected: false };
     } catch { return { text: HANDOFF, category: "HUMAN_HANDOFF", policyRejected: false }; }
 }

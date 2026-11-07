@@ -326,7 +326,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
     });
 
     it("leaves the public route disabled before body/DB/provider processing", async () => {
-        const response = await publicSkill();
+        const response = await publicSkill(new Request("http://localhost"));
         expect(response.status).toBe(503); expect(response.headers.get("cache-control")).toBe("no-store");
         expect(await response.json()).toEqual(skillReply());
     });
