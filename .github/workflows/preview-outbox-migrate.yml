@@ -483,7 +483,10 @@ jobs:
           # Take only migration-name lines (strip leading whitespace); the orphan
           # section can follow the pending section without a blank line, and a
           # plain section capture would then swallow orphan names too.
-          PENDING="$(awk '/The migrations have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {gsub(/^[[:space:]]+/, ""); if ($0 ~ /^[0-9]{14}_/) print}' "$STATUS_FILE")"
+          # NOTE: with exactly 1 pending migration Prisma prints the SINGULAR
+          # "The migration have not yet been applied:" (plural only for 2+),
+          # so match on 'have not yet been applied:' without the noun.
+          PENDING="$(awk '/have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {gsub(/^[[:space:]]+/, ""); if ($0 ~ /^[0-9]{14}_/) print}' "$STATUS_FILE")"
           echo "PENDING=[$PENDING]"
           EXPECTED_PENDING="20261028090000_notification_dispatch_guard"
           if [ "$PENDING" != "$EXPECTED_PENDING" ]; then
