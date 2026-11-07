@@ -31,6 +31,7 @@ export const toolCallSchema = z.discriminatedUnion("name", [
     z.object({ name: z.literal("get_approved_guidance"), args: z.object({ topic: z.enum(["POLICY", "PREPARATION", "RAIN"]) }).strict() }).strict(),
 ]);
 export type ToolCall = z.infer<typeof toolCallSchema>;
+export const handoffCallSchema = z.object({ name: z.literal("HUMAN_HANDOFF"), args: z.object({}).strict() }).strict();
 export const configSchema = z.object({
     expectedVersion: z.number().int().nonnegative(), paused: z.boolean().default(true), provider: z.enum(["OPENAI", "TEST_DOUBLE"]),
     model: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/), priceVersion: safeId,

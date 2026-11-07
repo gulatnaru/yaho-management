@@ -4,6 +4,7 @@ import { assertAdmin, parse, configSchema, publicationSchema, guidanceSchema, Se
 import { transaction, type Database } from "./repository";
 import { safePublicText } from "./tools";
 import { decrypt, type Keys } from "./crypto";
+import { RETENTION_CADENCE } from "./retention";
 export async function saveConfig(db: Database, environment: Environment, actor: Actor, value: unknown, now: Date) {
     assertAdmin(actor);
     const input = parse(configSchema, value);
@@ -71,17 +72,40 @@ export async function saveGuidance(db: Database, environment: Environment, actor
 }
 export async function readState(db: Database, environment: Environment, actor: Actor, now: Date) {
     assertAdmin(actor);
-    return transaction(db, environment, async (tx) => ({
-        config: await tx.aiServiceConfig.findUnique({ where: { environment } }),
-        programs: await tx.aiServiceProgramPublication.findMany({ where: { environment }, take: 50 }),
-        classes: await tx.aiServiceClassPublication.findMany({ where: { environment }, take: 50 }),
-        knowledge: await tx.aiServiceKnowledgeEntry.findMany({ where: { environment }, take: 3 }),
-        budgets: await tx.aiServiceBudgetMonth.findMany({ where: { environment }, orderBy: { month: "desc" }, take: 12 }),
-        consultations: await tx.aiServiceRequest.findMany({ where: { environment, expiresAt: { gt: now } },
-            select: { id: true, status: true, createdAt: true, expiresAt: true, category: true }, orderBy: { createdAt: "desc" }, take: 50 }),
-        retention: await tx.aiServiceRetentionJob.findUnique({ where: { environment } }),
-        expiredCount: await tx.aiServiceRequest.count({ where: { environment, expiresAt: { lte: now } } }),
-    }));
+    return transaction(db, environment, async (tx) => {
+        const groups = await tx.aiServiceRequest.groupBy({
+            by: ["status", "dispatched"],
+            where: { environment, expiresAt: { gt: now } },
+            _count: { _all: true },
+        });
+        const summary = groups.reduce((counts, group) => ({
+            totalRequests: counts.totalRequests + group._count._all,
+            dispatchAttempts: counts.dispatchAttempts + (group.dispatched ? group._count._all : 0),
+            failedRequests: counts.failedRequests + (group.status === "FAILED" ? group._count._all : 0),
+            unknownRequests: counts.unknownRequests + (group.status === "UNKNOWN" ? group._count._all : 0),
+        }), { totalRequests: 0, dispatchAttempts: 0, failedRequests: 0, unknownRequests: 0 });
+        const retention = await tx.aiServiceRetentionJob.findUnique({ where: { environment } });
+        return {
+            summary: { ...summary, asOf: now },
+            monitoring: {
+                retentionCadence: RETENTION_CADENCE,
+                schedulerActive: false,
+                retentionAttempts: retention?.attempts ?? 0,
+                lastRetentionSuccessAt: retention?.lastSuccessAt ?? null,
+                nextRetentionRetryAt: retention?.nextRetryAt ?? null,
+                retentionErrorCode: retention?.errorCode === "RETENTION_FAILED" ? "RETENTION_FAILED" : null,
+            },
+            config: await tx.aiServiceConfig.findUnique({ where: { environment } }),
+            programs: await tx.aiServiceProgramPublication.findMany({ where: { environment }, take: 50 }),
+            classes: await tx.aiServiceClassPublication.findMany({ where: { environment }, take: 50 }),
+            knowledge: await tx.aiServiceKnowledgeEntry.findMany({ where: { environment }, take: 3 }),
+            budgets: await tx.aiServiceBudgetMonth.findMany({ where: { environment }, orderBy: { month: "desc" }, take: 12 }),
+            consultations: await tx.aiServiceRequest.findMany({ where: { environment, expiresAt: { gt: now } },
+                select: { id: true, status: true, createdAt: true, expiresAt: true, category: true }, orderBy: { createdAt: "desc" }, take: 50 }),
+            retention,
+            expiredCount: await tx.aiServiceRequest.count({ where: { environment, expiresAt: { lte: now } } }),
+        };
+    });
 }
 export async function readConsultation(db: Database, environment: Environment, actor: Actor, keys: Keys, id: unknown, clock: () => Date = () => new Date()) {
     assertAdmin(actor);

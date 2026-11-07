@@ -81,6 +81,20 @@ export function fakeDb() {
             findUnique: async ({ where }: Row) => { operation("findUnique"); return structuredClone(find(where as Row) ?? null); },
             findMany: async ({ where = {}, take, select }: Row = {}) => { operation("findMany"); return structuredClone(state[name].filter(r => matches(r, where as Row)).slice(0, typeof take === "number" ? take : undefined).map(r => select ? Object.fromEntries(Object.keys(select as Row).filter(k => (select as Row)[k]).map(k => [k, r[k]])) : r)); },
             count: async ({ where = {} }: Row = {}) => { operation("count"); return state[name].filter(r => matches(r, where as Row)).length; },
+            groupBy: async ({ where = {}, by }: Row) => {
+                operation("groupBy");
+                const groups = new Map<string, Row & { _count: { _all: number } }>();
+                for (const row of state[name].filter(r => matches(r, where as Row))) {
+                    const fields = Object.fromEntries((by as string[]).map(key => [key, row[key]]));
+                    const key = JSON.stringify(fields);
+                    const group = groups.get(key);
+                    if (group)
+                        group._count._all++;
+                    else
+                        groups.set(key, { ...fields, _count: { _all: 1 } });
+                }
+                return [...groups.values()];
+            },
             create: async ({ data }: Row) => { operation("create"); return create(data as Row); },
             update: async ({ where, data }: Row) => {
                 operation("update");

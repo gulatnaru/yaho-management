@@ -6,9 +6,16 @@ import { parse, ServiceDenied, toolCallSchema, type Environment, type ToolCall, 
 import { transaction, type Database } from "./repository";
 const program = z.object({ handle: z.string(), name: z.string().max(120), description: z.string().max(400).nullable() }).strict();
 const schedule = z.object({ handle: z.string(), programHandle: z.string(), startsAt: z.string().datetime(), endsAt: z.string().datetime(), location: z.string().max(120) }).strict();
+const SOURCE_CAPACITY = 20;
+/** Read one overflow sentinel; never turn a bounded prefix into an approved catalog. */
+function completeSources<T>(rows: T[]): T[] {
+    if (rows.length > SOURCE_CAPACITY)
+        throw new ServiceDenied();
+    return rows;
+}
 export const resultSchema = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("PROGRAMS"), items: z.array(program).max(20) }).strict(),
-    z.object({ kind: z.literal("CLASSES"), items: z.array(schedule).max(20) }).strict(),
+    z.object({ kind: z.literal("PROGRAMS"), items: z.array(program).max(SOURCE_CAPACITY) }).strict(),
+    z.object({ kind: z.literal("CLASSES"), items: z.array(schedule).max(SOURCE_CAPACITY) }).strict(),
     z.object({ kind: z.literal("AVAILABILITY"), status: z.enum(["AVAILABLE", "UNAVAILABLE", "UNKNOWN"]) }).strict(),
     z.object({ kind: z.literal("GUIDANCE"), content: z.string().max(1000).nullable() }).strict(),
 ]);
@@ -22,12 +29,14 @@ export function createTools(db: Database, environment: Environment, clock: () =>
             if (signal.aborted)
                 throw new ServiceDenied();
             return transaction(db, environment, async (tx) => {
-                const approvals = await tx.aiServiceProgramPublication.findMany({ where: { environment, enabled: true }, take: 20 });
-                const sources = await tx.program.findMany({ where: { id: { in: approvals.map(p => p.programId) }, status: "ACTIVE" },
-                    select: { id: true, name: true, description: true, status: true, updatedAt: true }, orderBy: { id: "asc" }, take: 20 });
+                // Check all enabled approvals before freshness filtering or target narrowing.
+                // Even stale enabled overflow fails closed; it is never silently skipped.
+                const approvals = completeSources(await tx.aiServiceProgramPublication.findMany({ where: { environment, enabled: true }, take: SOURCE_CAPACITY + 1 }));
+                const sources = completeSources(await tx.program.findMany({ where: { id: { in: approvals.map(p => p.programId) }, status: "ACTIVE" },
+                    select: { id: true, name: true, description: true, status: true, updatedAt: true }, orderBy: { id: "asc" }, take: SOURCE_CAPACITY + 1 }));
                 const programs = approvals.filter(p => sources.some(r => r.id === p.programId && +r.updatedAt === +p.sourceUpdatedAt && programDigest(r) === p.sourceDigest));
                 const programIds = programs.map(p => p.programId), programHandle = (id: string) => programs.find(p => p.programId === id)?.id;
-                const publications = await tx.aiServiceClassPublication.findMany({ where: { environment, enabled: true }, take: 20 });
+                const publications = completeSources(await tx.aiServiceClassPublication.findMany({ where: { environment, enabled: true }, take: SOURCE_CAPACITY + 1 }));
                 const classesWhere = { id: { in: publications.map(p => p.classScheduleId) }, programId: { in: programIds },
                     status: "SCHEDULED" as const, startsAt: { gt: clock() }, program: { status: "ACTIVE" as const, OR: sources.filter(r => programIds.includes(r.id)).map(r => ({ id: r.id, name: r.name, description: r.description, updatedAt: r.updatedAt })) } };
                 const validClass = (r: ClassSource & {
@@ -42,8 +51,8 @@ export function createTools(db: Database, environment: Environment, clock: () =>
                     const programId = call.args.programHandle ? programs.find(p => p.id === call.args.programHandle)?.programId : undefined;
                     if (call.args.programHandle && !programId)
                         throw new ServiceDenied();
-                    const rows = await tx.classSchedule.findMany({ where: { ...classesWhere, ...(programId ? { programId } : {}) },
-                        select: { id: true, programId: true, startsAt: true, endsAt: true, location: true, status: true, updatedAt: true }, orderBy: { startsAt: "asc" }, take: 20 });
+                    const rows = completeSources(await tx.classSchedule.findMany({ where: { ...classesWhere, ...(programId ? { programId } : {}) },
+                        select: { id: true, programId: true, startsAt: true, endsAt: true, location: true, status: true, updatedAt: true }, orderBy: { startsAt: "asc" }, take: SOURCE_CAPACITY + 1 }));
                     result = { kind: "CLASSES", items: rows.filter(validClass).map(r => ({ handle: publications.find(p => p.classScheduleId === r.id)!.id, programHandle: programHandle(r.programId)!,
                             startsAt: r.startsAt.toISOString(), endsAt: r.endsAt.toISOString(), location: safePublicText(r.location, 120, "LOCATION") })) };
                 }
