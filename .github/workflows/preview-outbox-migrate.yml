@@ -465,6 +465,9 @@ jobs:
           STATUS_FILE="$(mktemp)"
           STATUS_EXIT=0
           npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$STATUS_FILE" 2>&1 || STATUS_EXIT=$?
+          echo "--- migrate status output (migration names only, no secrets) ---"
+          cat "$STATUS_FILE"
+          echo "--- end status output ---"
           if [ "$STATUS_EXIT" -eq 0 ]; then
             echo "ABORT: status reports up to date (no pending) - dispatch_guard already applied or unexpected state"
             exit 1
@@ -477,7 +480,11 @@ jobs:
             fi
             exit 1
           fi
-          PENDING="$(awk '/The migrations have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {print}' "$STATUS_FILE")"
+          # Take only migration-name lines (strip leading whitespace); the orphan
+          # section can follow the pending section without a blank line, and a
+          # plain section capture would then swallow orphan names too.
+          PENDING="$(awk '/The migrations have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {gsub(/^[[:space:]]+/, ""); if ($0 ~ /^[0-9]{14}_/) print}' "$STATUS_FILE")"
+          echo "PENDING=[$PENDING]"
           EXPECTED_PENDING="20261028090000_notification_dispatch_guard"
           if [ "$PENDING" != "$EXPECTED_PENDING" ]; then
             echo "ABORT: pending is not exactly the dispatch_guard migration"
