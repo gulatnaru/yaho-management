@@ -6,8 +6,12 @@ const requestSchema = z.object({ lookupId: z.string().min(1).max(128), slotId: z
 const fixtureSchema = z.object({ code: z.enum(["L_DELIVERED", "L_FAILED", "L_PENDING", "L_NOT_FOUND"]), ref: providerRefSchema }).strict();
 export type MockLookupResult = { status: "delivered" | "delivery_failed" | "unknown"; ref: string };
 
+export interface LookupProvider {
+  lookup(value: unknown): Promise<MockLookupResult | null>;
+}
+
 /** G2 fixture only: no transport, fallback or hidden retry. */
-export class MockLookupProvider {
+export class MockLookupProvider implements LookupProvider {
   constructor(private readonly fixture: unknown) {}
   async lookup(value: unknown): Promise<MockLookupResult | null> {
     const request = requestSchema.safeParse(value); const fixture = fixtureSchema.safeParse(this.fixture);

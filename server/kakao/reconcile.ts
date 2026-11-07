@@ -2,16 +2,16 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { providerRefSchema } from "@/lib/kakao/send-contract";
-import { MockLookupProvider, type MockLookupResult } from "@/lib/kakao/providers/mock-lookup";
+import { type LookupProvider, type MockLookupResult } from "@/lib/kakao/providers/mock-lookup";
 import { markSyntheticLookupUnknown, reserveSyntheticLookup } from "@/server/kakao/budget";
 import { PrismaDispatchRepository, type DispatchRepository } from "@/server/kakao/dispatch-repository";
 
 const commandSchema = z.object({ commandId: z.string().min(1).max(128), slotId: z.string().min(1).max(128), now: z.date() }).passthrough();
 
-/** Reserve the mock lookup before invoking it; never invokes a send. */
-export async function pollDeliveryResult(repository: DispatchRepository | PrismaDispatchRepository, commandValue: unknown, provider: MockLookupProvider): Promise<"blocked" | "unknown" | "recorded"> {
+/** Reserve the lookup before invoking it; never invokes a send. */
+export async function pollDeliveryResult(repository: DispatchRepository | PrismaDispatchRepository, commandValue: unknown, provider: LookupProvider): Promise<"blocked" | "unknown" | "recorded"> {
   const command = commandSchema.parse(commandValue);
-  if (!(provider instanceof MockLookupProvider)) return "blocked";
+  if (!provider || typeof provider.lookup !== "function") return "blocked";
   const reservation = await reserveSyntheticLookup(repository, commandValue);
   if (!reservation) return "blocked";
   let ref: string | null = null;
@@ -29,7 +29,7 @@ export async function pollDeliveryResult(repository: DispatchRepository | Prisma
       });
     }
     if (!ref) { await markSyntheticLookupUnknown(repository, reservation.id, command.now); return "unknown"; }
-    const result = await MockLookupProvider.prototype.lookup.call(provider, { lookupId: reservation.id, slotId: command.slotId, ref });
+    const result = await provider.lookup({ lookupId: reservation.id, slotId: command.slotId, ref });
     if (!result || result.ref !== ref || result.status === "unknown") { await markSyntheticLookupUnknown(repository, reservation.id, command.now); return "unknown"; }
     await recordFinalLookup(repository, reservation.id, command.slotId, result, command.now);
     return "recorded";
