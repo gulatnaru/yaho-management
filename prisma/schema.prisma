@@ -1253,6 +1253,7 @@ model NotificationRuntimeConfig {
   costExecutorId String?
   keyExecutorId String?
   purgeExecutorId String?
+  closureExecutorId String?
   keyVersion String?
   nonceHighWater BigInt @default(0)
   nonceCurrent Boolean @default(false)
