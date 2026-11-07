@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { canIssueApplicationLink } from "@/lib/reservation-applications/availability";
+import { insertApplicationReceivedOutbox } from "@/lib/kakao/outbox-tx";
 import { ApplicationClosedError, ApplicationLinkClassClosedError, ApplicationLinkNotFoundError } from "@/lib/reservation-applications/errors";
 import { hashApplicationCapabilityToken, generateApplicationCapabilityToken } from "@/lib/reservation-applications/token";
 import type { z } from "zod";
@@ -291,6 +292,9 @@ export async function submitApplicationGroupCore(
       });
       applicationIds.push(application.id);
     }
+    // Transactional outbox: the received event commits atomically with the
+    // submission. A rollback removes the row; a failed INSERT aborts the submit.
+    await insertApplicationReceivedOutbox(tx, { submissionId: submission.id, now: input.now });
     return { submissionId: submission.id, applicationIds };
   }, TX_OPTIONS);
 }
