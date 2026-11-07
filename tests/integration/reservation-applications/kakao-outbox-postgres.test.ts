@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 import { hashApplicationCapabilityToken } from "@/lib/reservation-applications/token";
-import { buildDedupeKey } from "@/lib/kakao/notify";
-import { buildOutboxInput } from "@/lib/kakao/outbox";
+import { buildDedupeKey, type NotificationProvider } from "@/lib/kakao/notify";
+import { buildOutboxInput, OutboxStaleClaimError } from "@/lib/kakao/outbox";
+import { PrismaOutboxStore } from "@/lib/kakao/outbox-store";
+import { processOutboxBatch } from "@/lib/kakao/outbox-worker";
 import { insertApplicationReceivedOutbox } from "@/lib/kakao/outbox-tx";
 import { submitApplicationGroupCore } from "@/server/reservation-applications/groups";
 import { ApplicationClosedError } from "@/lib/reservation-applications/errors";
@@ -21,7 +23,9 @@ import { ApplicationClosedError } from "@/lib/reservation-applications/errors";
 //   a fresh completion token creates a new submission with its own outbox row.
 //   Per-submission dedupe is covered by case 2 and the unit tests instead.
 // Cases 8-10 (dispatch-side store/worker claim, lease recovery, batch guard)
-// are excluded: no dispatcher is ported in this integration.
+// and the RLS catalog case are restored verbatim from the kakao worktree:
+// the dispatcher is ported in this integration, so the exclusion no longer
+// applies.
 // No URL defaults, remote fallbacks, singleton client, provider credentials or real sends.
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_INTEGRATION_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
@@ -39,6 +43,21 @@ function ownEntity(): string {
 
 function outboxInput(entityId = ownEntity()) {
   return buildOutboxInput("application.received", entityId, "created", "admin", now);
+}
+
+/**
+ * Keep the REAL adapter and generated delegates. The SQL candidate SELECT is
+ * scoped to this test's entities because other integration files also enqueue.
+ * All claims/recovery/completions still execute the adapter's original real
+ * compare-and-set updateMany against PostgreSQL; there are no fake DB methods.
+ */
+function isolatedStore(client: PrismaClient, entityIds: string[]): PrismaOutboxStore {
+  const scoped = client.$extends({ query: { notificationOutbox: {
+    findMany({ args, query }) {
+      return query({ ...args, where: { AND: [args.where ?? {}, { entityId: { in: entityIds } }] } });
+    },
+  } } });
+  return new PrismaOutboxStore(scoped);
 }
 
 // Admin core fixture: real group/link/classes, no price-review. The submission
@@ -90,6 +109,15 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     // Only this file's explicit synthetic identities, including failed operations.
+    const outboxRows = await db.notificationOutbox.findMany({
+      where: { entityId: { in: outboxEntities } },
+      select: { id: true },
+    });
+    // Case 10's markSkipped inserts an audit referencing the outbox row, so
+    // those references must be removed first.
+    for (const row of outboxRows) {
+      await db.$executeRaw`DELETE FROM "NotificationAudit" WHERE "outboxId" = ${row.id}`;
+    }
     await db.notificationOutbox.deleteMany({ where: { entityId: { in: outboxEntities } } });
     await db.deviceSubmission.deleteMany({ where: { submissionId: { in: submissions } } });
     await db.reservationApplication.deleteMany({ where: { submissionId: { in: submissions } } });
@@ -256,4 +284,114 @@ describe.sequential("Kakao outbox actual PostgreSQL integration (admin core)", (
       expect(await db.notificationOutbox.count({ where: { dedupeKey: input.dedupeKey } })).toBe(1);
     } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
   }, 30000);
+
+  it("8. two real PrismaOutboxStore workers claim an exact disjoint partition", async () => {
+    const inputs = Array.from({ length: 4 }, () => outboxInput());
+    await db.notificationOutbox.createMany({ data: inputs });
+    const entities = inputs.map((row) => row.entityId);
+    const expected = await db.notificationOutbox.findMany({ where: { entityId: { in: entities } }, select: { id: true } });
+    const a = new PrismaClient(), b = new PrismaClient();
+    try {
+      const [left, right] = await Promise.all([isolatedStore(a, entities).claimDue(4, now), isolatedStore(b, entities).claimDue(4, now)]);
+      const ids = [...left, ...right].map((row) => row.id);
+      expect(ids).toHaveLength(4);
+      expect(new Set(ids).size).toBe(4);
+      expect([...ids].sort()).toEqual(expected.map((row) => row.id).sort());
+      expect(left.every((row) => !right.some((other) => other.id === row.id))).toBe(true);
+      const persisted = await db.notificationOutbox.findMany({ where: { entityId: { in: entities } } });
+      expect(persisted.every((row) => row.status === "processing" && row.claimToken !== null)).toBe(true);
+      expect(persisted.map((row) => [row.id, row.claimToken]).sort()).toEqual([...left, ...right].map((row) => [row.id, row.claimToken]).sort());
+    } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
+  }, 30000);
+
+  it("9. recovers only an expired lease to pending and makes it claimable again", async () => {
+    const expired = outboxInput(), valid = outboxInput();
+    const store = isolatedStore(db, [expired.entityId, valid.entityId]);
+    await store.enqueue(expired); await store.enqueue(valid);
+    const claims = await store.claimDue(2, now);
+    expect(claims).toHaveLength(2);
+    const expiredClaim = claims.find((row) => row.entityId === expired.entityId)!;
+    const validClaim = claims.find((row) => row.entityId === valid.entityId)!;
+    await db.notificationOutbox.update({ where: { id: expiredClaim.id }, data: { leaseExpiresAt: new Date(now.getTime() - 1) } });
+    await db.$executeRaw`INSERT INTO "NotificationRuntimeConfig" ("environment", "namespace", "updatedAt") VALUES ('preview', 'g2-outbox-pg-test', ${now})`;
+    let recovered;
+    try { recovered = await store.recoverStale(2, now); }
+    finally { await db.$executeRaw`DELETE FROM "NotificationRuntimeConfig" WHERE "environment"='preview' AND "namespace"='g2-outbox-pg-test'`; }
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ id: expiredClaim.id, status: "pending", claimToken: null, leaseExpiresAt: null, attemptCount: 0 });
+    expect(await db.notificationOutbox.findUnique({ where: { id: expiredClaim.id } })).toMatchObject({ status: "pending", claimToken: null, leaseExpiresAt: null, nextRetryAt: now });
+    expect(await db.notificationOutbox.findUnique({ where: { id: validClaim.id } })).toMatchObject({ status: "processing", claimToken: validClaim.claimToken, leaseExpiresAt: validClaim.leaseExpiresAt });
+    const reclaimed = await store.claimDue(2, now);
+    expect(reclaimed).toHaveLength(1);
+    expect(reclaimed[0]!.id).toBe(expiredClaim.id);
+    expect(reclaimed[0]!.claimToken).not.toBe(expiredClaim.claimToken);
+  });
+
+  it("10. rejects a stale completion token and fails closed when the batch has no safe guard", async () => {
+    const input = outboxInput(), fresh = outboxInput();
+    const store = isolatedStore(db, [input.entityId, fresh.entityId]);
+    const row = (await store.enqueue(input)).row;
+    const [old] = await store.claimDue(1, now);
+    expect(old!.id).toBe(row.id);
+    await db.notificationOutbox.update({ where: { id: row.id }, data: { leaseExpiresAt: new Date(now.getTime() - 1) } });
+    await db.$executeRaw`INSERT INTO "NotificationRuntimeConfig" ("environment", "namespace", "updatedAt") VALUES ('preview', 'g2-outbox-pg-test', ${now})`;
+    try { expect(await store.recoverStale(1, now)).toHaveLength(1); }
+    finally { await db.$executeRaw`DELETE FROM "NotificationRuntimeConfig" WHERE "environment"='preview' AND "namespace"='g2-outbox-pg-test'`; }
+    const [current] = await store.claimDue(1, now);
+    expect(current!.claimToken).not.toBe(old!.claimToken);
+    await expect(store.markSent(row.id, old!.claimToken!)).rejects.toBeInstanceOf(OutboxStaleClaimError);
+    expect(await db.notificationOutbox.findUnique({ where: { id: row.id } })).toMatchObject({ status: "processing", claimToken: current!.claimToken, attemptCount: 0 });
+    await store.markSkipped(row.id, current!.claimToken!, "provider_unconfigured");
+    const freshRow = (await store.enqueue(fresh)).row;
+    const before = await db.notificationOutbox.findUniqueOrThrow({ where: { id: freshRow.id } });
+    const send = vi.fn<NotificationProvider["send"]>(async () => ({ status: "sent" }));
+    // This abnormal missing-safe case verifies fail-closed behavior; the provider_unconfigured terminal skip contract is separate.
+    // Preserve guard_unavailable explicitly; do not hide it or convert it to undefined.
+    const result = await processOutboxBatch(store, { provider: { send }, isProviderConfigured: false, now, limit: 2 });
+    expect(result.error).toBe("guard_unavailable");
+    expect(result.outcomes).toEqual([]);
+    expect(send).toHaveBeenCalledTimes(0);
+    const persisted = await db.notificationOutbox.findMany({ where: { entityId: { in: [input.entityId, fresh.entityId] } } });
+    expect(persisted).toHaveLength(2);
+    expect(persisted.find((saved) => saved.id === row.id)).toMatchObject({ status: "skipped", lastErrorCode: "provider_unconfigured", attemptCount: 0 });
+    expect(before).toMatchObject({ status: "pending", claimToken: null, leaseExpiresAt: null, attemptCount: 0 });
+    expect(persisted.find((saved) => saved.id === freshRow.id)).toMatchObject({ status: before.status, claimToken: before.claimToken, leaseExpiresAt: before.leaseExpiresAt, attemptCount: before.attemptCount });
+    // Equal updatedAt excludes row writes, including writes followed by restoration; existing zero counts cover side tables.
+    // The worker returns before claiming, supporting the absence of writes along this path.
+    expect(persisted.find((saved) => saved.id === freshRow.id)!.updatedAt).toEqual(before.updatedAt);
+    const [counts] = await db.$queryRaw<{ dispatches: bigint; reservations: bigint; audits: bigint }[]>`
+      SELECT
+        (SELECT count(*) FROM "NotificationDispatch" WHERE "outboxId" = ${freshRow.id}) AS dispatches,
+        (SELECT count(*) FROM "NotificationCostReservation" r JOIN "NotificationDispatch" d ON d."id" = r."dispatchId" WHERE d."outboxId" = ${freshRow.id}) AS reservations,
+        (SELECT count(*) FROM "NotificationAudit" WHERE "outboxId" = ${freshRow.id}) AS audits
+    `;
+    expect(counts).toEqual({ dispatches: 0n, reservations: 0n, audits: 0n });
+  });
+
+  it("RLS catalogs show NOLOGIN anon/authenticated and no access policy or table privileges", async () => {
+    // prepare-e2e-db.ts intentionally creates NOLOGIN roles. A live connection
+    // as anon/authenticated is impossible by design; inspect catalogs instead.
+    const roles = await db.$queryRaw<{ rolname: string; rolcanlogin: boolean }[]>`
+      SELECT rolname::text, rolcanlogin FROM pg_catalog.pg_roles
+      WHERE rolname IN ('anon', 'authenticated') ORDER BY rolname
+    `;
+    expect(roles).toEqual([{ rolname: "anon", rolcanlogin: false }, { rolname: "authenticated", rolcanlogin: false }]);
+    const tables = await db.$queryRaw<{ relrowsecurity: boolean }[]>`
+      SELECT c.relrowsecurity FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'NotificationOutbox'
+    `;
+    expect(tables).toEqual([{ relrowsecurity: true }]);
+    const policies = await db.$queryRaw<{ policyname: string }[]>`
+      SELECT policyname::text FROM pg_catalog.pg_policies
+      WHERE schemaname = 'public' AND tablename = 'NotificationOutbox'
+        AND roles && ARRAY['public', 'anon', 'authenticated']::name[]
+    `;
+    expect(policies).toEqual([]);
+    const privileges = await db.$queryRaw<{ rolname: string; has_access: boolean }[]>`
+      SELECT rolname::text, has_table_privilege(rolname, 'public."NotificationOutbox"', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS has_access
+      FROM pg_catalog.pg_roles WHERE rolname IN ('anon', 'authenticated') ORDER BY rolname
+    `;
+    expect(privileges).toEqual([{ rolname: "anon", has_access: false }, { rolname: "authenticated", has_access: false }]);
+  });
 });
