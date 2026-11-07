@@ -46,16 +46,17 @@ const solapiAdapterConfigSchema = z.object({
 export type SolapiAdapterConfig = z.input<typeof solapiAdapterConfigSchema>;
 type SolapiAdapterConfigResolved = z.output<typeof solapiAdapterConfigSchema>;
 
-const solapiMessageItemSchema = z.object({ to: z.string(), messageId: z.string(), statusCode: z.string() }).passthrough();
+const solapiMessageItemSchema = z.object({ messageId: z.string(), statusCode: z.string() }).passthrough();
+const solapiFailedMessageItemSchema = z.object({ to: z.string(), messageId: z.string(), statusCode: z.string() }).passthrough();
 const solapiSendResponseSchema = z.object({
   groupInfo: z.object({ groupId: z.string() }).passthrough(),
-  failedMessageList: z.array(solapiMessageItemSchema).optional().default([]),
+  failedMessageList: z.array(solapiFailedMessageItemSchema).optional().default([]),
   messageList: z.array(solapiMessageItemSchema).optional().default([]),
 }).strict();
 
 const DEFINITE_REJECTION_CODES = new Set([
   "1010", "1011", "1042", "1043", "1057", "1157", "3010", "3013", "3103", "3105", "3117",
-  "1026", "1069", "1030", "1031", "3107", "3108", "3040", "3063",
+  "1026", "1030", "1031", "3107", "3108", "3040", "3063",
 ]);
 
 const SEND_URL = "https://api.solapi.com/messages/v4/send-many/detail";
@@ -126,8 +127,12 @@ export class SolapiAdapter {
         }
         return { status: "unknown", code: "provider_result_unknown" };
       }
-      const accepted = parsedBody.data.messageList.find((item) => item.to === to);
-      if (!accepted) return { status: "unknown", code: "provider_result_unknown" };
+      // F-1: messageList is matched by position (exactly one item), not by
+      // `to`. A `to` field, if present in the response, is passthrough only
+      // and is never validated. 0 or 2+ items -> unknown/provider_result_unknown.
+      const list = parsedBody.data.messageList;
+      if (list.length !== 1) return { status: "unknown", code: "provider_result_unknown" };
+      const accepted = list[0]!;
       if (accepted.statusCode !== "2000") return { status: "unknown", code: "provider_result_unknown" };
       if (!providerRefSchema.safeParse(accepted.messageId).success) return { status: "unknown", code: "provider_result_unknown" };
       return { status: "accepted", providerId: "solapi", ref: accepted.messageId, phase: "awaiting_final" };

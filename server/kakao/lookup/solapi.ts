@@ -35,6 +35,9 @@ type SolapiLookupClientConfigResolved = z.output<typeof solapiLookupClientConfig
 
 function mapStatusCode(statusCode: string | null): "delivered" | "delivery_failed" | "unknown" {
   if (statusCode === "4000") return "delivered";
+  // 3014 "알 수 없는 메시지 상태" / 3048 "Unknown Code": "unknown" evidence
+  // must not confirm delivery_failed.
+  if (statusCode === "3014" || statusCode === "3048") return "unknown";
   if (statusCode !== null && /^3\d{3}$/.test(statusCode) && statusCode !== "3000") return "delivery_failed";
   return "unknown";
 }
