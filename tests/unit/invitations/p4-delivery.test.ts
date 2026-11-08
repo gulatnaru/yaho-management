@@ -60,3 +60,20 @@ describe("P4 delivery", () => {
     expect(await resendDelivery("test-value", "sender@example.test", fetcher).sendInvitation(input)).toEqual({ status: "UNKNOWN", errorCategory: "INVALID_RESPONSE" });
   });
 });
+
+describe("P4 delivery port allowlist", () => {
+  it("allows only the isolated-harness ports 55432 and 55435", () => {
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@127.0.0.1:55432/yaho_e2e" }).kind).toBe("fake");
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@127.0.0.1:55435/yaho_e2e" }).kind).toBe("fake");
+  });
+  it("rejects other ports, hosts, databases, and Production-like URLs", () => {
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@127.0.0.1:55433/yaho_e2e" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@127.0.0.1:5432/yaho_e2e" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@127.0.0.2:55432/yaho_e2e" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@db.example.com:55432/yaho_e2e" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://yaho_e2e@127.0.0.1:55432/other" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, DATABASE_URL: "postgresql://postgres.azlfamqrmbfsvjnpozmr:synthetic@db.azlfamqrmbfsvjnpozmr.supabase.co:5432/postgres" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, VERCEL_ENV: "preview" })).toEqual({ kind: "off" });
+    expect(deliveryConfig({ ...fakeEnv, YAHO_P4_ISOLATED_HARNESS: undefined })).toEqual({ kind: "off" });
+  });
+});

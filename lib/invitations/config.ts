@@ -8,9 +8,14 @@ export type DeliveryConfig = { kind: "resend"; apiKey: string; sender: string; o
 export function deliveryConfig(env: Record<string, string | undefined> = process.env): DeliveryConfig {
   if (env.YAHO_INVITATION_DELIVERY === "fake") {
     // Harness conditions enforce production exclusion; NODE_ENV is not a security boundary here.
+    // Approved port set (2026-11-08, Phase 21 + G4 Preview integration, user-approved
+    // option A): the isolated harness runs on 55432 (G4 baseline cluster) and 55435
+    // (the new isolated fresh-DB cluster for this integration branch). No other port
+    // is allowed; anything else fails closed to "off". External and Production
+    // databases are never accepted here.
     try {
       const db = new URL(env.DATABASE_URL ?? "");
-      if (!env.VERCEL_ENV && env.YAHO_P4_ISOLATED_HARNESS === "1" && db.hostname === "127.0.0.1" && db.port === "55432" && db.pathname === "/yaho_e2e" && db.username === "yaho_e2e") {
+      if (!env.VERCEL_ENV && env.YAHO_P4_ISOLATED_HARNESS === "1" && db.hostname === "127.0.0.1" && (db.port === "55432" || db.port === "55435") && db.pathname === "/yaho_e2e" && db.username === "yaho_e2e") {
         return { kind: "fake", origin: "https://example.test" };
       }
     } catch { /* fail closed */ }
