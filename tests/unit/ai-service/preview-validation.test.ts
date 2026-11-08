@@ -15,7 +15,7 @@ import {proofSignature,manifestDigest,AI_PROOF_HEADER} from "@/server/ai-consult
 import {previewPlaywrightArguments,previewTestSourcesForFocus} from "@/lib/e2e/preview-focus";
 import {PREVIEW_E2E_TEST_FILES} from "@/lib/e2e/preview-runner";
 import {buildSafePreviewTestCounts} from "@/lib/e2e/preview-test-counts";
-import {evaluateAiServicePreviewMigration,previewMigrationScope} from "@/scripts/e2e/ai-service-preview-migration-policy";
+import {evaluateAiServicePreviewMigration,previewMigrationScope,APPROVED_PREVIEW_MIGRATION_NAMES} from "@/scripts/e2e/ai-service-preview-migration-policy";
 import {listRepositoryMigrations,migrationChecksum} from "@/scripts/release/production-migration";
 import {fakeDb} from "./fake-db";
 import type {Scope} from "@/lib/ai-consultations/contracts";
@@ -83,8 +83,8 @@ describe("rollback composition (repository doubles, not actual PG proof)",()=>{
 });
 const roots:string[]=[];afterEach(()=>{for(const root of roots.splice(0)){if(!path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep+"ai-service-policy-"))throw new Error("TEMP_PATH_DENIED");rmSync(root,{recursive:true,force:true});}});
 function approvedMigrationFixture(){
- const source=path.resolve("prisma/migrations"),names=listRepositoryMigrations(source).slice(0,15);
- expect(names).toHaveLength(15);expect(names.at(-1)).toBe(SERVICE_MIGRATION);
+ const source=path.resolve("prisma/migrations"),names=listRepositoryMigrations(source).slice(0,23);
+ expect(names).toHaveLength(23);expect(names.at(-1)).toBe("20261107120000_notification_closure_executor");expect(names).toContain(SERVICE_MIGRATION);
  expect(migrationChecksum(source,SERVICE_MIGRATION)).toBe(SERVICE_MIGRATION_SHA256);
  const root=mkdtempSync(path.join(os.tmpdir(),"ai-service-policy-"));roots.push(root);
  for(const name of names){mkdirSync(path.join(root,name));writeFileSync(path.join(root,name,"migration.sql"),readFileSync(path.join(source,name,"migration.sql")));}
@@ -107,9 +107,9 @@ describe("fixed new scope preserves approved migration and old runner",()=>{
  it("allows the exact follow-up branch and rejects caller-selected branches",()=>{
   expect(()=>assertPhase21ValidationBranch("feature/phase21-ai-service")).not.toThrow();expect(()=>assertPhase21ValidationBranch("feature/phase21-ai-service-extra")).toThrow();
  });
- it("allows only the approved fifteenth checksum and already-applied prior history",()=>{
+ it("allows the approved follow-up migration as the only pending migration",()=>{
   const {root,rows}=approvedMigrationFixture();
-  expect(evaluateAiServicePreviewMigration(rows.slice(0,-1),root)).toMatchObject({pendingMigrations:[SERVICE_MIGRATION],deployRequired:true});
+  expect(evaluateAiServicePreviewMigration(rows.filter(row=>row.migration_name!==SERVICE_MIGRATION),root)).toMatchObject({pendingMigrations:[SERVICE_MIGRATION],deployRequired:true});
   expect(evaluateAiServicePreviewMigration(rows,root)).toMatchObject({pendingMigrations:[],deployRequired:false});
  });
  it("rejects a truncated prior history",()=>{
@@ -134,11 +134,22 @@ describe("fixed new scope preserves approved migration and old runner",()=>{
   mkdirSync(path.join(root,"20261017000000_unapproved"));writeFileSync(path.join(root,"20261017000000_unapproved","migration.sql"),"-- unapproved");
   expect(()=>evaluateAiServicePreviewMigration(rows,root)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
- it("rejects the current 17-migration repository under the existing Preview policy",()=>{
+ it("accepts the current 23-migration repository under the updated Preview policy",()=>{
   const root=path.resolve("prisma/migrations"),names=listRepositoryMigrations(root);
-  expect(names).toHaveLength(17);
-  expect(names.slice(15)).toEqual(["20261026090000_notification_outbox","20261028090000_notification_dispatch_guard"]);
+  expect(names).toHaveLength(23);
+  expect(names).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES]);
+  expect(migrationChecksum(root,"20260825090000_phase6_safety_attendance")).toBe("35594760d05aa8c59029548e64489af0ff9363edeb9a90b058a512233ab94eba");
   const rows=names.map(name=>({migration_name:name,checksum:migrationChecksum(root,name),finished_at:new Date(),rolled_back_at:null}));
+  expect(evaluateAiServicePreviewMigration(rows,root)).toMatchObject({pendingMigrations:[],deployRequired:false});
+ });
+ it("rejects the Phase 6 Production CRLF checksum in applied rows and in repository files",()=>{
+  const {root,rows}=approvedMigrationFixture();
+  const phase6="20260825090000_phase6_safety_attendance";
+  const crlfChecksum="5a4c6615cddc07185dfee17dd887e479aea2e9eb8fc98ed703b690f9b9118799";
+  const crlfRows=rows.map(row=>row.migration_name===phase6?{...row,checksum:crlfChecksum}:row);
+  expect(()=>evaluateAiServicePreviewMigration(crlfRows,root)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
+  writeFileSync(path.join(root,phase6,"migration.sql"),Buffer.from(readFileSync(path.join(root,phase6,"migration.sql"),"utf8").replace(/\n/g,"\r\n")));
+  expect(migrationChecksum(root,phase6)).toBe(crlfChecksum);
   expect(()=>evaluateAiServicePreviewMigration(rows,root)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
  it("keeps Mock the default migration scope and rejects arbitrary selection",()=>{
