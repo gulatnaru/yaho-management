@@ -1,25 +1,26 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as publicSkill } from "@/app/api/ai-service/v1/skill/route";
-import { skillReply } from "@/server/ai-service/contracts";
+import { HANDOFF, HANDOFF_CARD_BUTTON_LABEL, HANDOFF_CARD_TITLE, skillCardReplySchema, skillHandoffCard, skillReply } from "@/server/ai-service/contracts";
 import { hashes } from "@/server/ai-service/crypto";
 import { handleSkill, type Dependencies } from "@/server/ai-service/handler";
 import { testProvider, type ProviderResult } from "@/server/ai-service/provider";
 import { handleKakaoSkill, type SkillService } from "@/server/ai-service/skill";
 import { createTools } from "@/server/ai-service/tools";
 import { fakeDb, now, seedConfig } from "./fake-db";
+import { realRequestPayload } from "./real-request-fixture";
 
 const secret = "synthetic-skill-secret-0123456789abcdef";
 const requestId = "synthetic-skill-request-001";
 const guidance = "합성 준비물은 모자입니다.";
 const headers = () => new Headers({ "x-yaho-skill-key": secret });
+// Full real Kakao SkillPayload shape (official answer_json_format): no top-level
+// `version` key — it is a response-only field. intent/flow/contexts/block/
+// properties/params/lang/timezone ride along as passthrough and are ignored.
+// The JSON lives in ./real-request-fixture so unit, auth and integration tests
+// can never drift apart on the real-request shape.
 function payload() {
-    return {
-        version: "2.0",
-        bot: { id: "synthetic-bot" },
-        userRequest: { utterance: "야호 준비물을 알려 주세요", user: { id: "synthetic-subject" } },
-        action: { id: "synthetic-action", name: "synthetic", clientExtra: null as unknown },
-    };
+    return realRequestPayload();
 }
 function setup(result: ProviderResult = {
     call: { name: "get_approved_guidance", args: { topic: "PREPARATION" } },
@@ -75,7 +76,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const parse = vi.spyOn(JSON, "parse");
         const service = vi.fn(handleSkill);
         const h = new Headers(supplied === undefined ? {} : { "x-yaho-skill-key": supplied });
-        expect(await handleKakaoSkill(h, "invalid-json", requestId, deps, service)).toEqual(skillReply());
+        expect(await handleKakaoSkill(h, "invalid-json", requestId, deps, service)).toEqual(skillHandoffCard());
         expect(parse).not.toHaveBeenCalled();
         expect(service).not.toHaveBeenCalled();
         expect(classify).not.toHaveBeenCalled();
@@ -84,13 +85,17 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
 
     it.each(["", "short", "x".repeat(257)])("fails closed for missing/weak configured secret", async configured => {
         const { deps, f } = setup(); deps.secret = configured;
-        expect(await handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps)).toEqual(skillHandoffCard());
         expect(f.operations).toHaveLength(0);
     });
 
     it.each([
         ["unsupported version", (p: ReturnType<typeof payload>) => ({ ...p, version: "1.0" })],
-        ["missing version", (p: ReturnType<typeof payload>) => ({ ...p, version: undefined })],
+        ["version 2.1", (p: ReturnType<typeof payload>) => ({ ...p, version: "2.1" })],
+        ["empty version", (p: ReturnType<typeof payload>) => ({ ...p, version: "" })],
+        ["null version", (p: ReturnType<typeof payload>) => ({ ...p, version: null })],
+        ["numeric version", (p: ReturnType<typeof payload>) => ({ ...p, version: 2 })],
+        ["array version", (p: ReturnType<typeof payload>) => ({ ...p, version: ["2.0"] })],
         ["wrong bot", (p: ReturnType<typeof payload>) => ({ ...p, bot: { id: "another-bot" } })],
         ["callback", (p: ReturnType<typeof payload>) => ({ ...p, userRequest: { ...p.userRequest, callbackUrl: "https://synthetic.invalid/callback" } })],
         ["null callback", (p: ReturnType<typeof payload>) => ({ ...p, userRequest: { ...p.userRequest, callbackUrl: null } })],
@@ -103,7 +108,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
     ] as const)("rejects %s before DB/provider", async (_, change) => {
         const { deps, f, classify } = setup();
         const service = vi.fn(handleSkill);
-        expect(await handleKakaoSkill(headers(), JSON.stringify(change(payload())), requestId, deps, service)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), JSON.stringify(change(payload())), requestId, deps, service)).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
         expect(f.operations).toHaveLength(0);
         expect(classify).not.toHaveBeenCalled();
@@ -111,7 +116,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
 
     it.each(["{", "null", "[]", "true"])("rejects malformed envelope %s", async raw => {
         const { deps, f } = setup();
-        expect(await handleKakaoSkill(headers(), raw, requestId, deps)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), raw, requestId, deps)).toEqual(skillHandoffCard());
         expect(f.operations).toHaveLength(0);
     });
 
@@ -140,7 +145,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const dbAccess = vi.fn(() => f.db);
         Object.defineProperty(deps, "db", { get: dbAccess });
 
-        expect(await handleKakaoSkill(headers(), JSON.stringify(body), requestId, deps, service)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), JSON.stringify(body), requestId, deps, service)).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
         expect(provider).not.toHaveBeenCalled();
         expect(classify).not.toHaveBeenCalled();
@@ -160,7 +165,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
             call: null, classification: "HUMAN_HANDOFF", usage: { inputTokens: 100, outputTokens: 10 },
         });
         const body = payload(); body.userRequest.utterance = utterance;
-        expect(await run(body)).toEqual(skillReply());
+        expect(await run(body)).toEqual(skillHandoffCard());
         expect(classify).toHaveBeenCalledTimes(1);
         expect(classify.mock.calls[0][0].utterance).toBe(utterance);
     });
@@ -172,10 +177,10 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         expect(Buffer.byteLength(JSON.stringify(body))).toBe(16384);
         expect(await run(body)).toEqual(skillReply(guidance));
         const count = f.operations.length;
-        expect(await handleKakaoSkill(headers(), JSON.stringify({ ...body, metadata: body.metadata + "x" }), requestId, deps)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), JSON.stringify({ ...body, metadata: body.metadata + "x" }), requestId, deps)).toEqual(skillHandoffCard());
         const multibyte = JSON.stringify({ ...payload(), metadata: "한".repeat(5500) });
         expect(multibyte.length).toBeLessThan(16384);
-        expect(await handleKakaoSkill(headers(), multibyte, requestId, deps)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), multibyte, requestId, deps)).toEqual(skillHandoffCard());
         expect(f.operations).toHaveLength(count);
     });
 
@@ -187,7 +192,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
     });
 
     it.each(["", "short", "x".repeat(129), "synthetic-request space"])("requires explicit bounded stable identity %j", async id => {
-        const { run, f } = setup(); expect(await run(payload(), id)).toEqual(skillReply()); expect(f.operations).toHaveLength(0);
+        const { run, f } = setup(); expect(await run(payload(), id)).toEqual(skillHandoffCard()); expect(f.operations).toHaveLength(0);
     });
 
     it.each(["unchanged", "utterance", "subject", "action", "metadata"])("refuses repeated identity with %s body, without provider redispatch or extra cost", async change => {
@@ -198,7 +203,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         if (change === "subject") body.userRequest.user.id = "synthetic-another-subject";
         if (change === "action") body.action.id = "synthetic-another-action";
         if (change === "metadata") body.action.clientExtra = { retry: "synthetic-second-delivery" };
-        expect(await run(body)).toEqual(skillReply());
+        expect(await run(body)).toEqual(skillHandoffCard());
         expect(classify).toHaveBeenCalledTimes(1);
         expect(f.state.aiServiceRequest).toHaveLength(1);
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 1, reservedKrw: 0 });
@@ -207,7 +212,10 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
     it("concurrent duplicates share one durable claim and provider dispatch", async () => {
         const { run, classify, f } = setup();
         const replies = await Promise.all([run(), run(), run()]);
-        expect(replies.filter(r => r.template.outputs[0].simpleText.text === guidance)).toHaveLength(1);
+        const simpleTextOf = (reply: unknown) => (reply as { template: { outputs: Array<{ simpleText?: { text: string } }> } }).template.outputs[0].simpleText?.text;
+        const isCard = (reply: unknown) => "textCard" in ((reply as { template: { outputs: Array<Record<string, unknown>> } }).template.outputs[0]);
+        expect(replies.filter(r => simpleTextOf(r) === guidance)).toHaveLength(1);
+        expect(replies.filter(isCard)).toHaveLength(2);
         expect(classify).toHaveBeenCalledTimes(1);
         expect(f.state.aiServiceRequest).toHaveLength(1);
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 1, reservedKrw: 0 });
@@ -217,7 +225,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const { run, deps, classify } = setup();
         await run();
         deps.keys.hmac.v2 = Buffer.alloc(32, 3); deps.keys.activeHmac = "v2";
-        expect(await run()).toEqual(skillReply());
+        expect(await run()).toEqual(skillHandoffCard());
         expect(classify).toHaveBeenCalledTimes(1);
         expect(await run(payload(), "synthetic-skill-request-002")).toEqual(skillReply(guidance));
         expect(classify).toHaveBeenCalledTimes(2);
@@ -228,7 +236,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         { call: null, usage: { inputTokens: 100, outputTokens: 10 } },
     ])("maps internal handoff/invalid selection to fixed safe Skill text", async result => {
         const { run, f } = setup(result);
-        expect(await run()).toEqual(skillReply());
+        expect(await run()).toEqual(skillHandoffCard());
         expect(JSON.stringify(await run())).not.toContain("HUMAN_HANDOFF");
         expect(f.state.aiServiceRequest[0].status).toBe("SETTLED");
         expect(f.state.aiServiceBudgetMonth[0].usedKrw).toBe(1);
@@ -237,7 +245,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
     it("never leaks model/service errors and keeps unknown dispatched cost reserved", async () => {
         const { run, classify, f } = setup();
         classify.mockRejectedValue(new Error("SYNTHETIC_PRIVATE_MODEL_ERROR"));
-        expect(await run()).toEqual(skillReply());
+        expect(await run()).toEqual(skillHandoffCard());
         expect(f.state.aiServiceRequest[0].status).toBe("UNKNOWN");
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ reservedKrw: 2, unknownCount: 1 });
     });
@@ -249,7 +257,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         { version: "2.0", template: { outputs: [{ simpleText: { text: guidance, error: "private" } }] } },
     ])("rebuilds only the trusted simpleText contract, failing closed for malformed replies %#", async result => {
         const { deps } = setup();
-        expect(await handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps, async () => result)).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps, async () => result)).toEqual(skillHandoffCard());
     });
 
     it("normalizes only core fields and passes the stable identity unchanged", async () => {
@@ -258,14 +266,16 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const body = { ...payload(), metadata: "SYNTHETIC_IGNORED_METADATA" };
         expect(await handleKakaoSkill(headers(), JSON.stringify(body), requestId, deps, service)).toEqual(skillReply(guidance));
         expect(service.mock.calls[0][2]).toBe(requestId);
-        expect(JSON.parse(service.mock.calls[0][1])).toEqual({ bot: payload().bot, userRequest: payload().userRequest, action: { id: "synthetic-action", name: "synthetic" } });
+        expect(JSON.parse(service.mock.calls[0][1])).toEqual({ bot: { id: "synthetic-bot" },
+            userRequest: { utterance: "야호 준비물을 알려 주세요", user: { id: "synthetic-subject" } },
+            action: { id: "synthetic-action", name: "synthetic" } });
     });
 
     it("clears timers on normal completion and synchronous delegate errors", async () => {
         vi.useFakeTimers(); const { run, deps } = setup();
         expect(await run()).toEqual(skillReply(guidance));
         expect(vi.getTimerCount()).toBe(0);
-        expect(await handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps, () => { throw new Error("SYNTHETIC_PRIVATE_ERROR"); })).toEqual(skillReply());
+        expect(await handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps, () => { throw new Error("SYNTHETIC_PRIVATE_ERROR"); })).toEqual(skillHandoffCard());
         expect(vi.getTimerCount()).toBe(0);
     });
 
@@ -276,11 +286,11 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const response = handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps, () => pending.promise).then(value => { returned = true; return value; });
         await vi.advanceTimersByTimeAsync(3999); expect(returned).toBe(false);
         await vi.advanceTimersByTimeAsync(1); const reply = await response;
-        expect(reply).toEqual(skillReply()); expect(vi.getTimerCount()).toBe(0);
+        expect(reply).toEqual(skillHandoffCard()); expect(vi.getTimerCount()).toBe(0);
         if (completion === "resolve") pending.resolve(skillReply("SYNTHETIC_LATE_REPLY"));
         else pending.reject(new Error("SYNTHETIC_PRIVATE_LATE_ERROR"));
         await vi.advanceTimersByTimeAsync(1);
-        expect(reply).toEqual(skillReply()); expect(vi.getTimerCount()).toBe(0);
+        expect(reply).toEqual(skillHandoffCard()); expect(vi.getTimerCount()).toBe(0);
     });
 
     it.each(["known", "error"] as const)("bounds a hung %s settlement in the actual service", async outcome => {
@@ -304,11 +314,11 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const response = handleKakaoSkill(headers(), JSON.stringify(payload()), requestId, deps);
         await vi.advanceTimersByTimeAsync(3999); expect(held).toBe(true);
         await vi.advanceTimersByTimeAsync(1);
-        const reply = await response; expect(reply).toEqual(skillReply()); expect(vi.getTimerCount()).toBe(0);
+        const reply = await response; expect(reply).toEqual(skillHandoffCard()); expect(vi.getTimerCount()).toBe(0);
         const reads = execute.mock.calls.length;
         pending.reject(new Error("SYNTHETIC_LATE_SETTLEMENT_ERROR"));
         await vi.advanceTimersByTimeAsync(1);
-        expect(reply).toEqual(skillReply()); expect(classify).toHaveBeenCalledTimes(1);
+        expect(reply).toEqual(skillHandoffCard()); expect(classify).toHaveBeenCalledTimes(1);
         expect(execute).toHaveBeenCalledTimes(reads); expect(vi.getTimerCount()).toBe(0);
     });
 
@@ -317,7 +327,7 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const pending = deferred<ProviderResult>(); let signal: AbortSignal | undefined;
         classify.mockImplementation(request => { signal = request.signal; return pending.promise; });
         const response = run(); await vi.advanceTimersByTimeAsync(1501);
-        expect(await response).toEqual(skillReply()); expect(signal?.aborted).toBe(true);
+        expect(await response).toEqual(skillHandoffCard()); expect(signal?.aborted).toBe(true);
         expect(f.state.aiServiceRequest[0].status).toBe("UNKNOWN");
         pending.resolve({ call: { name: "get_approved_guidance", args: { topic: "PREPARATION" } }, usage: { inputTokens: 100, outputTokens: 10 } });
         await vi.advanceTimersByTimeAsync(1);
@@ -329,5 +339,47 @@ describe("synthetic internal Kakao Skill v2 adapter", () => {
         const response = await publicSkill(new Request("http://localhost"));
         expect(response.status).toBe(503); expect(response.headers.get("cache-control")).toBe("no-store");
         expect(await response.json()).toEqual(skillReply());
+    });
+
+    it("accepts a version-less real request and an explicit 2.0 version", async () => {
+        const { run } = setup();
+        // Each run needs its own request id: the ledger dedups by request hash,
+        // so reusing one id would make the later runs return the HANDOFF card.
+        expect(await run(payload(), "synthetic-skill-versionless")).toEqual(skillReply(guidance));
+        expect((await run(payload(), "synthetic-skill-versionless-again")).version).toBe("2.0");
+        expect(await run({ ...payload(), version: "2.0" }, "synthetic-skill-version-20")).toEqual(skillReply(guidance));
+    });
+
+    it("serializes the real-request fixture without a version key", () => {
+        expect(JSON.stringify(payload())).not.toContain('"version"');
+    });
+
+    it("returns the HANDOFF card with the exact approved shape", () => {
+        const card = skillHandoffCard();
+        expect(card).toEqual({ version: "2.0", template: { outputs: [{ textCard: { title: "야호 상담 안내",
+            description: HANDOFF, buttons: [{ action: "operator", label: "담당자 연결" }] } }] } });
+        expect(skillCardReplySchema.parse(card)).toEqual(card);
+        expect(card.version).toBe("2.0");
+    });
+
+    it("fixes the HANDOFF card length budget", () => {
+        expect(HANDOFF_CARD_TITLE.length).toBe(8);
+        expect(HANDOFF.length).toBe(31);
+        expect(HANDOFF_CARD_TITLE.length + HANDOFF.length).toBe(39);
+        expect(HANDOFF_CARD_TITLE.length + HANDOFF.length).toBeLessThanOrEqual(400);
+        expect(HANDOFF_CARD_BUTTON_LABEL.length).toBe(6);
+        expect(HANDOFF_CARD_BUTTON_LABEL.length).toBeLessThanOrEqual(14);
+    });
+
+    it("rejects an over-budget card description and accepts the exact boundary", () => {
+        expect(() => skillHandoffCard("x".repeat(393))).toThrow("AI_SERVICE_DENIED");
+        expect(skillCardReplySchema.parse(skillHandoffCard("x".repeat(392)))).toBeTruthy();
+    });
+
+    it("returns version 2.0 on grounded and HANDOFF card replies", async () => {
+        const { run } = setup();
+        expect((await run()).version).toBe("2.0");
+        const { run: handoffRun } = setup({ call: null, classification: "HUMAN_HANDOFF", usage: { inputTokens: 100, outputTokens: 10 } });
+        expect((await handoffRun()).version).toBe("2.0");
     });
 });

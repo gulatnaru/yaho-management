@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HANDOFF, ServiceDenied, skillReply, skillSchema } from "./contracts";
+import { HANDOFF, ServiceDenied, skillHandoffCard, skillReply, skillSchema } from "./contracts";
 import { handleSkill, type Dependencies } from "./handler";
 import { authenticateSkill } from "./transport";
 
@@ -13,7 +13,9 @@ const piiFormats = [
     /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i,
 ];
 const requestSchema = skillSchema.extend({
-    version: z.literal("2.0"),
+    // Kakao real Skill requests carry no top-level `version` (it is a response-only
+    // field). Absent is allowed; a present value must be exactly "2.0".
+    version: z.literal("2.0").optional(),
     userRequest: skillSchema.shape.userRequest.extend({
         utterance: skillSchema.shape.userRequest.shape.utterance.refine(
             value => !piiFormats.some(pattern => pattern.test(value.normalize("NFKC").replace(/\p{Cf}/gu, ""))),
@@ -37,6 +39,19 @@ const replySchema = z.object({
 export type SkillService = (headers: Headers, raw: string, stableRequestId: string, deps: Dependencies) => Promise<unknown>;
 
 /**
+ * HANDOFF as a textCard with an operator button. The card builder enforces the
+ * 400-char title+description budget; if it ever throws, fall back to the plain
+ * HANDOFF text rather than leaving the user with no reply.
+ */
+function handoffCard() {
+    try {
+        return skillHandoffCard();
+    } catch {
+        return skillReply();
+    }
+}
+
+/**
  * Synthetic/internal DI entrypoint only. Public routes remain disabled.
  * The caller must supply a stable request identity: Kakao's real identity/retry
  * contract is still an activation gate. Never derive it from user/utterance.
@@ -46,7 +61,7 @@ export async function handleKakaoSkill(headers: Headers, raw: string, stableRequ
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
         // Authentication must precede even JSON parsing and any service/DB access.
-        authenticateSkill(headers, deps.secret);
+        authenticateSkill(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment);
         if (Buffer.byteLength(raw, "utf8") > 16384)
             throw new ServiceDenied();
         const input = requestSchema.parse(JSON.parse(raw));
@@ -63,7 +78,7 @@ export async function handleKakaoSkill(headers: Headers, raw: string, stableRequ
         });
         const remaining = DEADLINE_MS - (Date.now() - started);
         if (remaining <= 0)
-            return skillReply();
+            return handoffCard();
         const deadline = new Promise<undefined>(resolve => {
             timer = setTimeout(() => resolve(undefined), remaining);
         });
@@ -76,15 +91,15 @@ export async function handleKakaoSkill(headers: Headers, raw: string, stableRequ
             deadline,
         ]);
         if (Date.now() - started >= DEADLINE_MS)
-            return skillReply();
+            return handoffCard();
         const reply = replySchema.safeParse(result);
         if (!reply.success)
-            return skillReply();
+            return handoffCard();
         const text = reply.data.template.outputs[0].simpleText.text;
-        return skillReply(text === "HUMAN_HANDOFF" ? HANDOFF : text);
+        return text === "HUMAN_HANDOFF" || text === HANDOFF ? handoffCard() : skillReply(text);
     }
     catch {
-        return skillReply();
+        return handoffCard();
     }
     finally {
         if (timer !== undefined)

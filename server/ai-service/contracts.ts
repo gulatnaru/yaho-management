@@ -57,3 +57,31 @@ export const skillSchema = z.object({
 export function skillReply(text = HANDOFF) {
     return { version: "2.0", template: { outputs: [{ simpleText: { text } }] } };
 }
+/**
+ * HANDOFF card for the real Kakao Skill adapter only. Title and button label are
+ * fixed by user decision; description is the HANDOFF constant. Kakao textCard
+ * budget: title + description <= 400 chars, button label <= 14 chars. The
+ * builder throws ServiceDenied when the budget is exceeded; the adapter falls
+ * back to the simpleText HANDOFF in that case. The `operator` button needs no
+ * extra field (official answer_json_format: Button fields are label/action plus
+ * action-specific fields; `operator` is listed with no additional field).
+ */
+export const HANDOFF_CARD_TITLE = "야호 상담 안내";
+export const HANDOFF_CARD_BUTTON_LABEL = "담당자 연결";
+export function skillHandoffCard(description: string = HANDOFF) {
+    if (HANDOFF_CARD_TITLE.length + description.length > 400) throw new ServiceDenied();
+    return { version: "2.0", template: { outputs: [{ textCard: { title: HANDOFF_CARD_TITLE,
+        description, buttons: [{ action: "operator", label: HANDOFF_CARD_BUTTON_LABEL }] } }] } };
+}
+export const skillCardReplySchema = z.object({
+    version: z.literal("2.0"),
+    template: z.object({
+        outputs: z.tuple([z.object({
+            textCard: z.object({
+                title: z.string().trim().min(1).max(400),
+                description: z.string().trim().min(1).max(400),
+                buttons: z.tuple([z.object({ action: z.literal("operator"), label: z.string().min(1).max(14) }).strict()]),
+            }).strict().refine(card => card.title.length + card.description.length <= 400, "textCard budget exceeded"),
+        }).strict()]),
+    }).strict(),
+}).strict();
