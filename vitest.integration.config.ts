@@ -10,6 +10,6 @@ if (process.env.VERCEL_ENV) throw new Error("UX_INTEGRATION_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
 export default defineConfig({ resolve: unitConfig.resolve, test: {
   ...unitConfig.test,
-  include: ["tests/integration/accounts/**/*.test.ts", "tests/integration/admin/**/*.test.ts", "tests/integration/reservation-applications/**/*.test.ts"],
+  include: ["tests/integration/accounts/**/*.test.ts", "tests/integration/admin/**/*.test.ts", "tests/integration/reservation-applications/**/*.test.ts", "tests/integration/ai-service/**/*.test.ts"],
   fileParallelism: false,
 } });
