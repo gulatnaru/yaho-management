@@ -60,7 +60,7 @@ export async function syntheticSkillResponse(request: Request, secret: string | 
         status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
     });
     if (!secret || secret.length < 32 || secret.length > 256) return response(503);
-    try { authenticateSkill(request.headers, secret); }
+    try { authenticateSkill(request.headers, { prod: secret }, "PREVIEW"); }
     catch { return response(401); }
     try {
         if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json")

@@ -106,5 +106,22 @@ describe("isolated Skill flow", () => {
         expect(() => parseSkill(JSON.stringify(body), "synthetic-bot")).toThrow();
         expect(() => parseSkill(" ".repeat(17000), "synthetic-bot")).toThrow();
     });
-    it("doesnotacceptweak authsecret", () => expect(() => authenticateSkill(new Headers({ "x-yaho-skill-key": "x" }), "x")).toThrow());
+    it("doesnotacceptweak authsecret", () => expect(() => authenticateSkill(new Headers({ "x-yaho-skill-key": "x" }), { prod: "x" }, "PREVIEW")).toThrow());
+
+    it("authenticates prod and test secrets directly, and refuses the test secret in PRODUCTION", () => {
+        const prod = "synthetic-prod-secret-0123456789abcdef";
+        const test = "synthetic-test-secret-0123456789abcdef";
+        const headersFor = (value: string | undefined) => new Headers(value === undefined ? {} : { "x-yaho-skill-key": value });
+        expect(authenticateSkill(headersFor(prod), { prod, test }, "PREVIEW")).toBe("prod");
+        expect(authenticateSkill(headersFor(test), { prod, test }, "PREVIEW")).toBe("test");
+        expect(authenticateSkill(headersFor(prod), { prod, test }, "PRODUCTION")).toBe("prod");
+        expect(() => authenticateSkill(headersFor(test), { prod, test }, "PRODUCTION")).toThrow("AI_SERVICE_DENIED");
+        // A test value equal to prod is indistinguishable from prod here (it
+        // authenticates as "prod"); the equal-value configuration is forbidden
+        // at factory level instead (F-4b), so no separate function case exists.
+        expect(() => authenticateSkill(headersFor(undefined), { prod, test }, "PREVIEW")).toThrow("AI_SERVICE_DENIED");
+        expect(() => authenticateSkill(headersFor("x".repeat(257)), { prod, test }, "PREVIEW")).toThrow("AI_SERVICE_DENIED");
+        expect(() => authenticateSkill(headersFor(prod), { prod: undefined }, "PREVIEW")).toThrow("AI_SERVICE_DENIED");
+        expect(() => authenticateSkill(headersFor(test), { prod, test: undefined }, "PREVIEW")).toThrow("AI_SERVICE_DENIED");
+    });
 });

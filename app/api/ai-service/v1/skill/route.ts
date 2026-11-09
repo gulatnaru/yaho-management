@@ -17,7 +17,7 @@ export async function POST(request: Request) {
         const environment = environmentSchema.parse(process.env.VERCEL_ENV === "preview" ? "PREVIEW" : process.env.VERCEL_ENV === "production" ? "PRODUCTION" : null);
         const raw = await request.text();
         const secret = process.env.AI_SERVICE_SKILL_SECRET;
-        authenticateSkill(request.headers, secret);
+        authenticateSkill(request.headers, { prod: secret, test: process.env.AI_SERVICE_SKILL_TEST_SECRET }, environment);
         const parsed: unknown = JSON.parse(raw);
         const asRecord = (v: unknown): Record<string, unknown> => typeof v === "object" && v !== null ? v as Record<string, unknown> : {};
         const asString = (v: unknown): string => typeof v === "string" ? v : "";

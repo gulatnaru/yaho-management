@@ -90,6 +90,20 @@ describe("live factory (stubbed fetch only, no live OpenAI call)", () => {
         expect(() => createLiveDependencies({ env: liveEnv({ AI_SERVICE_SKILL_SECRET: "x".repeat(31) }), db: f.db, environment: "PREVIEW", botId })).toThrow("AI_SERVICE_DENIED");
     });
 
+    it("F-4b rejects a weak or prod-equal test secret, and treats an absent test secret as unset", () => {
+        const f = fakeDb();
+        expect(() => createLiveDependencies({ env: liveEnv({ AI_SERVICE_SKILL_TEST_SECRET: "x".repeat(31) }), db: f.db, environment: "PREVIEW", botId })).toThrow("AI_SERVICE_DENIED");
+        expect(() => createLiveDependencies({ env: liveEnv({ AI_SERVICE_SKILL_TEST_SECRET: "x".repeat(257) }), db: f.db, environment: "PREVIEW", botId })).toThrow("AI_SERVICE_DENIED");
+        expect(() => createLiveDependencies({ env: liveEnv({ AI_SERVICE_SKILL_TEST_SECRET: secret }), db: f.db, environment: "PREVIEW", botId })).toThrow("AI_SERVICE_DENIED");
+    });
+
+    it("F-6 carries the test secret in deps when set, and undefined when absent or empty", () => {
+        const f = fakeDb();
+        expect(createLiveDependencies({ env: liveEnv(), db: f.db, environment: "PREVIEW", botId }).testSecret).toBeUndefined();
+        expect(createLiveDependencies({ env: liveEnv({ AI_SERVICE_SKILL_TEST_SECRET: "" }), db: f.db, environment: "PREVIEW", botId }).testSecret).toBeUndefined();
+        expect(createLiveDependencies({ env: liveEnv({ AI_SERVICE_SKILL_TEST_SECRET: "synthetic-test-secret-0123456789abcdef" }), db: f.db, environment: "PREVIEW", botId }).testSecret).toBe("synthetic-test-secret-0123456789abcdef");
+    });
+
     it("F-5 rejects a wrong Skill header before body, DB, or provider processing", async () => {
         const context = syntheticContext();
         seedConfig(context.fake);

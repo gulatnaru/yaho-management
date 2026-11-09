@@ -11,7 +11,10 @@ export type Dependencies = {
     db: Database;
     environment: Environment;
     keys: Keys;
+    /** Operational Skill secret (AI_SERVICE_SKILL_SECRET). */
     secret: string;
+    /** Console test-header secret (AI_SERVICE_SKILL_TEST_SECRET). Accepted only in PREVIEW. */
+    testSecret?: string;
     botId: string;
     provider: (id: string, model: string) => LlmProvider;
     tools: Tools;
@@ -39,7 +42,7 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         }
     }
     try {
-        authenticateSkill(headers, deps.secret);
+        authenticateSkill(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment);
         const input = parseSkill(raw, deps.botId);
         if (!/^[A-Za-z0-9_-]{16,128}$/.test(stableRequestId))
             throw new ServiceDenied();
