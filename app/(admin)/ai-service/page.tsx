@@ -6,6 +6,7 @@ import Link from "next/link";
 import { adminContext } from "@/server/ai-service/admin-context";
 import { readState } from "@/server/ai-service/admin";
 import { saveConfigAction, saveGuidanceAction, savePublicationAction, reconcileAction, retryRetentionAction } from "./actions";
+import { ConsultationDeleteForm } from "./_components/consultation-delete-form";
 export const dynamic = "force-dynamic";
 const input = "rounded border px-3 py-2 w-full";
 const button = "rounded bg-slate-800 px-3 py-2 text-white";
@@ -91,6 +92,10 @@ export default async function AiServicePage() {
    <p>삭제 감사 기록: {state.monitoring.auditCount}건 · 가장 오래된 기록 (UTC): {state.monitoring.auditOldestCreatedAt?.toISOString() ?? "없음"}</p>
    <p>작업: {state.retention?.status ?? "미실행"} · 누적 삭제 {state.retention?.deletedCount ?? 0}건</p>
    <form action={retryRetentionAction}><Button className={button}>삭제 작업 재시도</Button></form>
+  </section>
+  <section className="rounded border p-4"><h2 className="font-bold">개별 삭제</h2>
+   <p>카카오 사용자 ID로 해당 이용자의 상담 기록을 조회한 뒤 단건 또는 일괄로 삭제합니다. 원문·해시는 화면에 표시하지 않으며, 조회한 ID는 서버에 저장하지 않습니다.</p>
+   <ConsultationDeleteForm />
   </section>
   <section className="rounded border p-4"><h2 className="font-bold">유효 상담 기록</h2>
    {state.consultations.length === 0 ? <p>조회 가능한 상담이 없습니다.</p> : <ul>{state.consultations.map(c => <li key={c.id}><Link className="underline" href={"/ai-service/" + c.id}>{c.createdAt.toISOString()} · {c.status}</Link></li>)}</ul>}

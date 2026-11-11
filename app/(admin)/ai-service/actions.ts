@@ -2,7 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { adminContext } from "@/server/ai-service/admin-context";
-import { saveConfig, saveGuidance, savePublication } from "@/server/ai-service/admin";
+import { saveConfig, saveGuidance, savePublication, findConsultationsBySubject, deleteConsultation } from "@/server/ai-service/admin";
 import { reconcileMonth } from "@/server/ai-service/ledger";
 import { retryRetention } from "@/server/ai-service/retention";
 import { parse, ServiceDenied } from "@/server/ai-service/contracts";
@@ -47,3 +47,40 @@ export async function reconcileAction(form: FormData) {
     });
 }
 export async function retryRetentionAction() { await action(async () => { const c = await adminContext(); await retryRetention(c.db, c.environment, c.actor, new Date()); }); }
+
+export type ConsultationLookupState = {
+    rows?: { id: string; status: string; createdAt: string; expiresAt: string; category: string | null }[];
+    deleted?: { deletedCount: number; remainingCount: number };
+    formError?: string;
+};
+
+/**
+ * Individual-delete lookup + delete actions (OQ-12 P0-B). These return a
+ * state object instead of the void action() wrapper above: the lookup must
+ * return rows to the client component, and a thrown error cannot carry them.
+ * The security properties are the same — failures return only the fixed
+ * "AI_SERVICE_DENIED" string, and the subject ID is never logged, stored,
+ * or put in a cookie (it travels only as a form field the ADMIN resubmits).
+ */
+export async function lookupConsultationsBySubjectAction(_previousState: ConsultationLookupState, form: FormData): Promise<ConsultationLookupState> {
+    try {
+        const c = await adminContext(), v = values(form);
+        const subjectUserId = parse(z.string().min(1).max(128), v.subjectUserId);
+        const rows = await findConsultationsBySubject(c.db, c.environment, c.actor, c.keys, subjectUserId);
+        return { rows: rows.map((r) => ({ id: r.id, status: r.status, createdAt: r.createdAt.toISOString(), expiresAt: r.expiresAt.toISOString(), category: r.category ?? null })) };
+    } catch {
+        return { formError: "AI_SERVICE_DENIED" };
+    }
+}
+export async function deleteConsultationAction(_previousState: ConsultationLookupState, form: FormData): Promise<ConsultationLookupState> {
+    try {
+        const c = await adminContext(), v = values(form);
+        const deleted = await deleteConsultation(c.db, c.environment, c.actor, c.keys, {
+            subjectUserId: v.subjectUserId, scope: v.scope, requestId: v.requestId ? String(v.requestId) : undefined, reasonCode: v.reasonCode,
+        });
+        revalidatePath("/ai-service");
+        return { deleted };
+    } catch {
+        return { formError: "AI_SERVICE_DENIED" };
+    }
+}

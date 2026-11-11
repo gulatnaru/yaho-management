@@ -3,7 +3,7 @@ import { z } from "zod";
 import { assertAdmin, parse, configSchema, publicationSchema, guidanceSchema, ServiceDenied, type Actor, type Environment } from "./contracts";
 import { transaction, type Database } from "./repository";
 import { safePublicText } from "./tools";
-import { decrypt, type Keys } from "./crypto";
+import { decrypt, hashes, type Keys } from "./crypto";
 import { RETENTION_CADENCE } from "./retention";
 export async function saveConfig(db: Database, environment: Environment, actor: Actor, value: unknown, now: Date) {
     assertAdmin(actor);
@@ -120,5 +120,74 @@ export async function readConsultation(db: Database, environment: Environment, a
     const value = decrypt(keys, { id: row.id, environment, createdAt: row.createdAt, expiresAt: row.expiresAt }, row.rawCiphertext, clock);
     if (row.expiresAt <= clock())
         throw new ServiceDenied();
+    // R6 read audit (OQ-P0-10 (b)): record the original-text read in a separate
+    // transaction. If the audit write fails the read is refused (fail-closed):
+    // no original text is ever returned without an audit row. Failed, expired,
+    // or nonexistent reads leave no audit row because no read took place.
+    await transaction(db, environment, (tx) => tx.aiServiceDeletionAudit.create({ data: { environment, kind: "READ_CONSULTATION", requestId: row.id, actorId: actor.userId, reasonCode: "ADMIN_READ", scope: "READ" } }));
     return value;
+}
+
+/** Metadata-only lookup of one subject's consultations. The subject hash is computed in memory only and never stored or logged; the returned rows carry no ciphertext and no hash. */
+export async function findConsultationsBySubject(db: Database, environment: Environment, actor: Actor, keys: Keys, subjectUserId: unknown) {
+    assertAdmin(actor);
+    const subject = parse(z.string().min(1).max(128), subjectUserId);
+    const subjectHashes = hashes(keys, "subject", environment, subject);
+    return transaction(db, environment, (tx) => tx.aiServiceRequest.findMany({
+        where: { environment, subjectHashes: { hasSome: subjectHashes } },
+        select: { id: true, status: true, createdAt: true, expiresAt: true, category: true },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+    }));
+}
+
+const deleteConsultationInput = z.object({
+    subjectUserId: z.string().min(1).max(128),
+    scope: z.enum(["SINGLE", "BULK"]),
+    requestId: z.string().uuid().optional(),
+    reasonCode: z.enum(["USER_REQUEST", "ADMIN_REVIEW"]),
+});
+
+/**
+ * Individual delete (OQ-P0-3 (a), OQ-P0-8 (c)). SINGLE deletes one row by UUID,
+ * BULK deletes up to 100 rows of one subject. The subject hash is computed in
+ * memory and cross-checked inside the transaction: a missing row and an
+ * unauthorized row fail with the identical fixed error, so existence is never
+ * disclosed. PROCESSING rows release their reservedKrw from the budget month
+ * (same decrement as the recoverInTransaction FAILED path); SETTLED, UNKNOWN,
+ * and FAILED rows change no budget. Each deleted row writes one audit row
+ * (request UUID + actor + reason code + scope only). Quota-bucket aliases are
+ * left alone: they expire within 2 hours on their own.
+ */
+export async function deleteConsultation(db: Database, environment: Environment, actor: Actor, keys: Keys, input: unknown) {
+    assertAdmin(actor);
+    const parsed = parse(deleteConsultationInput, input);
+    if (parsed.scope === "SINGLE" && !parsed.requestId)
+        throw new ServiceDenied();
+    if (parsed.scope === "BULK" && parsed.requestId)
+        throw new ServiceDenied();
+    const subjectHashes = hashes(keys, "subject", environment, parsed.subjectUserId);
+    return transaction(db, environment, async (tx) => {
+        let targets: { id: string; status: string; month: string; reservedKrw: number; subjectHashes: string[] }[];
+        if (parsed.scope === "SINGLE") {
+            const row = await tx.aiServiceRequest.findFirst({ where: { id: parsed.requestId as string, environment } });
+            targets = row && row.subjectHashes.some((h) => subjectHashes.includes(h)) ? [row] : [];
+        } else {
+            targets = await tx.aiServiceRequest.findMany({ where: { environment, subjectHashes: { hasSome: subjectHashes } }, take: 100 });
+        }
+        if (targets.length === 0)
+            throw new ServiceDenied();
+        for (const row of targets) {
+            if (row.status === "PROCESSING" && row.reservedKrw > 0) {
+                await tx.aiServiceBudgetMonth.update({ where: { environment_month: { environment, month: row.month } },
+                    data: { reservedKrw: { decrement: row.reservedKrw }, version: { increment: 1 } } });
+            }
+            await tx.aiServiceRequest.deleteMany({ where: { id: row.id, environment } });
+            await tx.aiServiceDeletionAudit.create({ data: { environment,
+                kind: parsed.scope === "SINGLE" ? "DELETE_SINGLE" : "DELETE_BULK",
+                requestId: row.id, actorId: actor.userId, reasonCode: parsed.reasonCode, scope: parsed.scope } });
+        }
+        const remainingCount = await tx.aiServiceRequest.count({ where: { environment, subjectHashes: { hasSome: subjectHashes } } });
+        return { deletedCount: targets.length, remainingCount };
+    });
 }
