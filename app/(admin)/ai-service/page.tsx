@@ -36,6 +36,7 @@ export default async function AiServicePage() {
     <input type="hidden" name="expectedVersion" value={config?.version ?? 0}/>
     <label>Provider<Select className={input} name="provider" defaultValue={config?.provider ?? "TEST_DOUBLE"}><option>TEST_DOUBLE</option><option>OPENAI</option></Select></label>
     <label>운영 중지<Select className={input} name="paused" defaultValue={(config?.paused ?? true) ? "true" : "false"}><option value="true">호출 중지</option><option value="false">호출 허용 요청 (별도 활성화 승인 필요)</option></Select></label>
+    <label>자동 삭제 스케줄러<Select className={input} name="schedulerEnabled" defaultValue={(config?.schedulerEnabled ?? false) ? "true" : "false"}><option value="false">꺼짐 (기본값)</option><option value="true">켜짐 (별도 운영 승인 필요)</option></Select></label>
     <label>모델<Input className={input} name="model" defaultValue={config?.model ?? "gpt-6-luna"} required/></label>
     <label>가격 버전<Input className={input} name="priceVersion" defaultValue={config?.priceVersion ?? ""} required/></label>
     <label>입력 단가 (nano USD/token)<Input className={input} name="inputNanoUsdPerToken" type="number" min="1" defaultValue={config?.inputNanoUsdPerToken ?? 100} required/></label>

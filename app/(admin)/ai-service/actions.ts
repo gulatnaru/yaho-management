@@ -20,6 +20,7 @@ export async function saveConfigAction(form: FormData) {
     await action(async () => {
         const c = await adminContext(), v = values(form);
         await saveConfig(c.db, c.environment, c.actor, { provider: v.provider, model: v.model, priceVersion: v.priceVersion, fxCheckedAt: v.fxCheckedAt, fxSource: v.fxSource, expectedVersion: Number(v.expectedVersion), paused: parse(z.enum(["true", "false"]), v.paused) === "true",
+            schedulerEnabled: parse(z.enum(["true", "false"]), v.schedulerEnabled) === "true",
             inputNanoUsdPerToken: Number(v.inputNanoUsdPerToken), outputNanoUsdPerToken: Number(v.outputNanoUsdPerToken),
             fxMilliKrwPerUsd: Number(v.fxMilliKrwPerUsd) }, new Date());
     });

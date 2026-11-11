@@ -24,9 +24,18 @@ describe("ADMIN synthetic server-action form mapping", () => {
         expect(f.state.aiServiceKnowledgeEntry[0].approved).toBe(true);
     });
     it("config ignores framework metadata but preserves explicitpause", async () => {
-        await saveConfigAction(form({ expectedVersion: "0", paused: "true", provider: "TEST_DOUBLE", model: "gpt-6-luna", priceVersion: "p1",
+        await saveConfigAction(form({ expectedVersion: "0", paused: "true", schedulerEnabled: "false", provider: "TEST_DOUBLE", model: "gpt-6-luna", priceVersion: "p1",
             inputNanoUsdPerToken: "100", outputNanoUsdPerToken: "500", fxMilliKrwPerUsd: "1400000", fxCheckedAt: new Date().toISOString(), fxSource: "synthetic-bank" }));
         expect(f.state.aiServiceConfig[0].paused).toBe(true);
+        expect(f.state.aiServiceConfig[0].schedulerEnabled).toBe(false);
+    });
+    it("config persists the scheduler toggle and rejects a tampered value", async () => {
+        seedConfig(f);
+        await saveConfigAction(form({ expectedVersion: "1", paused: "false", schedulerEnabled: "true", provider: "TEST_DOUBLE", model: "gpt-6-luna", priceVersion: "price-v1",
+            inputNanoUsdPerToken: "100", outputNanoUsdPerToken: "500", fxMilliKrwPerUsd: "1400000", fxCheckedAt: new Date().toISOString(), fxSource: "synthetic-bank" }));
+        expect(f.state.aiServiceConfig[0].schedulerEnabled).toBe(true);
+        await expect(saveConfigAction(form({ expectedVersion: "2", paused: "false", schedulerEnabled: "malformed" }))).rejects.toThrow("AI_SERVICE_DENIED");
+        expect(f.state.aiServiceConfig[0].version).toBe(2);
     });
     it("tampered pause is rejected before mutation", async () => {
         seedConfig(f);

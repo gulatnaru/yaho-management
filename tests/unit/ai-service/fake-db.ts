@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "@/server/ai-service/repository";
 type Row = Record<string, unknown>;
 const modelNames = ["aiServiceConfig", "aiServiceRequest", "aiServiceBudgetMonth", "aiServiceQuotaBucket", "aiServiceDailyMetric",
-    "aiServiceRetentionJob", "aiServiceKeyPin", "aiServiceReconciliation", "aiServiceProgramPublication", "aiServiceClassPublication", "aiServiceKnowledgeEntry", "program", "classSchedule"] as const;
+    "aiServiceRetentionJob", "aiServiceKeyPin", "aiServiceReconciliation", "aiServiceDeletionAudit", "aiServiceProgramPublication", "aiServiceClassPublication", "aiServiceKnowledgeEntry", "program", "classSchedule"] as const;
 function matches(row: Row, where: Row = {}): boolean {
     return Object.entries(where).every(([key, value]) => {
         if (key === "OR")
@@ -147,6 +147,6 @@ export function fakeDb() {
 }
 export const now = new Date("2026-10-15T00:00:00Z");
 export function seedConfig(fake: ReturnType<typeof fakeDb>, environment = "PREVIEW") {
-    fake.seed("aiServiceConfig", { environment, paused: false, provider: "TEST_DOUBLE", model: "gpt-6-luna", priceVersion: "price-v1", version: 1,
+    fake.seed("aiServiceConfig", { environment, paused: false, schedulerEnabled: false, provider: "TEST_DOUBLE", model: "gpt-6-luna", priceVersion: "price-v1", version: 1,
         inputNanoUsdPerToken: 100, outputNanoUsdPerToken: 500, fxMilliKrwPerUsd: 1400000, fxCheckedAt: now, fxSource: "synthetic-bank", updatedById: "synthetic-admin" });
 }

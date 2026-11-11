@@ -1370,6 +1370,7 @@ model AiRetentionJob {
 model AiServiceConfig {
   environment String @id
   paused Boolean @default(true)
+  schedulerEnabled Boolean @default(false)
   provider String @default("TEST_DOUBLE")
   model String @default("gpt-6-luna")
   priceVersion String
@@ -1382,6 +1383,18 @@ model AiServiceConfig {
   version Int @default(1)
   updatedById String
   updatedAt DateTime @updatedAt
+}
+model AiServiceDeletionAudit {
+  id String @id @default(cuid())
+  environment String
+  kind String
+  requestId String
+  actorId String
+  reasonCode String
+  scope String
+  createdAt DateTime @default(now())
+  @@index([environment, createdAt])
+  @@index([environment, requestId])
 }
 model AiServiceProgramPublication {
   id String @id @default(cuid())
