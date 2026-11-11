@@ -62,6 +62,32 @@ const introduction = /종류|목록|소개|설명|이름/;
 const queryWords = ["비오는경우", "확인하고싶어요", "참여할수있는", "확인할수있을까요", "볼수있을까요", "신청할수있나요", "참여가능한", "가능한상태인지", "어떤프로그램인가요", "어떻게되나요", "무엇인가요", "어떻게진행되나요", "진행하나요", "알려주세요", "안내해주세요", "보여주세요", "소개해주세요", "부탁드립니다", "부탁드려요", "부탁해요", "궁금합니다", "궁금해요", "확인해주세요", "보고싶습니다", "보고싶어요", "알고싶습니다", "읽고싶습니다", "열리는지", "열리나요", "시작해요", "필요한가요", "준비하면되나요", "있을때", "오면", "내리는날의", "오는경우", "날씨가", "날의", "마감인가요", "마감인지", "가능한가요", "가능한지", "상태인가요", "중인가요", "있나요", "있을까요", "진행하는", "처음방문하는데", "처음참여할때", "참여전에", "참여전", "갈때", "챙길물건", "안내받는지", "어떻게", "어떤", "무엇이", "가능한", "공개된", "공개승인된", "승인된", "공식", "전체", "일반", "현재", "지금", "이번에", "간단히", "체험", "클래스", "수업", "야외", "야호", "숲", "프로그램별", "프로그램", "준비물", "복장", "신발", "우천", "비예보", "비가", "비오는", "정책", "규정", "수칙", "운영", "이용", "진행", "안내문", "안내", "기준", "목록", "종류", "설명", "소개", "이름", "신청", "접수", "참여", "예약가능", "일정", "장소", "어디에서", "어디서", "어디", "언제", "시작", "종료", "시간", "준비", "확인", "가요", "인가요", "은", "는", "이", "가", "을", "를", "에", "의", "과", "와", "도", "만", "부터", "에는", "에서", "시", "전", "중", "에맞는", "에관한", "알아둘"].sort((a, b) => b.length - a.length);
 
 export type SelectionDecision = { allowed: true; call: ToolCall } | { allowed: false };
+/**
+ * Deterministic selection (OQ-12 P0-A, hybrid): enumerate every server-issued
+ * candidate call from the approved catalog, verify each with the existing
+ * authorizeSelection grammar, and return the call only when exactly one
+ * distinct call is allowed. Zero or two-or-more allowed calls mean HANDOFF
+ * (null) — the model is never consulted in the live path, so an ambiguous or
+ * partially explained utterance can never reach an external LLM. A malformed
+ * catalog also fails closed to null. The model output is never an input here.
+ */
+export function decideSelection(utterance: string, catalog: unknown): ToolCall | null {
+    try {
+        const bounded = selectionCatalog(catalog);
+        const programs = bounded.flatMap(row => row.kind === "PROGRAMS" ? row.items : []);
+        const classes = bounded.flatMap(row => row.kind === "CLASSES" ? row.items : []);
+        const candidates: ToolCall[] = [{ name: "list_public_programs", args: {} }];
+        for (const program of programs) candidates.push({ name: "list_public_classes", args: { programHandle: program.handle } });
+        candidates.push({ name: "list_public_classes", args: { programHandle: null } });
+        for (const item of classes) candidates.push({ name: "get_class_availability", args: { classHandle: item.handle } });
+        for (const topic of ["PREPARATION", "RAIN", "POLICY"] as const) candidates.push({ name: "get_approved_guidance", args: { topic } });
+        const allowed = candidates.filter(call => authorizeSelection(utterance, call, catalog).allowed);
+        const unique = [...new Map(allowed.map(call => [JSON.stringify(call), call])).values()];
+        return unique.length === 1 ? unique[0] : null;
+    } catch {
+        return null;
+    }
+}
 export function authorizeSelection(utterance: string, selected: unknown, catalog: unknown): SelectionDecision {
     try {
         const call = toolCallSchema.parse(selected), bounded = selectionCatalog(catalog);
