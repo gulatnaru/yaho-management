@@ -41,7 +41,7 @@ async function main(){
  });
  await check("independent settlement charges and metric once",async()=>{
  const row=await claimed("settle");await markDispatched(a,"PREVIEW",row.id,row.attempt,now);
- const result=await Promise.all([retry(()=>settle(a,"PREVIEW",row.id,row.attempt,{kind:"KNOWN",inputTokens:100,outputTokens:10,category:"GUIDANCE"},now)),retry(()=>settle(b,"PREVIEW",row.id,row.attempt,{kind:"KNOWN",inputTokens:100,outputTokens:10,category:"GUIDANCE"},now))]);
+ const result=await Promise.all([retry(()=>settle(a,"PREVIEW",row.id,row.attempt,{kind:"KNOWN",inputTokens:100,outputTokens:10,category:"GUIDANCE",modelCalled:true},now)),retry(()=>settle(b,"PREVIEW",row.id,row.attempt,{kind:"KNOWN",inputTokens:100,outputTokens:10,category:"GUIDANCE",modelCalled:true},now))]);
  assert.deepEqual(result.sort(),[false,true]);assert.equal((await a.aiServiceDailyMetric.findFirstOrThrow()).modelCalls,1);
  assert.equal((await a.aiServiceBudgetMonth.findFirstOrThrow()).reservedKrw,0);
  });
@@ -88,7 +88,7 @@ async function main(){
  });
  await check("expiry purge versus late settlement preserves finance",async()=>{
  const row=await claimed("expired");await markDispatched(a,"PREVIEW",row.id,row.attempt,now);const expiry=new Date(+now+RETENTION_MS);
- const outcomes=await Promise.allSettled([purgeExpired(a,"PREVIEW",expiry),settle(b,"PREVIEW",row.id,row.attempt,{kind:"KNOWN",inputTokens:100,outputTokens:10,category:"GUIDANCE"},expiry)]);
+ const outcomes=await Promise.allSettled([purgeExpired(a,"PREVIEW",expiry),settle(b,"PREVIEW",row.id,row.attempt,{kind:"KNOWN",inputTokens:100,outputTokens:10,category:"GUIDANCE",modelCalled:true},expiry)]);
  assert.ok(outcomes.every(o=>o.status==="fulfilled"));assert.equal(await a.aiServiceRequest.count({where:{id:row.id}}),0);
  const budget=await a.aiServiceBudgetMonth.findUniqueOrThrow({where:{environment_month:{environment:"PREVIEW",month:monthKst(now)}}});
  assert.ok((budget.reservedKrw===2&&budget.usedKrw===0&&budget.unknownCount===1)||(budget.reservedKrw===0&&budget.usedKrw===1&&budget.unknownCount===0));assert.equal(await a.aiServiceKeyPin.count(),1);assert.equal(await a.aiServiceReconciliation.count(),1);

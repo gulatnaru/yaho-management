@@ -3,12 +3,10 @@ import { programDigest } from "@/server/ai-service/publication-digest";
 import { safePublicText, createTools, groundedReply } from "@/server/ai-service/tools";
 import { saveGuidance, savePublication } from "@/server/ai-service/admin";
 import { openAiProvider } from "@/server/ai-service/provider";
-import { handleSkill, type Dependencies } from "@/server/ai-service/handler";
-import { billingContract, validatedBillingUsage } from "@/server/ai-service/billing";
+import { billingContract, validatedBillingUsage, type BillingUsage } from "@/server/ai-service/billing";
 import { conservativeKrw, reserveKrw, type Price } from "@/server/ai-service/cost";
-import { claim } from "@/server/ai-service/ledger";
+import { claim, markDispatched, settle } from "@/server/ai-service/ledger";
 import { hashes, hmacPins, type Keys } from "@/server/ai-service/crypto";
-import { HANDOFF } from "@/server/ai-service/contracts";
 import { fakeDb, seedConfig, now } from "./fake-db";
 const actor = { userId: "synthetic-admin", role: "ADMIN", active: true };
 const unsafe = [
@@ -51,37 +49,43 @@ describe("Review1-M1 numeric free text fails closed", () => {
     });
 });
 function keys(): Keys { return { encryption: { v1: Buffer.alloc(32, 1) }, hmac: { v1: Buffer.alloc(32, 2) }, activeEncryption: "v1", activeHmac: "v1" }; }
-const secret = "synthetic-unit-secret-0123456789abcdef";
-const raw = JSON.stringify({ bot: { id: "synthetic-bot" }, userRequest: { utterance: "야호 준비물을 알려 주세요", user: { id: "synthetic-guardian" } }, action: { id: "synthetic-action", name: "synthetic" } });
 function response(usage: unknown, extra: Record<string, unknown> = {}) {
     return { status: "completed", output: [{ type: "function_call", name: "get_approved_guidance", arguments: JSON.stringify({ topic: "PREPARATION" }) }], usage, ...extra };
 }
-async function runResponse(body: unknown) {
+/** Ledger-level settlement of a model call (OQ-12 P0-A): the handler no longer
+ * calls a model, so premium-usage billing is verified by settling a claimed
+ * row directly with modelCalled true. The provider boundary (invalid usage /
+ * unsupported tier) is verified separately through openAiProvider.classify. */
+async function runSettlement(usage: BillingUsage) {
     const f = fakeDb();
     seedConfig(f);
     f.state.aiServiceConfig[0].provider = "OPENAI";
-    await saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content: "합성 준비물은 모자입니다.", approved: true, expectedVersion: 0 });
-    const transport = vi.fn(async (_body: unknown, _signal: AbortSignal) => { void _body; void _signal; return body; }), provider = openAiProvider("gpt-6-luna", transport);
-    const deps: Dependencies = { db: f.db, environment: "PREVIEW", keys: keys(), secret, botId: "synthetic-bot", provider: () => provider, tools: createTools(f.db, "PREVIEW", () => now), clock: () => now };
-    const result = await handleSkill(new Headers({ "x-yaho-skill-key": secret }), raw, "synthetic-request-0001", deps);
-    return { f, result, deps, transport };
+    const k = keys();
+    const c = await claim(f.db, { environment: "PREVIEW", now, hmacPins: hmacPins(k, "PREVIEW"),
+        requestHashes: hashes(k, "request", "PREVIEW", "synthetic-request-0001"),
+        payloadHashes: hashes(k, "payload", "PREVIEW", "synthetic"),
+        subjectHashes: hashes(k, "subject", "PREVIEW", "synthetic") });
+    if (c.kind !== "CLAIMED") throw new Error("claim failed");
+    await markDispatched(f.db, "PREVIEW", c.row.id, 1, now);
+    await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+        billingUsage: usage, category: "GUIDANCE", modelCalled: true }, now);
+    return { f };
 }
 const price: Price = { ...billingContract("OPENAI", "gpt-6-luna"), inputNanoUsdPerToken: 100, outputNanoUsdPerToken: 500, fxMilliKrwPerUsd: 1400000, fxCheckedAt: now, priceVersion: "synthetic-v1" };
 describe("Review1-M2 premium usage is charged or held", () => {
     it("settles full cache-write counterexample at2KRW and stores only numeric details", async () => {
-        const { f, transport } = await runResponse(response({ input_tokens: 4000, output_tokens: 200, total_tokens: 4200, input_tokens_details: { cache_write_tokens: 4000, cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 20 } }));
+        const { f } = await runSettlement({ inputTokens: 4000, outputTokens: 200, totalTokens: 4200, cacheWriteTokens: 4000, cachedInputTokens: 0, reasoningOutputTokens: 20 });
         expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "SETTLED", usedKrw: 2, billingUsage: { inputTokens: 4000, outputTokens: 200, totalTokens: 4200, cacheWriteTokens: 4000, cachedInputTokens: 0, reasoningOutputTokens: 20 } });
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 2, reservedKrw: 0, unknownCount: 0 });
         expect(Object.values(f.state.aiServiceRequest[0].billingUsage as object).every(v => typeof v === "number")).toBe(true);
         expect(f.state.aiServiceRequest[0].priceSnapshot).toMatchObject({ billingContract: "OPENAI_STANDARD_INPUT_MAX_V1", inputCostNumerator: 5, inputCostDenominator: 4 });
-        expect(transport.mock.calls[0][0]).toMatchObject({ service_tier: "default", store: false, parallel_tool_calls: false });
     });
     it.each([
-        { input_tokens: 4000, output_tokens: 200, input_tokens_details: { cached_tokens: 2000, cache_write_tokens: 1000 } },
-        { input_tokens: 4000, output_tokens: 200 },
-        { input_tokens: 4000, output_tokens: 200, input_tokens_details: {} },
+        { inputTokens: 4000, outputTokens: 200, cachedInputTokens: 2000, cacheWriteTokens: 1000 },
+        { inputTokens: 4000, outputTokens: 200 },
+        { inputTokens: 4000, outputTokens: 200 },
     ])("charges maximum input without assumed cache discounts %#", async (usage) => {
-        const { f } = await runResponse(response(usage));
+        const { f } = await runSettlement(usage);
         expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "SETTLED", usedKrw: 2 });
         expect(f.state.aiServiceBudgetMonth[0].reservedKrw).toBe(0);
     });
@@ -98,19 +102,14 @@ describe("Review1-M2 premium usage is charged or held", () => {
         { input_tokens: 4000 },
         null,
     ];
-    it.each(invalid)("preserves UNKNOWN hold for invalid/missing/unknown billing metadata %#", async (usage) => {
-        const { f, result, deps } = await runResponse(response(usage));
-        expect(result.template.outputs[0].simpleText.text).toBe(HANDOFF);
-        expect(f.state.aiServiceRequest[0].status).toBe("UNKNOWN");
-        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 2, unknownCount: 1 });
-        expect(f.state.aiServiceDailyMetric).toHaveLength(0);
-        await handleSkill(new Headers({ "x-yaho-skill-key": secret }), raw, "synthetic-request-0002", deps);
-        expect(f.state.aiServiceRequest).toHaveLength(1);
+    it.each(invalid)("rejects invalid/missing/unknown billing metadata at the provider boundary %#", async (usage) => {
+        const transport = vi.fn(async () => response(usage));
+        await expect(openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [] })).rejects.toThrow();
+        expect(transport).toHaveBeenCalledTimes(1);
     });
-    it("unsupported service tier retains cost rather than settling standardprice", async () => {
-        const { f } = await runResponse(response({ input_tokens: 4000, output_tokens: 200 }, { service_tier: "priority" }));
-        expect(f.state.aiServiceRequest[0].status).toBe("UNKNOWN");
-        expect(f.state.aiServiceBudgetMonth[0].reservedKrw).toBe(2);
+    it("unsupported service tier is rejected at the provider boundary rather than settling standard price", async () => {
+        const transport = vi.fn(async () => response({ input_tokens: 4000, output_tokens: 200 }, { service_tier: "priority" }));
+        await expect(openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [] })).rejects.toThrow();
     });
     it("reserve and settlement share immutable premium and reject unregistered contracts", () => {
         expect(conservativeKrw(price, 4000, 200)).toBe(2);

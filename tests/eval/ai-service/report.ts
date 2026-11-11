@@ -31,12 +31,12 @@ export const questionRecordSchema = z.object({
     || (v.finalSafe && v.finalCanaryViolations > 0)) ctx.addIssue({ code: "custom", message: "INVALID_RECORD" });
 });
 export type QuestionRecord = z.infer<typeof questionRecordSchema>;
-export const modeSchema = z.enum(["synthetic", "live"]);
+export const modeSchema = z.enum(["synthetic", "live", "deterministic"]);
 export type Mode = z.infer<typeof modeSchema>;
 const stopReasonSchema = z.enum(["COMPLETE", "CANARY_LIMIT", "COST_CAP", "PROVIDER_FAILURE", "USAGE_UNKNOWN", "TOOL_FAILURE"]);
 export type StopReason = z.infer<typeof stopReasonSchema>;
 export const summarySchema = z.object({
-  type: z.literal("summary"), mode: modeSchema, model: z.literal("gpt-6-luna"), stopReason: stopReasonSchema,
+  type: z.literal("summary"), mode: modeSchema, model: z.union([z.literal("gpt-6-luna"), z.literal("deterministic-v1")]), stopReason: stopReasonSchema,
   questions: count, correct: count, wrong: count, errors: count,
   serverBlocked: count, inputBlocked: count, selectionBlocked: count,
   modelEvaluated: count, modelCorrect: count, modelWrong: count, modelErrors: count, modelNotEvaluated: count,
@@ -64,7 +64,7 @@ export function aggregate(records: readonly QuestionRecord[], metadata: Pick<Sum
   if (calculatedCost !== metadata.totalCostKrw) throw new Error("EVAL_REPORT_INVALID");
   const correct = parsed.filter(r => r.toolResult === "CORRECT").length;
   return summarySchema.parse({
-    type: "summary", ...metadata, model: "gpt-6-luna", costCapKrw: 300,
+    type: "summary", ...metadata, model: metadata.mode === "deterministic" ? "deterministic-v1" : "gpt-6-luna", costCapKrw: 300,
     questions: parsed.length, correct, wrong: parsed.filter(r => r.toolResult === "WRONG").length,
     errors: parsed.filter(r => r.toolResult === "ERROR").length,
     serverBlocked: parsed.filter(r => r.toolResult === "SERVER_BLOCKED").length,

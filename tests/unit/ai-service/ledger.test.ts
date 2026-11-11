@@ -49,16 +49,23 @@ describe("Prisma repository contracts (serialized doubles, NOT PostgreSQL proof)
     it("settlement duplicate increments spend andmetriconce", async () => {
         const { f, c } = await setup();
         await markDispatched(f.db, "PREVIEW", c.row.id, 1, now);
-        const result = { kind: "KNOWN" as const, inputTokens: 100, outputTokens: 20, category: "GUIDANCE" };
+        const result = { kind: "KNOWN" as const, inputTokens: 100, outputTokens: 20, category: "GUIDANCE", modelCalled: true };
         const rows = await Promise.all([settle(f.db, "PREVIEW", c.row.id, 1, result, now), settle(f.db, "PREVIEW", c.row.id, 1, result, now)]);
         expect(rows.sort()).toEqual([false, true]);
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 1, reservedKrw: 0 });
         expect(f.state.aiServiceDailyMetric[0].count).toBe(1);
     });
+    it("deterministic 0-token settle records no model call", async () => {
+        const { f, c } = await setup();
+        await markDispatched(f.db, "PREVIEW", c.row.id, 1, now);
+        await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 0, outputTokens: 0, category: "GUIDANCE", modelCalled: false }, now);
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0, unknownCount: 0 });
+        expect(f.state.aiServiceDailyMetric[0]).toMatchObject({ count: 1, modelCalls: 0, usedKrw: 0 });
+    });
     it("truthfullyhighercostsettlesabove cap andblocks nextclaim", async () => {
         const { f, c } = await setup();
         await markDispatched(f.db, "PREVIEW", c.row.id, 1, now);
-        await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 10000000, outputTokens: 10000000, category: "HUMAN_HANDOFF" }, now);
+        await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 10000000, outputTokens: 10000000, category: "HUMAN_HANDOFF", modelCalled: true }, now);
         expect(Number(f.state.aiServiceBudgetMonth[0].usedKrw)).toBeGreaterThan(1000);
         await expect(claim(f.db, input("d"))).rejects.toThrow();
     });
@@ -107,7 +114,7 @@ describe("Prisma repository contracts (serialized doubles, NOT PostgreSQL proof)
         await expect(claim(f.db, input("d", new Date(+now + 4000)))).rejects.toThrow();
         // Recovery is committed before admission rejection; late completion cannot undo the hold.
         expect(f.state.aiServiceRequest[0].status).toBe("UNKNOWN");
-        expect(await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 1, outputTokens: 1, category: "GUIDANCE" }, now)).toBe(false);
+        expect(await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 1, outputTokens: 1, category: "GUIDANCE", modelCalled: true }, now)).toBe(false);
     });
     it("invoicepositivecorrection and version preventreopening spentbudget", async () => {
         const { f, c } = await setup();

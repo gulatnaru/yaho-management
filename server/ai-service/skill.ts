@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HANDOFF, ServiceDenied, skillHandoffCard, skillReply, skillSchema } from "./contracts";
+import { HANDOFF, ServiceDenied, healthKeywordPattern, skillHandoffCard, skillReply, skillSchema } from "./contracts";
 import { handleSkill, type Dependencies } from "./handler";
 import { authenticateSkill } from "./transport";
 
@@ -11,6 +11,16 @@ const piiFormats = [
     /\d{6}[-\s]?\d{7}/,
     /(?:0\d{1,2}|\+82[-.\s]?\d{1,2})[-.\s]?\d{3,4}[-.\s]?\d{4}/,
     /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i,
+    healthKeywordPattern,
+    // Birthdates need a birth-context word: a bare year date ("2026년 10월 18일")
+    // is an ordinary schedule expression and must keep passing (recorded
+    // regression: "야호 2026년 10월 18일 일정 준비물을 알려 주세요").
+    // Residual year dates are still caught by layer 3 (decideSelection
+    // rejects unexplained text), and "생년월일" is gated in the handler.
+    // (PLAN §1.1 (i) narrowed — see BUILD report DEVIATION-1.)
+    /(생년월일|생일|출생|태어난)[^\d]{0,8}(19|20)\d{2}[-./년\s]?\d{1,2}[-./월\s]?\d{1,2}/,
+    /(19|20)\d{2}년\s?\d{1,2}월\s?\d{1,2}일\s?생/,
+    /(19|20)\d{2}년생/,
 ];
 const requestSchema = skillSchema.extend({
     // Kakao real Skill requests carry no top-level `version` (it is a response-only

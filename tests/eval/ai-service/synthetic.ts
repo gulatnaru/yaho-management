@@ -90,13 +90,13 @@ export function syntheticContext() {
 }
 
 /** A fresh ledger per question prevents synthetic quota/replay state from biasing intent scores. */
-export function syntheticHandlerDependencies(context: ReturnType<typeof syntheticContext>, provider: Dependencies["provider"]): Dependencies {
+export function syntheticHandlerDependencies(context: ReturnType<typeof syntheticContext>): Dependencies {
   seedConfig(context.fake);
   Object.assign(context.fake.state.aiServiceConfig[0], {
     ...EVAL_PRICE, fxCheckedAt: now, model: MODEL,
   });
   return {
-    db: context.fake.db, environment: "PREVIEW", provider, tools: context.tools, clock: () => now,
+    db: context.fake.db, environment: "PREVIEW", tools: context.tools, clock: () => now,
     secret: "synthetic-evaluation-handler-secret-0123456789", botId: "synthetic-eval-bot",
     keys: { encryption: { v1: randomBytes(32) }, hmac: { v1: randomBytes(32) }, activeEncryption: "v1", activeHmac: "v1" },
   };

@@ -39,7 +39,17 @@ export const configSchema = z.object({
     outputNanoUsdPerToken: z.number().int().positive().max(1000000),
     fxMilliKrwPerUsd: z.number().int().min(100000).max(10000000),
     fxCheckedAt: z.coerce.date(), fxSource: z.string().trim().min(1).max(120),
+    /** Auto-delete scheduler switch (OQ-12 P0-B, P-1). Default false: code may be
+     * deployed/merged while the scheduler stays off; activation is a separate
+     * operational approval executed by an ADMIN toggling this flag. */
+    schedulerEnabled: z.boolean().default(false),
 }).strict();
+/** Health/allergy vocabulary shared by the Skill PII filter and the handler
+ * keyword gate (OQ-12 P0-A, layer 1 + layer 2). One source so the two layers
+ * cannot drift apart. A match means HANDOFF, never a model call. Names and
+ * addresses cannot be pattern-matched, so layer 3 (residual text) is the
+ * final defense for those. */
+export const healthKeywordPattern = /알레르기|아토피|천식|질환|복용|처방|장애|발달|진단|수술|병원|약물|증상|아픈|아파/;
 export type ConfigInput = z.infer<typeof configSchema>;
 export const publicationSchema = z.object({ kind: z.enum(["PROGRAM", "CLASS"]), id: safeId,
     enabled: z.boolean(), expectedVersion: z.number().int().nonnegative() }).strict();

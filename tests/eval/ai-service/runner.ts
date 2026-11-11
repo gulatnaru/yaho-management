@@ -125,7 +125,16 @@ export async function runEvaluation(input: Options, dependencies: Dependencies =
     // Reserve the maximum bounded request BEFORE dispatch, not merely the last actual usage.
     if (mode === "live" && totalCostKrw + MAX_REQUEST_KRW > COST_CAP_KRW) { stopReason = "COST_CAP"; break; }
     const observation: Observation = { violations: new Set(), semanticValid: true };
-    const provider = mode === "synthetic" ? dependencies.syntheticProvider?.(fixture.question) ?? testProvider({ call: scriptedCall(fixture.question), usage: { inputTokens: 0, outputTokens: 0 } })
+    // OQ-12 P0-A: the live path no longer calls a model, so the model is
+    // evaluated OUTSIDE handleSkill and the handler runs deterministically in
+    // every mode. The model evaluation runs only when the handler actually
+    // dispatched (ledger row with dispatched=true): the old live path never
+    // consulted the model for INPUT_BLOCKED fixtures, and the record schema
+    // requires NOT_EVALUATED + null usage + null tool for those. Evaluating
+    // the model unconditionally would break that contract and charge live
+    // cost for inputs the handler already rejected.
+    const provider = mode === "deterministic" ? undefined
+      : mode === "synthetic" ? dependencies.syntheticProvider?.(fixture.question) ?? testProvider({ call: scriptedCall(fixture.question), usage: { inputTokens: 0, outputTokens: 0 } })
       : openAiProvider(MODEL, async (body, requestSignal) => {
         const raw: unknown = await transport!(body, requestSignal);
         inspectRaw(raw, fixture, observation);
@@ -142,31 +151,18 @@ export async function runEvaluation(input: Options, dependencies: Dependencies =
     let fatal: StopReason | undefined;
     try {
       const context = (dependencies.context ?? syntheticContext)();
-      const deps = syntheticHandlerDependencies(context, () => ({
-        // The fake ledger uses TEST_DOUBLE even when the injected transport models OPENAI.
-        id: "TEST_DOUBLE",
-        async classify(request) {
-          modelDispatched = true;
-          try {
-            const result = await boundedClassify(provider, request.utterance, request.catalog ?? [], timeout.data, request.signal);
-            usage = validatedBillingUsage(result.usage);
-            if (mode === "live") totalCostKrw += conservativeKrw(EVAL_PRICE, usage.inputTokens, usage.outputTokens);
-            model.call = structuredClone(result.call);
-            modelCompleted = true;
-            if (!observation.semanticValid || usage.inputTokens > MAX_INPUT_TOKENS || usage.outputTokens > MAX_OUTPUT_TOKENS) {
-              fatal = "PROVIDER_FAILURE"; model.result = "ERROR";
-            } else model.result = (model.call?.name ?? null) === fixture.expectedTool && isDeepStrictEqual(model.call?.args ?? null, fixture.expectedArgs) ? "CORRECT" : "WRONG";
-            return result;
-          } catch {
-            model.result = "ERROR";
-            if (mode === "live" && usage === null) { unknownCostReserveKrw = MAX_REQUEST_KRW; fatal = "USAGE_UNKNOWN"; }
-            else fatal = "PROVIDER_FAILURE";
-            throw new Error("EVAL_PROVIDER_FAILED");
-          }
-        },
-      }));
+      const deps = syntheticHandlerDependencies(context);
+      // The handler always preloads programs then classes first, so calls
+      // after the first two are executions of the selected call (initial +
+      // freshness re-read). The model catalog for live mode is built from
+      // context.tools directly, never through this wrapper, so it cannot
+      // pollute the count.
+      const toolCalls: ToolCall[] = [];
+      let executeCount = 0;
       deps.tools = { async execute(selection, signal) {
-        if (modelCompleted) selectedReads++;
+        const index = executeCount++;
+        if (index >= 2) selectedReads++;
+        toolCalls.push(selection);
         try { return await context.tools.execute(selection, signal); }
         catch { toolFailed = true; throw new Error("EVAL_TOOL_FAILED"); }
       } };
@@ -183,6 +179,40 @@ export async function runEvaluation(input: Options, dependencies: Dependencies =
       finalCorrect = finalCategory === fixture.expectedReplyCategory;
       finalSafe = finalViolations.length === 0 && (fixture.expectedTool !== null || reply === HANDOFF);
       if (toolFailed) fatal = "TOOL_FAILURE";
+      if (ledger?.dispatched) {
+        if (mode === "deterministic") {
+          // No provider exists in this mode: the deterministic selector is
+          // the model under test, observed from the tool-call trace. The
+          // first call after the two preloads is its selection, if any.
+          modelDispatched = true;
+          modelCompleted = true;
+          model.call = toolCalls[2] === undefined ? null : structuredClone(toolCalls[2]);
+          model.result = (model.call?.name ?? null) === fixture.expectedTool && isDeepStrictEqual(model.call?.args ?? null, fixture.expectedArgs) ? "CORRECT" : "WRONG";
+        } else {
+          // The fake ledger uses TEST_DOUBLE even when the injected transport models OPENAI.
+          modelDispatched = true;
+          try {
+            // Live mode needs the real approved catalog; the synthetic
+            // provider ignores it, so no extra tool calls are spent there.
+            const catalog: ToolResult[] = mode === "live"
+              ? [await context.tools.execute({ name: "list_public_programs", args: {} }, new AbortController().signal),
+                await context.tools.execute({ name: "list_public_classes", args: { programHandle: null } }, new AbortController().signal)]
+              : [];
+            const result = await boundedClassify(provider!, fixture.question, catalog, timeout.data, new AbortController().signal);
+            usage = validatedBillingUsage(result.usage);
+            if (mode === "live") totalCostKrw += conservativeKrw(EVAL_PRICE, usage.inputTokens, usage.outputTokens);
+            model.call = structuredClone(result.call);
+            modelCompleted = true;
+            if (!observation.semanticValid || usage.inputTokens > MAX_INPUT_TOKENS || usage.outputTokens > MAX_OUTPUT_TOKENS) {
+              if (!fatal) fatal = "PROVIDER_FAILURE"; model.result = "ERROR";
+            } else model.result = (model.call?.name ?? null) === fixture.expectedTool && isDeepStrictEqual(model.call?.args ?? null, fixture.expectedArgs) ? "CORRECT" : "WRONG";
+          } catch {
+            model.result = "ERROR";
+            if (mode === "live" && usage === null) { unknownCostReserveKrw = MAX_REQUEST_KRW; if (!fatal) fatal = "USAGE_UNKNOWN"; }
+            else if (!fatal) fatal = "PROVIDER_FAILURE";
+          }
+        }
+      }
       // Evidence comes from the actual handler: preflight creates no ledger, selection denial
       // settles usage but never reaches a selected tool. A failing read is never policy credit.
       serverPolicy = fatal ? "ERROR" : !modelDispatched && !ledger && context.fake.operations.length === 0 && reply === HANDOFF ? "INPUT_BLOCKED"

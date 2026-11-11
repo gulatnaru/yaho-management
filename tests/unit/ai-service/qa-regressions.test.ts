@@ -59,7 +59,7 @@ describe("QA-MAJOR3 immutable HMAC material identity", () => {
         if (c.kind !== "CLAIMED")
             throw Error();
         await markDispatched(f.db, "PREVIEW", c.row.id, 1, now);
-        await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 1, outputTokens: 1, category: "GUIDANCE" }, now);
+        await settle(f.db, "PREVIEW", c.row.id, 1, { kind: "KNOWN", inputTokens: 1, outputTokens: 1, category: "GUIDANCE", modelCalled: true }, now);
         const before = structuredClone(f.state);
         k.hmac.v1 = Buffer.alloc(32, 7);
         await expect(claim(f.db, input(k))).rejects.toThrow();

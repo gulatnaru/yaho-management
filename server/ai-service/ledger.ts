@@ -105,7 +105,12 @@ export async function claim(db: Database, input: ClaimInput) {
         }
         await tx.aiServiceBudgetMonth.update({ where: { id: bucket.id }, data: { reservedKrw: { increment: reservedKrw }, version: { increment: 1 } } });
         const row = await tx.aiServiceRequest.create({ data: { id: randomUUID(), environment, month, requestKey: input.requestHashes[0], requestHashes: input.requestHashes,
-                payloadHash: input.payloadHashes[0], subjectHashes: input.subjectHashes, reservedKrw, provider: config.provider, model: config.model,
+                payloadHash: input.payloadHashes[0], subjectHashes: input.subjectHashes, reservedKrw,
+                // OQ-12 P0-A (P-3): the live path no longer calls a model, so the
+                // row is marked DETERMINISTIC/deterministic-v1 instead of the
+                // Config provider/model. priceSnapshot/reserveKrw still come from
+                // Config (the reserve is released in full at 0-token settle).
+                provider: "DETERMINISTIC", model: "deterministic-v1",
                 priceSnapshot: { ...price, fxCheckedAt: price.fxCheckedAt.toISOString() }, createdAt: now, expiresAt: new Date(now.getTime() + RETENTION_MS),
                 attemptDeadline: new Date(now.getTime() + 3500) } });
         return { kind: "CLAIMED" as const, row, price };
@@ -132,6 +137,10 @@ export type Settlement = {
     category: string;
     rawCiphertext?: string;
     encryptionVersion?: string;
+    /** True only when a model was actually called. The deterministic path
+     * settles 0 tokens with modelCalled false, so DailyMetric.modelCalls
+     * counts real model calls only (OQ-12 P0-A, P-4). */
+    modelCalled: boolean;
 } | {
     kind: "UNDISPATCHED";
 } | {
@@ -165,8 +174,8 @@ export async function settle(db: Database, environment: Environment, id: string,
         if (result.kind === "KNOWN") {
             const day = new Date(row.createdAt.toISOString().slice(0, 10) + "T00:00:00Z");
             await tx.aiServiceDailyMetric.upsert({ where: { environment_day_category: { environment, day, category: result.category } },
-                create: { environment, day, category: result.category, count: 1, modelCalls: 1, usedKrw },
-                update: { count: { increment: 1 }, modelCalls: { increment: 1 }, usedKrw: { increment: usedKrw } } });
+                create: { environment, day, category: result.category, count: 1, modelCalls: result.modelCalled ? 1 : 0, usedKrw },
+                update: { count: { increment: 1 }, ...(result.modelCalled ? { modelCalls: { increment: 1 } } : {}), usedKrw: { increment: usedKrw } } });
         }
         return true;
     });

@@ -51,7 +51,9 @@ describe("full production handler evaluation, entirely offline", () => {
 
   it("separates a model-selected handoff from a policy block", async () => {
     const result = await runEvaluation({ mode: "synthetic" }, { cases: [preparation], syntheticProvider: provider(null) });
-    expect(result.records[0]).toMatchObject({ toolResult: "WRONG", modelResult: "WRONG", serverPolicy: "MODEL_HANDOFF", finalCorrect: false, finalSafe: true });
+    // The model still selects a handoff (MODEL_HANDOFF, model WRONG), but the
+    // final reply is the deterministic grounding, so finalCorrect is true.
+    expect(result.records[0]).toMatchObject({ toolResult: "WRONG", modelResult: "WRONG", serverPolicy: "MODEL_HANDOFF", finalCorrect: true, finalSafe: true });
     expect(result.summary.serverBlocked).toBe(0);
   });
 
@@ -112,18 +114,28 @@ describe("full production handler evaluation, entirely offline", () => {
     expect(JSON.stringify(result)).not.toContain("1234");
   });
 
-  it("honors the production 1500ms provider deadline even with a longer eval timeout", async () => {
+  it("honors the eval timeout for a hanging provider call (no 1500ms classifier stage remains)", async () => {
     vi.useFakeTimers();
-    vi.stubEnv("OPENAI_EVAL_API_KEY", "sk-synthetic-eval-full-handler-not-real");
+    vi.stubEnv("OPENAI_EVAL_API_KEY", "fake-eval-key-0123456789abcdef");
     try {
       let signal: AbortSignal | null | undefined;
       const fetcher = vi.fn<typeof fetch>(async (_url, init) => { signal = init?.signal; return new Promise(() => {}); });
       const pending = runEvaluation({ mode: "live" }, { cases: [preparation], fetcher });
-      await vi.advanceTimersByTimeAsync(1501);
+      await vi.advanceTimersByTimeAsync(15001);
       const result = await pending;
       expect(result.summary).toMatchObject({ errors: 1, serverBlocked: 0, stopReason: "USAGE_UNKNOWN", unknownCostReserveKrw: MAX_REQUEST_KRW });
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(signal?.aborted).toBe(true);
     } finally { vi.useRealTimers(); }
+  });
+
+  it("evaluates deterministically with zero HTTP calls (OQ-12 P0-A proof)", async () => {
+    const forbiddenFetch = vi.fn(() => { throw new Error("NETWORK_FORBIDDEN"); });
+    vi.stubGlobal("fetch", forbiddenFetch);
+    const result = await runEvaluation({ mode: "deterministic" }, { cases: [preparation] });
+    expect(result.records[0]).toMatchObject({ toolResult: "CORRECT", modelResult: "CORRECT", serverPolicy: "ALLOWED", finalCorrect: true, finalSafe: true });
+    expect(result.summary).toMatchObject({ mode: "deterministic", model: "deterministic-v1", totalCostKrw: 0, inputTokens: 0, outputTokens: 0 });
+    expect(forbiddenFetch).not.toHaveBeenCalled();
+    expect(collectReport([...result.records, result.summary].map(r => JSON.stringify(r)).join("\n"))).toEqual(result);
   });
 });

@@ -1,12 +1,10 @@
-import type { BillingUsage } from "./billing";
-import { HANDOFF, ServiceDenied, type Environment, skillReply } from "./contracts";
+import { HANDOFF, ServiceDenied, healthKeywordPattern, skillReply, type Environment } from "./contracts";
 import { authenticateSkill, parseSkill } from "./transport";
 import { hashes, hmacPins, validateKeys, encrypt, type Keys } from "./crypto";
 import { claim, markDispatched, settle } from "./ledger";
 import { transaction, type Database } from "./repository";
 import { type Tools } from "./tools";
-import { executeSelection, selectionCatalog } from "./selection-policy";
-import { type LlmProvider } from "./provider";
+import { decideSelection, executeSelection, selectionCatalog } from "./selection-policy";
 export type Dependencies = {
     db: Database;
     environment: Environment;
@@ -16,7 +14,6 @@ export type Dependencies = {
     /** Console test-header secret (AI_SERVICE_SKILL_TEST_SECRET). Accepted only in PREVIEW. */
     testSecret?: string;
     botId: string;
-    provider: (id: string, model: string) => LlmProvider;
     tools: Tools;
     clock?: () => Date;
 };
@@ -26,7 +23,6 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 3000);
     let claimed: Awaited<ReturnType<typeof claim>> | undefined;
     let dispatched = false;
-    let knownUsage: BillingUsage | undefined;
     async function stage<T>(fn: (signal: AbortSignal) => Promise<T>, maxMs: number): Promise<T> {
         const remaining = Math.min(maxMs, 3000 - (Date.now() - started));
         if (remaining <= 0 || controller.signal.aborted)
@@ -49,8 +45,11 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         validateKeys(deps.keys);
         const utterance = input.userRequest.utterance;
         // Reject obvious secret/PII/execution requests before external dispatch, regardless of model behavior.
+        // OQ-12 P0-A: health/allergy vocabulary and birthdate words are also
+        // gated here — such questions go to staff without any model call.
         if (!/야호|숲|프로그램|일정|예약|준비물|우천|비가|운영정책/.test(utterance) ||
-            /(?:이전|모든)\s*지시|무시|system\s*prompt|ignore|SQL|개인정보|비밀번호|카드번호|계좌번호|주민번호|0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}|[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(utterance))
+            /(?:이전|모든)\s*지시|무시|system\s*prompt|ignore|SQL|개인정보|비밀번호|카드번호|계좌번호|주민번호|생년월일|0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}|[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(utterance)
+            || healthKeywordPattern.test(utterance))
             return skillReply();
         claimed = await stage(() => claim(deps.db, { environment: deps.environment, now: clock(), hmacPins: hmacPins(deps.keys, deps.environment),
             requestHashes: hashes(deps.keys, "request", deps.environment, stableRequestId),
@@ -58,9 +57,7 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
             subjectHashes: hashes(deps.keys, "subject", deps.environment, input.userRequest.user.id) }), 350);
         if (claimed.kind !== "CLAIMED")
             return skillReply();
-        const row = claimed.row, provider = deps.provider(row.provider, row.model);
-        if (provider.id !== row.provider)
-            throw new ServiceDenied();
+        const row = claimed.row;
         const binding = { id: row.id, environment: deps.environment, createdAt: row.createdAt, expiresAt: row.expiresAt };
         const initial = encrypt(deps.keys, binding, { utterance, reply: HANDOFF });
         await stage(() => transaction(deps.db, deps.environment, async (tx) => {
@@ -69,20 +66,19 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
             if (!written.count)
                 throw new ServiceDenied();
         }), 250);
-        // A bounded approved catalog lets the single model call refer to server-issued public handles.
+        // A bounded approved catalog lets the deterministic classifier refer to
+        // server-issued public handles only. No model is consulted (OQ-12 P0-A).
         const programs = await stage(signal => deps.tools.execute({ name: "list_public_programs", args: {} }, signal), 200);
         const classes = await stage(signal => deps.tools.execute({ name: "list_public_classes", args: { programHandle: null } }, signal), 200);
         const catalog = selectionCatalog([programs, classes]);
         await stage(() => markDispatched(deps.db, deps.environment, row.id, row.attempt, clock()), 200);
         dispatched = true;
-        const result = await stage(signal => provider.classify({ utterance, signal, catalog: structuredClone(catalog) }), 1500);
-        knownUsage = result.usage;
-        const selected = structuredClone(result.call);
+        const selected = await stage(async () => decideSelection(utterance, catalog), 200);
         const response = await stage(signal => executeSelection(utterance, selected, catalog, deps.tools, signal), 200);
         const { text, category } = response;
         const encrypted = encrypt(deps.keys, binding, { utterance, reply: text });
         const recorded = await settle(deps.db, deps.environment, row.id, row.attempt, { kind: "KNOWN",
-            inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, billingUsage: result.usage, category, ...encrypted }, clock());
+            inputTokens: 0, outputTokens: 0, billingUsage: { inputTokens: 0, outputTokens: 0 }, category, modelCalled: false, ...encrypted }, clock());
         if (!recorded || controller.signal.aborted || Date.now() - started >= 3500)
             return skillReply();
         if (selected && text !== HANDOFF) {
@@ -94,7 +90,7 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
     }
     catch {
         if (claimed?.kind === "CLAIMED") {
-            await settle(deps.db, deps.environment, claimed.row.id, claimed.row.attempt, knownUsage ? { kind: "KNOWN", ...knownUsage, billingUsage: knownUsage, category: "HUMAN_HANDOFF" } : { kind: dispatched ? "UNKNOWN" : "UNDISPATCHED" }, clock()).catch(() => undefined);
+            await settle(deps.db, deps.environment, claimed.row.id, claimed.row.attempt, { kind: dispatched ? "UNKNOWN" : "UNDISPATCHED" }, clock()).catch(() => undefined);
         }
         return skillReply();
     }

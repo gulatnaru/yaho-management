@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { HANDOFF, ServiceDenied, type ToolCall } from "@/server/ai-service/contracts";
 import { handleSkill, type Dependencies } from "@/server/ai-service/handler";
-import { openAiProvider, type LlmProvider } from "@/server/ai-service/provider";
+import { openAiProvider } from "@/server/ai-service/provider";
 import { classDigest, programDigest } from "@/server/ai-service/publication-digest";
 import { authorizeSelection, executeSelection, selectionCatalog } from "@/server/ai-service/selection-policy";
 import { createTools } from "@/server/ai-service/tools";
@@ -36,20 +36,19 @@ function publishedCatalog(programCount = 1, classCount = 20, distributeClasses =
     return f;
 }
 
-function handler(f: ReturnType<typeof fakeDb>, call: ToolCall) {
+function handler(f: ReturnType<typeof fakeDb>) {
     const tools = createTools(f.db, "PREVIEW", () => now);
     const execute = vi.fn(tools.execute.bind(tools));
-    const classify = vi.fn<LlmProvider["classify"]>(async () => ({ call, usage: { inputTokens: 100, outputTokens: 10 } }));
     const deps: Dependencies = { db: f.db, environment: "PREVIEW", secret, botId: "synthetic-bot", clock: () => now,
         keys: { encryption: { v1: randomBytes(32) }, hmac: { v1: randomBytes(32) }, activeEncryption: "v1", activeHmac: "v1" },
-        provider: () => ({ id: "TEST_DOUBLE", classify }), tools: { execute } };
+        tools: { execute } };
     const run = async (utterance: string) => {
         const raw = JSON.stringify({ bot: { id: "synthetic-bot" }, userRequest: { utterance, user: { id: "synthetic-subject" } },
             action: { id: "synthetic-action", name: "synthetic" } });
         return (await handleSkill(new Headers({ "x-yaho-skill-key": secret }), raw, "synthetic-catalog-request-001", deps))
             .template.outputs[0].simpleText.text;
     };
-    return { run, execute, classify };
+    return { run, execute };
 }
 
 async function preload(f: ReturnType<typeof fakeDb>) {
@@ -59,22 +58,19 @@ async function preload(f: ReturnType<typeof fakeDb>) {
 
 describe("complete catalog capacity: 20 programs and 20 classes, with overflow sentinels", () => {
     it("answers an exact twentieth class among 21 total sources with one dispatch and known settlement", async () => {
-        const f = publishedCatalog(), { run, execute, classify } = handler(f, availability(19));
+        const f = publishedCatalog(), { run, execute } = handler(f);
         expect(await run("야호 public-class-19 신청 가능한가요")).toContain("현재 신청 가능한 일정입니다.");
-        expect(classify).toHaveBeenCalledTimes(1);
-        expect(classify.mock.calls[0][0].catalog?.map(row => "items" in row ? row.items.length : 0)).toEqual([1, 20]);
         expect(execute).toHaveBeenCalledTimes(4);
         expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "SETTLED", dispatched: true });
-        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 1, reservedKrw: 0, unknownCount: 0 });
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0, unknownCount: 0 });
     });
 
     it("rejects an ambiguous request within capacity among 21 total sources, regardless of model choice", async () => {
-        const f = publishedCatalog(), { run, execute, classify } = handler(f, availability(0));
+        const f = publishedCatalog(), { run, execute } = handler(f);
         expect(await run("합성 탐험숲 신청 가능한가요")).toBe(HANDOFF);
-        expect(classify).toHaveBeenCalledTimes(1);
         expect(execute.mock.calls.map(([call]) => call.name)).toEqual(["list_public_programs", "list_public_classes"]);
         expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "SETTLED", dispatched: true });
-        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 1, reservedKrw: 0 });
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0 });
     });
 
     it("validates an exact twentieth program across all 21 sources and detects a later name collision", async () => {
@@ -111,9 +107,8 @@ describe("complete catalog capacity: 20 programs and 20 classes, with overflow s
             expect(f.state.classSchedule.slice(0, 20).filter(row => row.programId === "program-0")).toHaveLength(1);
             expect(f.state.classSchedule.filter(row => row.programId === "program-0")).toHaveLength(2);
         }
-        const { run, execute, classify } = handler(f, availability(0));
+        const { run, execute } = handler(f);
         expect(await run(question)).toBe(HANDOFF);
-        expect(classify).not.toHaveBeenCalled();
         expect(execute.mock.calls.map(([call]) => call.name)).toEqual(["list_public_programs"]);
         expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "FAILED", dispatched: false });
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0, unknownCount: 0 });
@@ -135,9 +130,9 @@ describe("complete catalog capacity: 20 programs and 20 classes, with overflow s
         expect(transport).not.toHaveBeenCalled();
     });
 
-    it("hands off new overflow at the final freshness read while preserving a single known charge", async () => {
+    it("hands off new overflow at the final freshness read while settling as known at 0 KRW", async () => {
         const f = publishedCatalog(), tools = createTools(f.db, "PREVIEW", () => now);
-        const { run, execute, classify } = handler(f, availability(19));
+        const { run, execute } = handler(f);
         execute.mockImplementation(async (call, abort) => {
             if (execute.mock.calls.length === 4) {
                 f.seed("aiServiceClassPublication", { ...f.state.aiServiceClassPublication[0], id: "later-public-class", classScheduleId: "later-class" });
@@ -145,10 +140,9 @@ describe("complete catalog capacity: 20 programs and 20 classes, with overflow s
             return tools.execute(call, abort);
         });
         expect(await run("야호 public-class-19 신청 가능한가요")).toBe(HANDOFF);
-        expect(classify).toHaveBeenCalledTimes(1);
         expect(execute).toHaveBeenCalledTimes(4);
         expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "SETTLED", dispatched: true });
-        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 1, reservedKrw: 0, unknownCount: 0 });
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0, unknownCount: 0 });
     });
 
     it("does not count disabled or other-environment publications toward the approved scope", async () => {

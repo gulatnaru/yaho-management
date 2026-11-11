@@ -82,18 +82,16 @@ describe("authorization across the complete approved selection scope", () => {
     it("keeps the fourth class visible to authorization through the handler preload", async () => {
         const f = fakeDb(); seedConfig(f);
         const catalog = approvedScope();
-        const classify = vi.fn(async () => ({ call: availability, usage: { inputTokens: 100, outputTokens: 10 } }));
         const execute = vi.fn(async (call: ToolCall): Promise<ToolResult> => call.name === "list_public_programs" ? catalog[0]
             : call.name === "list_public_classes" ? catalog[1] : { kind: "AVAILABILITY", status: "AVAILABLE" });
         const secret = "synthetic-complete-scope-secret-0123456789";
         const deps: Dependencies = { db: f.db, environment: "PREVIEW", secret, botId: "synthetic-bot", clock: () => now,
             keys: { encryption: { v1: randomBytes(32) }, hmac: { v1: randomBytes(32) }, activeEncryption: "v1", activeHmac: "v1" },
-            provider: () => ({ id: "TEST_DOUBLE", classify }), tools: { execute } };
+            tools: { execute } };
         const raw = JSON.stringify({ bot: { id: "synthetic-bot" }, userRequest: { utterance: "합성 탐험숲 신청 가능한가요", user: { id: "synthetic-subject" } }, action: { id: "synthetic-action", name: "synthetic" } });
         const response = await handleSkill(new Headers({ "x-yaho-skill-key": secret }), raw, "synthetic-complete-scope-001", deps);
         expect(response.template.outputs[0].simpleText.text).toBe(HANDOFF);
-        expect(classify).toHaveBeenCalledTimes(1);
         expect(execute.mock.calls.map(([call]) => call.name)).toEqual(["list_public_programs", "list_public_classes"]);
-        expect(f.state.aiServiceRequest[0].status).toBe("SETTLED");
+        expect(f.state.aiServiceRequest[0]).toMatchObject({ status: "SETTLED", usedKrw: 0 });
     });
 });
