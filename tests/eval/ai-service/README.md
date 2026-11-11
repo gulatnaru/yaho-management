@@ -10,6 +10,8 @@ From the repository root:
 node --import tsx tests/eval/ai-service/runner.ts synthetic --canary 3 > /tmp/yaho-ai-eval.jsonl
 node --import tsx tests/eval/ai-service/report.ts /tmp/yaho-ai-eval.jsonl
 node --import tsx tests/eval/ai-service/runner.ts synthetic
+node --import tsx tests/eval/ai-service/runner.ts deterministic > /tmp/yaho-ai-eval-deterministic.jsonl
+node --import tsx tests/eval/ai-service/report.ts /tmp/yaho-ai-eval-deterministic.jsonl
 npx vitest run --config tests/eval/vitest.config.ts
 npx tsc --noEmit --incremental false
 npm run lint
@@ -32,7 +34,7 @@ node --import tsx tests/eval/ai-service/report.ts /tmp/yaho-ai-eval-live.jsonl
 
 The key is read only from `OPENAI_EVAL_API_KEY`. Missing/invalid credentials fail before transport construction or dispatch; production `OPENAI_API_KEY` is ignored. The fixed model is `gpt-6-luna`; there are no model/key CLI flags, fallback, SDK or retries. `--canary N` accepts 1–140 and runs only the first N fixtures in declared order. Omitting the mode selects `synthetic`; omitting canary selects all 134 fixtures.
 
-Each permitted HTTP attempt uses the existing `openAiResponsesTransport`, `store:false`, and a synthetic approval-aware catalog. The production handler's 1,500 ms model stage and 3,000 ms request deadline also apply; an injected evaluation timeout can shorten the model deadline (the legacy 15-second ceiling cannot extend production deadlines). All facts/tool execution stay in memory. Preflight blocks make no model request and reserve no API cost. A malformed, incomplete or refused response is an error, even when the expected answer is handoff. Missing/invalid usage or a failed HTTP attempt stops the run immediately and reserves the maximum request cost as unknown; failed requests are never retried. Wrong tool decisions are scored and evaluation continues within the cap.
+Each permitted HTTP attempt uses the existing `openAiResponsesTransport`, `store:false`, and a synthetic approval-aware catalog. The production handler's 3,000 ms request deadline also applies; there is no model stage in the live path (OQ-12 P0-A), so the 1,500 ms model-stage deadline no longer exists. An injected evaluation timeout can shorten the model deadline (the legacy 15-second ceiling cannot extend production deadlines). All facts/tool execution stay in memory. Preflight blocks make no model request and reserve no API cost. A malformed, incomplete or refused response is an error, even when the expected answer is handoff. Missing/invalid usage or a failed HTTP attempt stops the run immediately and reserves the maximum request cost as unknown; failed requests are never retried. Wrong tool decisions are scored and evaluation continues within the cap.
 
 The fixed evaluation price snapshot in `valuation.ts` uses $0.10 input/$0.50 output per million tokens (100/500 nanoUSD per token), and a conservative valuation of 2,000 KRW/USD. It uses the existing `conservativeKrw`, including its input maximum multiplier, cushions and upward per-request rounding. This is a valuation assumption dated 2026-10-17, not a fetched exchange quote or actual invoice. Rates or FX above that snapshot would invalidate the cap assumption; review the snapshot before later live use. No pricing or FX network calls are made. The [official model page](https://developers.openai.com/api/docs/models/gpt-6-luna) documents the selected model/rates.
 

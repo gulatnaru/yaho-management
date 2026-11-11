@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { handleSkill, type Dependencies } from "@/server/ai-service/handler";
 import { HANDOFF } from "@/server/ai-service/contracts";
 import { authenticateSkill, parseSkill } from "@/server/ai-service/transport";
-import type { ToolResult, Tools } from "@/server/ai-service/tools";
+import type { ToolResult } from "@/server/ai-service/tools";
 import { adminContext } from "@/server/ai-service/admin-context";
 import { POST as skill } from "@/app/api/ai-service/v1/skill/route";
 import { GET as retention } from "@/app/api/ai-service/v1/retention/route";
@@ -80,7 +80,7 @@ describe("isolated Skill flow", () => {
         vi.useFakeTimers();
         try {
             const { f, deps } = setup();
-            deps.tools.execute = vi.fn(async (_call: Parameters<Tools["execute"]>[0], _signal: AbortSignal): Promise<ToolResult> => new Promise<ToolResult>(() => {}));
+            deps.tools.execute = vi.fn(async (): Promise<ToolResult> => new Promise<ToolResult>(() => {}));
             const result = handleSkill(headers(), raw, "synthetic-request-0001", deps);
             await vi.advanceTimersByTimeAsync(201);
             const reply = await result;

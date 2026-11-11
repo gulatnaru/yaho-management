@@ -110,7 +110,7 @@ export function collectReport(jsonl: string): RunResult {
   const records: QuestionRecord[] = [];
   let final: Summary | undefined;
   const lines = jsonl.trim().split(/\r?\n/);
-  if (lines.length > 121) throw new Error("EVAL_REPORT_INVALID");
+  if (lines.length > 141) throw new Error("EVAL_REPORT_INVALID");
   for (const line of lines) {
     const raw: unknown = JSON.parse(line);
     const row = questionRecordSchema.safeParse(raw);

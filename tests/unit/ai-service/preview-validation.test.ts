@@ -83,8 +83,8 @@ describe("rollback composition (repository doubles, not actual PG proof)",()=>{
 });
 const roots:string[]=[];afterEach(()=>{for(const root of roots.splice(0)){if(!path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep+"ai-service-policy-"))throw new Error("TEMP_PATH_DENIED");rmSync(root,{recursive:true,force:true});}});
 function approvedMigrationFixture(){
- const source=path.resolve("prisma/migrations"),names=listRepositoryMigrations(source).slice(0,23);
- expect(names).toHaveLength(23);expect(names.at(-1)).toBe("20261107120000_notification_closure_executor");expect(names).toContain(SERVICE_MIGRATION);
+ const source=path.resolve("prisma/migrations"),names=listRepositoryMigrations(source).slice(0,24);
+ expect(names).toHaveLength(24);expect(names.at(-1)).toBe("20261112090000_ai_service_deletion_audit");expect(names).toContain(SERVICE_MIGRATION);
  expect(migrationChecksum(source,SERVICE_MIGRATION)).toBe(SERVICE_MIGRATION_SHA256);
  const root=mkdtempSync(path.join(os.tmpdir(),"ai-service-policy-"));roots.push(root);
  for(const name of names){mkdirSync(path.join(root,name));writeFileSync(path.join(root,name,"migration.sql"),readFileSync(path.join(source,name,"migration.sql")));}
@@ -134,9 +134,9 @@ describe("fixed new scope preserves approved migration and old runner",()=>{
   mkdirSync(path.join(root,"20261017000000_unapproved"));writeFileSync(path.join(root,"20261017000000_unapproved","migration.sql"),"-- unapproved");
   expect(()=>evaluateAiServicePreviewMigration(rows,root)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
- it("accepts the current 23-migration repository under the updated Preview policy",()=>{
+ it("accepts the current 24-migration repository under the updated Preview policy",()=>{
   const root=path.resolve("prisma/migrations"),names=listRepositoryMigrations(root);
-  expect(names).toHaveLength(23);
+  expect(names).toHaveLength(24);
   expect(names).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES]);
   expect(migrationChecksum(root,"20260825090000_phase6_safety_attendance")).toBe("35594760d05aa8c59029548e64489af0ff9363edeb9a90b058a512233ab94eba");
   const rows=names.map(name=>({migration_name:name,checksum:migrationChecksum(root,name),finished_at:new Date(),rolled_back_at:null}));

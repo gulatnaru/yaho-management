@@ -247,7 +247,7 @@ export function parseArguments(args: string[]): Options {
   let modeSeen = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if ((arg === "live" || arg === "synthetic") && !modeSeen) { mode = arg; modeSeen = true; }
+    if ((arg === "live" || arg === "synthetic" || arg === "deterministic") && !modeSeen) { mode = arg; modeSeen = true; }
     else if (arg === "--canary" && canary === undefined && /^\d+$/.test(args[i + 1] ?? "")) canary = Number(args[++i]);
     else throw new ConfigurationError("EVAL_OPTIONS_INVALID");
   }
@@ -265,7 +265,7 @@ export async function runnerMain(args: string[], dependencies: Dependencies = {}
     error(caught instanceof ConfigurationError ? {
       EVAL_KEY_MISSING: "EVAL_KEY_MISSING: live mode requires OPENAI_EVAL_API_KEY; no request was sent.\n",
       EVAL_KEY_INVALID: "EVAL_KEY_INVALID: invalid evaluation credential; no request was sent.\n",
-      EVAL_OPTIONS_INVALID: "EVAL_OPTIONS_INVALID: use [synthetic|live] [--canary 1..140].\n",
+      EVAL_OPTIONS_INVALID: "EVAL_OPTIONS_INVALID: use [synthetic|live|deterministic] [--canary 1..140].\n",
     }[caught.code] : "EVAL_FAILED: evaluation stopped.\n");
     return 1;
   }

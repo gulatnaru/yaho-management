@@ -8,6 +8,7 @@ vi.mock("@/server/ai-service/admin-context", () => ({ adminContext: mocked.admin
 vi.mock("@/app/(admin)/ai-service/actions", () => ({
     saveConfigAction: vi.fn(), saveGuidanceAction: vi.fn(), savePublicationAction: vi.fn(),
     reconcileAction: vi.fn(), retryRetentionAction: vi.fn(),
+    lookupConsultationsBySubjectAction: vi.fn(), deleteConsultationAction: vi.fn(),
 }));
 
 import AiServicePage from "@/app/(admin)/ai-service/page";
