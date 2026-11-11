@@ -1,0 +1,1 @@
+{"crons":[{"path":"/api/cron/ai-consultations-retention","schedule":"0 18 * * *"}]}

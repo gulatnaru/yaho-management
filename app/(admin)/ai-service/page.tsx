@@ -84,10 +84,11 @@ export default async function AiServicePage() {
   </section>
   <section className="rounded border p-4"><h2 className="font-bold">90일 삭제 상태</h2>
    <p>하루 1회 실행 기본안 · 만료 원문 즉시 조회 차단 · 만료 backlog {state.expiredCount}건</p>
-   <p>스케줄러: 비활성 · 재시도 횟수 {state.monitoring.retentionAttempts}/3</p>
+   <p>스케줄러: {state.monitoring.schedulerActive ? "활성" : "비활성"} · 재시도 횟수 {state.monitoring.retentionAttempts}/3</p>
    <p>최근 삭제 성공 (UTC): {state.monitoring.lastRetentionSuccessAt?.toISOString() ?? "미실행"}</p>
    <p>다음 재시도 가능 시각 (UTC): {state.monitoring.nextRetentionRetryAt?.toISOString() ?? "없음"}</p>
    <p>삭제 오류: {state.monitoring.retentionErrorCode ?? "없음"}</p>
+   <p>삭제 감사 기록: {state.monitoring.auditCount}건 · 가장 오래된 기록 (UTC): {state.monitoring.auditOldestCreatedAt?.toISOString() ?? "없음"}</p>
    <p>작업: {state.retention?.status ?? "미실행"} · 누적 삭제 {state.retention?.deletedCount ?? 0}건</p>
    <form action={retryRetentionAction}><Button className={button}>삭제 작업 재시도</Button></form>
   </section>

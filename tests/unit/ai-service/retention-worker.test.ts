@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readConsultation, readState } from "@/server/ai-service/admin";
 import { RETENTION_MS } from "@/server/ai-service/contracts";
 import { encrypt } from "@/server/ai-service/crypto";
-import { purgeExpired, retryRetention, RETENTION_CADENCE } from "@/server/ai-service/retention";
+import { purgeExpired, retryRetention, purgeOldAudits, runRetentionCron, RETENTION_CADENCE } from "@/server/ai-service/retention";
 import { fakeDb, now } from "./fake-db";
 
 const admin = { userId: "synthetic-admin", role: "ADMIN", active: true };
@@ -89,7 +89,113 @@ describe("inactive daily retention worker using serialized doubles only", () => 
         f.seed("aiServiceRetentionJob", { environment: "PREVIEW", status: "FAILED", attempts: 2, lastSuccessAt: now, nextRetryAt: expiresAt, errorCode: "SYNTHETIC_PRIVATE_ERROR" });
         const state = await readState(f.db, "PREVIEW", admin, expiresAt);
         expect(state.expiredCount).toBe(1);
-        expect(state.monitoring).toEqual({ retentionCadence: "DAILY", schedulerActive: false, retentionAttempts: 2, lastRetentionSuccessAt: now, nextRetentionRetryAt: expiresAt, retentionErrorCode: null });
+        expect(state.monitoring).toEqual({ retentionCadence: "DAILY", schedulerActive: false, retentionAttempts: 2, lastRetentionSuccessAt: now, nextRetentionRetryAt: expiresAt, retentionErrorCode: null, auditCount: 0, auditOldestCreatedAt: null });
         expect(JSON.stringify(state.monitoring)).not.toContain("SYNTHETIC_PRIVATE");
+    });
+});
+
+describe("retention cron entry (CRON_SECRET + schedulerEnabled gate)", () => {
+    const secret = "synthetic-cron-secret";
+    const auth = `Bearer ${secret}`;
+    function seedCronConfig(f: ReturnType<typeof fakeDb>, enabled: boolean) {
+        f.seed("aiServiceConfig", { environment: "PREVIEW", paused: false, schedulerEnabled: enabled });
+    }
+    function seedAudit(f: ReturnType<typeof fakeDb>, id: string, createdAt: Date) {
+        f.seed("aiServiceDeletionAudit", { id, environment: "PREVIEW", kind: "DELETE_SINGLE", requestId: `synthetic-request-${id}`, actorId: "synthetic-admin", reasonCode: "USER_REQUEST", scope: "SINGLE", createdAt });
+    }
+
+    it("drains a 150-row backlog in two loop passes and purges only audit rows older than 365 days", async () => {
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        for (let i = 0; i < 150; i++) f.seed("aiServiceRequest", { ...binding, id: `synthetic-expired-${i}`, status: "SETTLED" });
+        f.seed("aiServiceRequest", { ...binding, id: "synthetic-live", status: "SETTLED", expiresAt: new Date(+expiresAt + 1) });
+        f.seed("aiServiceRequest", { ...binding, id: "synthetic-other-environment", status: "SETTLED", environment: "PRODUCTION" });
+        seedAudit(f, "old-1", new Date(+expiresAt - 366 * 86400000));
+        seedAudit(f, "old-2", new Date(+expiresAt - 400 * 86400000));
+        seedAudit(f, "fresh-1", new Date(+expiresAt - 10 * 86400000));
+        const result = await runRetentionCron(f.db, auth, "preview", secret, expiresAt);
+        expect(result).toEqual({ status: 200, body: { deleted: 150, auditDeleted: 2, waiting: false, expiredRemaining: 0 } });
+        expect(f.state.aiServiceRequest.map((r) => r.id)).toEqual(["synthetic-live", "synthetic-other-environment"]);
+        expect(f.state.aiServiceDeletionAudit.map((r) => r.id)).toEqual(["fresh-1"]);
+        expect(f.state.aiServiceRetentionJob[0]).toMatchObject({ status: "IDLE", attempts: 0, deletedCount: 150, lastSuccessAt: expiresAt });
+        const state = await readState(f.db, "PREVIEW", admin, expiresAt);
+        expect(state.monitoring.schedulerActive).toBe(true);
+        expect(state.monitoring.auditCount).toBe(1);
+        expect(state.monitoring.auditOldestCreatedAt).toEqual(new Date(+expiresAt - 10 * 86400000));
+    });
+
+    it("refuses a wrong, missing, or absent secret with 401 and deletes nothing", async () => {
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        f.seed("aiServiceRequest", { ...binding, status: "SETTLED" });
+        for (const [authorization, cronSecret] of [["Bearer wrong-secret", secret], [null, secret], [auth, undefined], [auth, ""]] as const) {
+            expect(await runRetentionCron(f.db, authorization, "preview", cronSecret, expiresAt)).toEqual({ status: 401, body: { error: "AI_RETENTION_UNAUTHORIZED" } });
+        }
+        expect(f.state.aiServiceRequest).toHaveLength(1);
+        expect(f.state.aiServiceRetentionJob).toHaveLength(0);
+    });
+
+    it("returns the fixed 503 body with no deletion when the flag is off, the config is missing, or the environment is not preview/production", async () => {
+        const off = fakeDb();
+        seedCronConfig(off, false);
+        off.seed("aiServiceRequest", { ...binding, status: "SETTLED" });
+        expect(await runRetentionCron(off.db, auth, "preview", secret, expiresAt)).toEqual({ status: 503, body: { error: "AI_RETENTION_NOT_ACTIVE" } });
+        expect(off.state.aiServiceRequest).toHaveLength(1);
+        const missing = fakeDb();
+        missing.seed("aiServiceRequest", { ...binding, status: "SETTLED" });
+        expect(await runRetentionCron(missing.db, auth, "preview", secret, expiresAt)).toEqual({ status: 503, body: { error: "AI_RETENTION_NOT_ACTIVE" } });
+        expect(missing.state.aiServiceRequest).toHaveLength(1);
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        f.seed("aiServiceRequest", { ...binding, status: "SETTLED" });
+        for (const vercelEnv of [undefined, "development", "production"]) {
+            expect(await runRetentionCron(f.db, auth, vercelEnv, secret, expiresAt)).toEqual({ status: 503, body: { error: "AI_RETENTION_NOT_ACTIVE" } });
+        }
+        expect(f.state.aiServiceRequest).toHaveLength(1);
+    });
+
+    it("stops the purge loop after 10 iterations and reports the remainder", async () => {
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        for (let i = 0; i < 1050; i++) f.seed("aiServiceRequest", { ...binding, id: `synthetic-expired-${i}`, status: "SETTLED" });
+        const result = await runRetentionCron(f.db, auth, "preview", secret, expiresAt);
+        expect(result).toEqual({ status: 200, body: { deleted: 1000, auditDeleted: 0, waiting: false, expiredRemaining: 50 } });
+        expect(f.state.aiServiceRequest).toHaveLength(50);
+    });
+
+    it("concurrent runs delete each expired row exactly once", async () => {
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        for (let i = 0; i < 150; i++) f.seed("aiServiceRequest", { ...binding, id: `synthetic-expired-${i}`, status: "SETTLED" });
+        f.seed("aiServiceRequest", { ...binding, id: "synthetic-live", status: "SETTLED", expiresAt: new Date(+expiresAt + 1) });
+        const results = await Promise.all([
+            runRetentionCron(f.db, auth, "preview", secret, expiresAt),
+            runRetentionCron(f.db, auth, "preview", secret, expiresAt),
+        ]);
+        expect(results.every((r) => r.status === 200)).toBe(true);
+        expect(results.reduce((sum, r) => sum + (r.status === 200 ? r.body.deleted : 0), 0)).toBe(150);
+        expect(f.state.aiServiceRequest.map((r) => r.id)).toEqual(["synthetic-live"]);
+        expect(f.state.aiServiceRetentionJob[0].deletedCount).toBe(150);
+    });
+
+    it("a failed purge returns the fixed 503 body and leaves the row for manual retry", async () => {
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        f.seed("aiServiceRequest", { ...binding, status: "SETTLED" });
+        f.failNext("aiServiceRequest.deleteMany");
+        expect(await runRetentionCron(f.db, auth, "preview", secret, expiresAt)).toEqual({ status: 503, body: { error: "AI_RETENTION_NOT_ACTIVE" } });
+        expect(f.state.aiServiceRequest).toHaveLength(1);
+        expect(f.state.aiServiceRetentionJob[0]).toMatchObject({ status: "FAILED", attempts: 1, errorCode: "RETENTION_FAILED" });
+        expect(await retryRetention(f.db, "PREVIEW", admin, expiresAt)).toEqual({ deleted: 1, waiting: false });
+    });
+
+    it("purges audit rows at the 365-day boundary and keeps younger rows", async () => {
+        const f = fakeDb();
+        const cutoff = new Date(+expiresAt - 365 * 86400000);
+        seedAudit(f, "at-boundary", cutoff);
+        seedAudit(f, "older", new Date(+cutoff - 1));
+        seedAudit(f, "younger", new Date(+cutoff + 1));
+        expect(await purgeOldAudits(f.db, "PREVIEW", expiresAt)).toEqual({ auditDeleted: 2 });
+        expect(f.state.aiServiceDeletionAudit.map((r) => r.id)).toEqual(["younger"]);
     });
 });

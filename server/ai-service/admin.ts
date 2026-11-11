@@ -85,17 +85,21 @@ export async function readState(db: Database, environment: Environment, actor: A
             unknownRequests: counts.unknownRequests + (group.status === "UNKNOWN" ? group._count._all : 0),
         }), { totalRequests: 0, dispatchAttempts: 0, failedRequests: 0, unknownRequests: 0 });
         const retention = await tx.aiServiceRetentionJob.findUnique({ where: { environment } });
+        const config = await tx.aiServiceConfig.findUnique({ where: { environment } });
+        const oldestAudit = await tx.aiServiceDeletionAudit.findFirst({ where: { environment }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
         return {
             summary: { ...summary, asOf: now },
             monitoring: {
                 retentionCadence: RETENTION_CADENCE,
-                schedulerActive: false,
+                schedulerActive: config?.schedulerEnabled ?? false,
                 retentionAttempts: retention?.attempts ?? 0,
                 lastRetentionSuccessAt: retention?.lastSuccessAt ?? null,
                 nextRetentionRetryAt: retention?.nextRetryAt ?? null,
                 retentionErrorCode: retention?.errorCode === "RETENTION_FAILED" ? "RETENTION_FAILED" : null,
+                auditCount: await tx.aiServiceDeletionAudit.count({ where: { environment } }),
+                auditOldestCreatedAt: oldestAudit?.createdAt ?? null,
             },
-            config: await tx.aiServiceConfig.findUnique({ where: { environment } }),
+            config,
             programs: await tx.aiServiceProgramPublication.findMany({ where: { environment }, take: 50 }),
             classes: await tx.aiServiceClassPublication.findMany({ where: { environment }, take: 50 }),
             knowledge: await tx.aiServiceKnowledgeEntry.findMany({ where: { environment }, take: 3 }),
