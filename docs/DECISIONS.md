@@ -655,3 +655,5 @@
 - Scope: 본 ADR은 P0 코드 구현의 결정 기록만을 다룬다. 스케줄러 활성화(`schedulerEnabled` ON)·`CRON_SECRET` 등록·신규 migration의 Preview/Production 적용·PR merge·배포·실제 카카오 발송·실제 학부모 정보 조회·OpenAI 실호출·배포 잠금 해제(OQ-15)·GO 판정은 모두 별도 승인이다. P0 완료 후에도 법률 검토·운영 승인 전 GO 판정을 하지 않는다.
 - Residual risks: (1) 자동 삭제 코드는 구현됐으나 가동 전 — 가동 전까지 만료된 암호문·해시는 DB에 남는다. (2) 백업 덤프 안의 암호화 기록은 삭제 후 최대 30일까지 남을 수 있다 — 고지에 포함해야 한다 (최종 문안 법률 검토 후 확정). (3) 이름·주소 등 자유 텍스트 개인정보는 여전히 암호화 저장된다 (전송은 없음). (4) 결정적 분류기의 커버리지는 모델 방식보다 낮다 (eval 가이던스 9/24·가용성 4/17 등) — HANDOFF 증가는 안전 방향이나 상담 완료율이 낮아질 수 있다. (5) 통합 스위트에서 200ms 스테이지 bound가 콜드스타트·병렬 부하에 민감하다 — 첫 풀런에서 UNKNOWN settle로 예산 행이 오염돼 후속 claim이 차단된 사례가 있어, 재실행·리셋 절차를 BUILD 보고서에 기록했다.
 - Change history: 2026-11-12 Accepted (사용자 결정) + BUILD 완료 (커밋 `4cc4cea`·`f529e15`·`69e1ebd`·`5f97edc`·`8945557`·`b541b87`·`f0b52ff`·`92ed8ba`·`9ee0f87`, 로컬 전용, push 금지).
+- Change history (COND-1 이행): 2026-11-12 test 커밋 `d79ee73` test(ai-service): COND-1 account-number permanent tests (layer-2 + layer-3) — 계좌번호 영구 테스트 2건 추가 (로컬 전용, push 금지).
+- Change history (COND-1 이행): 2026-11-12 docs 커밋 `0c6b6a8` docs(ai-service): ADR-072 Change history — add 3 missing commits (로컬 전용, push 금지).
