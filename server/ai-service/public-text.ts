@@ -40,7 +40,9 @@ function numericGatePass(normalized: string): boolean {
     return sentences.every((s) => !/\p{N}/u.test(s) || relativeTimeCovered(s));
 }
 function relativeTimeCovered(sentence: string): boolean {
-    const cleaned = sentence.replace(/(?:수업\s*)?시작\s*(\d{1,2})시간\s*전/g,
+    // RB-1: "전" must not be the "전" of "전후" — a negative lookahead keeps
+    // "수업 시작 2시간 전입니다." accepted while "2시간 전후" stays rejected.
+    const cleaned = sentence.replace(/(?:수업\s*)?시작\s*(\d{1,2})시간\s*전(?!후)/g,
         (m, h) => (Number(h) >= 1 && Number(h) <= 24 ? "" : m));
     return !/\p{N}/u.test(cleaned);
 }

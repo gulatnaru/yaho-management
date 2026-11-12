@@ -18,7 +18,7 @@ const accept = [
     "수업 시작 2시간 전입니다.",
     "수업 시작 두 시간 전에 알려드립니다.",
 ];
-// Reject set (PLAN §1.1): all twelve must throw AI_SERVICE_DENIED.
+// Reject set (PLAN §1.1 + RB-1): all thirteen must throw AI_SERVICE_DENIED.
 const reject = [
     "수업 시작 0시간 전에 알려드립니다.",
     "수업 시작 25시간 전에 알려드립니다.",
@@ -28,6 +28,7 @@ const reject = [
     "2시간 전에 알려드립니다.",
     "수업 2시간 전에 알려드립니다.",
     "수업 시작 2시간 후에 알려드립니다.",
+    "수업 시작 2시간 전후 안내합니다.",
     "수업 시작 2시간 전에 010-1234-5678로 연락주세요.",
     "수업 시작 2시간 전에 정원은 8명입니다.",
     "안내는 3건입니다.",
