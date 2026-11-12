@@ -657,3 +657,47 @@
 - Change history: 2026-11-12 Accepted (사용자 결정) + BUILD 완료 (커밋 `4cc4cea`·`f529e15`·`69e1ebd`·`5f97edc`·`8945557`·`b541b87`·`f0b52ff`·`92ed8ba`·`9ee0f87`, 로컬 전용, push 금지).
 - Change history (COND-1 이행): 2026-11-12 test 커밋 `d79ee73` test(ai-service): COND-1 account-number permanent tests (layer-2 + layer-3) — 계좌번호 영구 테스트 2건 추가 (로컬 전용, push 금지).
 - Change history (COND-1 이행): 2026-11-12 docs 커밋 `0c6b6a8` docs(ai-service): ADR-072 Change history — add 3 missing commits (로컬 전용, push 금지).
+
+## ADR-073: OQ-16 승인 원문 v1 (PREPARATION·RAIN) 확정 및 Preview 전용 ADMIN 등록 경로 신설 (문서 적용 완료, 배포·등록 실행 미승인)
+
+- Status: Accepted — 사용자 결정 (2026-11-13, 문서 적용 승인). BUILD 완료 (재-BUILD 2안 + 후속 손질, 로컬 전용 브랜치 `feature/phase21-oq16-registration` @ `74472d3`, push 금지). **본 ADR은 감사 마이그레이션의 Preview/Production 적용·Preview 배포·실제 원문 등록·OQ-15 잠금 해제·스케줄러 활성화·main 머지·GO 판정을 승인하지 않는다.** OQ-12 판정은 법률 검토·운영 승인 전까지 NO-GO로 유지한다.
+- Date: 2026-11-13
+- Deciders: 운영자(실명 미기록), 흥영 (정정·2안 승인·문서 적용 승인)
+- Source: OQ-16 등록 경로 SPEC (`~/workspace/yaho-phase21-oq16-registration-spec.md`, D-1~D-12), PLAN (`~/workspace/yaho-phase21-oq16-registration-plan.md`), BUILD 보고서 (`~/workspace/yaho-phase21-oq16-registration-build.md`), QA 보고서 (ADOPT), REVIEW 보고서 (ADOPT), dual-brain 보고서 2건 (MAJOR 0), 승인 원문 manifest v1 (`~/workspace/yaho-oq16-approved-v1/yaho_oq16_approval_manifest_v1.json`).
+- Context: OQ-16 안내 원문은 2026-11-12 초안(`yaho-phase21-oq16-guidance-draft.md`)에서 PREPARATION·RAIN 모두 `[운영자 확인 필요]`가 비어 있는 DRAFT였고, 2026-11-13 조사 보고서(`yaho-phase21-oq16-preview-registration-prep.md`) §1은 "승인 원문 미확보"로 판정했다. 2026-11-13 흥영 정정: 운영자가 ChatGPT 대화에서 PREPARATION·RAIN 두 문구를 명시적으로 확정했고, ZIP 패키지(`yaho_oq16_approved_originals_v1.zip`)로 제공됐다. 이전 판정의 "미확보" 부분은 문구 존재 여부만 정정된다. 등록 경로 부재 등 보고서의 나머지 결론은 유지된다. 승인 원문은 개발 문서가 아니라 운영자와의 ChatGPT 대화에서 확정됐다. 승인자 실명은 기록에 없어 "운영자(실명 미기록)"로 적는다.
+- Decision:
+  1. **승인 원문 v1 2건을 확정한다.**
+     - PREPARATION: `yaho_oq16_preparation_v1.txt`, v1, 269자/593바이트, sha256 `d6a5a3aa9d0bae04c518170c335401f9b934f4a4a99bd001812681201aafc41a`.
+     - RAIN: `yaho_oq16_rain_v1.txt`, v1, 385자/932바이트, sha256 `87d5f1729d43bd563ef9bc826709a6fcc8944614a98cf2aa479823a5d9d870c3`.
+     - 승인 기록: `yaho_oq16_approval_manifest_v1.json` (manifest v1, 두 해시·문자수·바이트수 일치, UTF-8·LF·BOM 없음·끝 개행 없음). 원본 파일: `~/workspace/yaho-oq16-approved-v1/`.
+     - 두 문구 모두 `guidanceSchema` 1000자 이내다. RAIN v1은 혹한(한파·눈·빙판길)을 운영 기준으로 포함한다.
+     - 원문의 문장·Markdown 표시·줄바꿈을 임의 수정하지 않는다. 운영자가 문구를 고치면 새 승인 기록(v2)이 먼저 필요하다.
+  2. **Preview 전용 ADMIN 등록 경로를 신설한다.** 신규 전용 세그먼트만 추가하되, 기존 로직 파일 수정은 최소 예외 2건만 허용한다 (D-12): ① `server/ai-service/public-text.ts` 가드 변경 (§5, RB-1로 `전(?!후)` 확정) ② `server/ai-service/admin.ts` 내부 추출 (`saveGuidanceInTransaction`, 기존 `saveGuidance`는 계약 유지 래퍼로 보존). `runtime.ts`·`skill/route.ts`·`admin-context.ts`·기존 `actions.ts`·크론 라우트·스케줄러는 불변이다. 강제 조건: 인증된 ADMIN 세션만(`requireAdminPrincipal` 재사용), PREVIEW 환경만, 주제 allowlist {PREPARATION, RAIN}만, 제출 content의 sha256이 승인 기록(v1 해시)과 바이트 일치, `approved=true` 고정, content 1~1000자, 낙관적 버전, 그 밖의 테이블·설정 변경 불가, 등록과 감사 기록을 같은 트랜잭션으로 묶는다.
+  3. **감사 모델은 신규 `AiServiceGuidanceAudit` 추가(migration 1건)를 권장안으로 한다** (`AiServiceDeletionAudit` 재사용은 차선안 — `requestId` 필수 필드 오용).
+  4. **RAIN v1의 `safePublicText` 충돌을 가드 쪽의 리뷰된 변경으로 해결한다.** RAIN v1의 "수업 시작 2시간 전"은 기존 숫자 가드(`scheduleNotice` 문법)에 걸려 저장·조회 모두 거부된다. 원문 수정·가드 우회는 금지한다. 가드 변경은 `public-text.ts`에 한정하고 기존 금지 항목을 전부 유지하며 회귀 테스트로 증명한다. 실제 구현 형태: 2분기 숫자 게이트 + 상대 시각 정규식 `/(?:수업\s*)?시작\s*(\d{1,2})시간\s*전(?!후)/g` (RB-1 경계 수정 — "전후" 거부, "전입니다."·"전까지" 통과), 거부 집합 13건.
+  5. **등록 ≠ 활성화.** 원문 저장 후에도 Skill 503·관리자 잠금·스케줄러 비활성·OQ-12 NO-GO가 유지된다. 등록 완료가 운영 활성화를 의미하지 않는다.
+  6. **트랜잭션 1안 폐기·2안 채택 (D-12, 2026-11-13 흥영 결정).** 1안(중첩 트랜잭션으로 `saveGuidance` 재사용)은 Prisma Client 6.19.3에서 성립하지 않음이 격리 DB에서 실증됐다 (`tx.$transaction is not a function`, 통합 2/8 PASS·6/8 FAIL). 2안은 `saveGuidance`의 트랜잭션 로직을 내부 공통 함수로 추출하고 기존 함수는 계약 유지 래퍼로 보존하며, 원문 저장과 감사 기록을 단일 실제 Prisma 트랜잭션에서 처리한다 (중첩 `$transaction` 금지, 양방향 fail-closed, optimistic version·advisory lock 유지). 단위 테스트의 거짓 녹색 원인(fakeDb 가짜 중첩 `$transaction`)도 함께 정정했다 — 원자성 증명은 실제 격리 PostgreSQL 통합 테스트에서만 인정한다.
+- Consequences:
+  - 승인 원문 v1 2건이 `AiServiceKnowledgeEntry`에 등록 가능해진다 (등록 실행은 별도 승인 후).
+  - 기존 잠금 경로·Skill 라우트·크론·스케줄러는 불변이다. OQ-12·OQ-15는 별개 게이트로 유지된다.
+  - POLICY 주제 원문은 여전히 미승인이다. 분류기 문형 개선("추우면 수업하나요?"·"어떤 신발을 신나요?"형)은 별도 태스크이며, RAIN v1의 혹한 기준을 기준으로 삼는다.
+  - 본 ADR의 채택은 배포 승인·등록 실행 승인이 아니다.
+- Verification (로컬 검증, 2026-11-13, 격리 PostgreSQL 16 포트 55435):
+  - 재-BUILD (2안) @ `45f536f`: 단위 234파일/2854건 전부 PASS; 통합 oq16 12/12 PASS; 통합 전수 20파일/220건 PASS; 결정적 eval 134건 finalCorrect 98/134·finalSafe 134/134 (P0 기준 동일); tsc 0 errors; lint 0 errors; `npm run build` EXIT 0.
+  - 원자성 실측 (격리 DB): 저장 성공 3건 → 감사 행 정확히 3행 (1:1); 실패 모드(해시 불일치·버전 충돌·stale 중복·동시 패자·트리거 주입 감사 실패·비-ADMIN) → 감사 행 추가 0건; 트리거 주입 실패 시 RAIN 행 롤백 확인.
+  - 후속 손질 (RB-1 + 구조 단언) @ `74472d3`: 단위 234파일/2857건 전부 PASS; 통합 전수 20파일/220건 PASS; 결정적 eval 134건 동일 (98/134·134/134); tsc 0; lint 0 errors; build EXIT 0. RB-1: "수업 시작 2시간 전후" 거부로 바뀜, "전입니다."·"전까지" 통과 유지. 구조 단언 테스트 2건 추가 (SPEC §7.3 행 — `saveGuidance`·`saveApprovedGuidance`가 각각 정확히 1회 `transaction()`에 진입).
+  - SHA-256 대조: 승인 파일·등록부·SPEC §2.1 표·manifest v1·테스트 픽스처 5곳 일치. 문서 적용 시점에 OQ-16 초안 문서 §2.9 fenced 블록을 추출해 재대조 — 두 건 모두 승인 파일과 바이트 일치 (PREPARATION `d6a5a3aa…`, RAIN `87d5f172…`).
+  - QA ADOPT (MAJOR 0·MINOR 3·조건 없음), REVIEW ADOPT (MAJOR 0·MINOR 4·조건 없음), dual-brain MAJOR 0 (Right MINOR RB-1, Left MINOR LB-1 — 둘 다 후속 손질로 해소됨).
+  - QA·REVIEW·dual-brain 재수행 여부 (사실 그대로): 위 체인은 재-BUILD @ `45f536f`에 대한 것이다. 후속 손질 @ `74472d3`은 QA·REVIEW·dual-brain을 다시 수행하지 않았고, dual-brain 스킬의 "사소한 수정은 짧은 로컬 2-pass" 규칙에 따라 BUILD 검증(단위 전수·통합 전수·eval·tsc/lint/build) + 오케스트레이터 2차 확인(커밋·diff·정규식 동작 직접 재확인)으로 대체했다. 정정: QA·REVIEW MINOR-1("저장 경로의 비-ADMIN 거부 단위 테스트 없음")은 사실 오류로 확인됐다 — `guidance-registration.test.ts:76-84`에 STAFF·TEACHER·비활성 ADMIN·빈 userId 거부 단위 테스트가 이미 있다 (dual-brain Left Brain 지적, 오케스트레이터 직접 확인). 코드 결함이 아니라 보고서 오류다.
+  - 기존 UNKNOWN 정산 문제의 분리 검증: 후속 손질의 첫 통합 전수 실행에서 `skill-contract.test.ts` 3건이 실패했으나, 변경과 무관한 선행 조건임이 실증됐다 (변경을 `git stash`로 치운 순수 기준선 `45f536f`에서도 동일 3건 실패). 원인은 격리 DB `(PREVIEW, 2026-10)` 예산 행의 `unknownCount: 1` (OQ-12 P0에 문서화된 MINOR-2/LB-1 연쇄). 문서화된 `reconcileMonth` 경로로 복구(APPLIED, version 116) 후 통합 전수를 재실행해 20파일/220건 전부 PASS를 재확인했다. 격리 DB 전용 상태이며 Preview/Production과 무관하다.
+  - 잠금 불변: `runtime.ts`·`admin-context.ts`·기존 `actions.ts`·Skill 라우트·크론·스케줄러 diff 없음 (QA·REVIEW 직접 확인).
+- Scope: 본 ADR은 승인 원문 확정 + 등록 경로 설계·구현·검증의 결정 기록만을 다룬다. 감사 마이그레이션의 Preview/Production 적용·Preview 배포·실제 원문 등록·OQ-15 잠금 해제·스케줄러 활성화·CRON_SECRET 등록·main 머지·GO 판정·실제 카카오 발송·실제 학부모 정보 조회·OpenAI 실호출은 모두 별도 승인이다. 등록 완료가 운영 활성화를 의미하지 않는다.
+- Residual risks:
+  1. 등록이 아직 실행되지 않았다 — Preview DB에 원문 행이 없다. 등록 실행은 별도 승인 후 SELECT + sha256 대조로 검증한다.
+  2. POLICY 주제 원문은 여전히 미승인이다 (allowlist에서 제외).
+  3. OQ-12 NO-GO 유지 — 법률 검토·운영 승인 전 GO 판정 불가. 등록 완료와 OQ-12 승인은 별개 게이트다.
+  4. 분류기 문형 한계 — "추우면 수업하나요?"·"어떤 신발을 신나요?"·"우천 시 수업하나요?"형은 HANDOFF로 남는다. RAIN v1의 혹한 기준을 후속 태스크의 기준으로 삼는다.
+  5. UNKNOWN-settle 연쇄는 설계상 동작 — 격리 DB에서 UNKNOWN settle이 생기면 해당 월 claim이 전부 막히고, 삭제·purge로는 안 풀리며 reconcileMonth 정산으로만 풀린다 (OQ-12 P0 MINOR-2/LB-1, ADR-072 잔여 위험 6).
+  6. 격리 DB 감사 행 누적 (append-only, 상대값 단언이라 안전) — Preview/Production과 무관하다.
+  7. 동시 제출의 직렬화는 advisory lock에 의존한다 (패자는 고정 오류로 끝나 안전 방향).
+- Change history: 2026-11-13 DRAFT 작성 (OQ-16 등록 경로 SPEC 부록 A). 2026-11-13 문서 적용 (본 커밋): Decision 2에 D-12 예외(기존 로직 파일 수정 최소 예외 2건) 반영, Decision 6(1안 폐기·2안 채택) 추가, Decision 4에 실제 구현 형태(`전(?!후)`, 거부 13건) 반영, Verification·Scope·Residual risks 추가, Status를 Accepted로 격상 (문서 적용 승인). OQ-16 초안 문서 §2.5/§2.6·부록 B 적용 + PLAN §1.1 정규식 정정은 같은 문서 적용 단계에서 수행했다 (repo 밖 문서라 본 커밋 대상 아님).
