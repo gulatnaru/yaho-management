@@ -13,7 +13,7 @@ Phase 21은 합성 요청에 대한 공개 통제·동시성·암호화·90일 �
 ## Current Process
 
 - PR #53은 OPEN/Draft이고 자동 merge는 설정되어 있지 않다. quality CI는 SUCCESS이나 Production migration job은 사람 Environment 승인 대기이며 실행 단계가 없다. 이 상태를 schema gate PASS로 해석하지 않는다.
-- 실제 `/api/kakao/skill`과 `/api/cron/ai-consultations-retention`은 503 고정 응답으로 비활성화되어 있다. 실제 OpenAI Provider는 없다.
+- 실제 `/api/kakao/skill`은 503 고정 응답으로 비활성화되어 있다. `/api/cron/ai-consultations-retention`은 CRON_SECRET 인증 + `AiServiceConfig.schedulerEnabled` 플래그 게이트로 동작하는 크론 라우트로 바뀌었으나 (OQ-12 P0, 2026-11-12), 플래그는 기본 false·CRON_SECRET 미등록이라 삭제가 돌지 않는다 (활성화는 별도 운영 승인). 라이브 경로에 실제 OpenAI Provider 호출은 없다 (provider는 eval 전용으로만 유지).
 - Mock은 승인된 Preview·배포 SHA·DB 신원·실행 lease·소유 manifest·요청 서명을 요구하고 Production에서는 차단한다. 합성 플래그만으로 접수하지 않는다.
 - 공개 설정·상담·quota·삭제 작업은 실행별 `runId`에 종속된다. DB `AiConsultation.origin`은 `SYNTHETIC`만 허용하고 비용은 실제 화폐 원장이 아니다. 테스트용 scope와 zero-cost quota를 실서비스에 그대로 사용할 수 없다.
 - 기존 Preview 적용 migration은 변경하지 않는다. 후속 독립 schema의 신규 additive migration 파일 작성은 승인됐으며 실제 DB 적용/접속은 별도 승인 전 금지한다.

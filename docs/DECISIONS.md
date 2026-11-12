@@ -628,3 +628,30 @@
 - Scope: 본 ADR은 계정 관리·초대 경로의 권한 단순화만을 다룬다. Production 전환(G-MIG·G-DEPLOY 포함)·실제 계정 권한 변경·Preview/Production DB 수정·환경변수 변경·Git push·merge·배포는 별도 승인이다. 본 ADR의 채택이 BUILD·배포·Production 전환 승인이 되는 것은 아니며, 단순화 로컬 BUILD의 커밋·푸시·배포는 별도 승인 후에만 수행한다.
 - Verification (로컬 BUILD, 2026-11-06): 단위 전체 1202/1202, 통합 전체 45/45 (격리 PostgreSQL 16), tsc --noEmit 0건, lint 0 error (경고 5건은 기존 E2E 파일), npm run build 성공. 신규·수정 테스트: ADMIN의 SUPER_ADMIN 계정 생성·승격·본인 승격·본인 강등/비활성화(다른 관리자 존재 시)·마지막 관리 가능 계정 제거 거부(본인·타인)·전 모드 가드·코어 통과·SUPER_ADMIN 초대 발급·수락·SUPER_ADMIN 대상 비밀번호 재설정·authVersion 증가 + 감사 기록 유지. E2E 로컬 실행 완료 (격리 PostgreSQL 16 + next start 3대, 합성 계정만): p2safe 설정 18/18 (p2safe-cutover 11건 + phase16 7건), p3-invitation 6/6 — 총 24/24. 실행 중 수정한 E2E 테스트 결함 1건: phase16 재설정 성공 토스트를 하드 게이트에서 관찰 기록으로 변경 (P2-S 문서 §2.3 항목 2의 기존 결정과 동일 패턴 — 서버 커밋 완료 + 클라이언트 토스트 간헐 유실, DB 폴링이 게이트). p3 최초 3건 실패는 제품 결함이 아니라 하네스 env 누락 (가짜 발송 env 미설정으로 kind=off → 발송 FAILED + 수락 INVALID) — 서버 재기동 후 6/6 통과. E2E 실행 후 격리 DB 잔여 합성 행 0건 확인, 서버 3대 종료.
 - Change history: 2026-11-06 Accepted (사용자 최종 결정). 로컬 BUILD 미커밋 상태로 보고됨.
+
+## ADR-072: OQ-12 P0 — 라이브 모델 호출 제거 하이브리드 + 자동 삭제·개별 삭제·조회 감사 (BUILD 완료, 판정 NO-GO 유지)
+
+- Status: Accepted — 사용자 결정 (2026-11-12, OQ-P0-1~13 + 확인 4건 전부 (a)). BUILD 완료 (로컬 전용 브랜치 `feature/phase21-oq12-p0`, push 금지). **본 ADR은 스케줄러 활성화·CRON_SECRET 등록·신규 migration의 Preview/Production 적용·배포·merge·GO 판정을 승인하지 않는다.** OQ-12 판정은 법률 검토·운영 승인 전까지 NO-GO로 유지한다.
+- Date: 2026-11-12
+- Source: OQ-12 개인정보 검토 (`~/workspace/yaho-phase21-oq12-privacy-review.md`, 판정 NO-GO), P0 SPEC (`~/workspace/yaho-phase21-oq12-p0-spec.md`), P0 PLAN (`~/workspace/yaho-phase21-oq12-p0-plan.md`), BUILD 보고서 (`~/workspace/yaho-phase21-oq12-p0-build.md`).
+- Context: OQ-12 검토에서 핵심 설계는 건전했으나(평문 저장 없음·카카오 ID 미전송·store:false·앱 로그 무출력) 6가지 결함이 있었다: (1) 승인 문서 미확보, (2) 90일 물리 삭제 자동화 부재(수동 버튼만), (3) 발화 내 이름·건강 정보가 형식 필터를 통과해 OpenAI로 전송됨, (4) ZDR/MAM 미신청(기본 abuse-monitoring 로그 최대 30일), (5) 제공 vs 위탁 분류에 법률 검토 필요, (6) 개별 삭제 경로 부재. P0는 이 중 코드로 닫을 수 있는 3·4·6번(라이브 경로 한정)과 2번(코드 구현, 가동 전)을 다룬다.
+- Decision (사용자 승인 OQ-P0-1~13):
+  - 1 (c) 하이브리드 — 서버가 직접 실행하는 것은 고신뢰 패턴만; 나머지는 모델 호출 없이 HANDOFF. 라이브 경로에 OpenAI 호출 없음.
+  - 2 (a) 자동 삭제 최대 지연 24시간 (명목 24시간 + 최악 ~25시간 허용 오차 + backlog 모니터링).
+  - 3 (a) 개별 삭제 신원 확인 = 동일 카카오 계정 + subject 해시 대조.
+  - 4 (a) 백업 덤프 순환 = 최신 7세대·최대 30일 (세대 초과 또는 30일 초과 시 가장 오래된 덤프부터 삭제).
+  - 5 (b) 삭제 감사 로그 보관 = 1년 (가드 트리거가 365일간 UPDATE·DELETE 차단).
+  - 6 (a) 자동 삭제 크론 = 일 1회 (`vercel.json` `0 18 * * *` = 03:00 KST).
+  - 8 (c) 개별 삭제 범위 = 단건 기본 + 요청 시 일괄 (최대 100건).
+  - 9 (c) "OpenAI 전송" 고지 문안은 법률 검토 후 확정으로 보류.
+  - 10 (b) R6 ADMIN 원문 조회 감사를 P0에 포함 (삭제 감사 모델 재사용).
+  - 11 (a) ZDR/MAM 미신청 유지.
+  - 12 (a) 제공 vs 위탁 법률 검토는 여전히 필요.
+  - 13 (a) 발화 원문 90일 암호화 저장 유지.
+  - 확인 4건 전부 (a): D-1 크론 실행 경로 = GET 라우트 `/api/cron/ai-consultations-retention` (Vercel Cron은 GET만 전송); R-2 24시간 명목 + ~25시간 허용 오차; P-1 `AiServiceConfig.schedulerEnabled` 플래그 게이트 (기본 false); P-3 행 마커 `provider="DETERMINISTIC"` / `model="deterministic-v1"`.
+- Change scope (구현 범위): (1) 결정적 분류기 `decideSelection` 신설 — 승인 카탈로그에서 유일한 호출만 검증해 실행, 모호·다중 매칭·잔여 텍스트는 HANDOFF. (2) 핸들러 재배열 — 모델 호출 단계 제거, `Dependencies`에서 `provider` 필드 자체를 제거해 tsc가 강제; 0토큰 settle (`modelCalled: false`); 건강·알레르기 키워드 + 맥락 있는 생년월일 이중 게이트. (3) 스키마 + 신규 migration `20261112090000_ai_service_deletion_audit` (감사 모델 + `schedulerEnabled`, expand 호환, 기존 migration 수정 없음; 격리 DB에만 적용, `_prisma_migrations` 24행). (4) 자동 삭제 경로 — 크론 라우트 GET (CRON_SECRET `timingSafeEqual` 인증 + 환경 도출 + 플래그 확인 + purge 루프 + 감사 purge) + `vercel.json` 일일 크론 + `readState` 모니터링 + 토글 UI. (5) 개별 삭제 + 조회 감사 — `findConsultationsBySubject`·`deleteConsultation`(단건·일괄, PROCESSING 행 예산 해제, 감사 기록)·`readConsultation` 감사 배선(fail-closed) + 서버 액션 2개 + 관리자 페이지 삭제 섹션. (6) eval 러너 결정적 모드 분리 — 모델 평가는 핸들러가 실제 dispatch한 경우에만 외부에서 수행.
+- Recorded deviations (BUILD 보고서 참조, REVIEW 판단 대상): DEVIATION-1 생년월일 패턴 축소 (맥락 있는 표현만 차단 — 무자격 연도 날짜는 정상 일정 표현이라 기존 회귀 테스트와 충돌); DEVIATION-2 eval 러너 분리 + dispatch-한정 정제; DEVIATION-3 조회·삭제 액션이 상태를 반환하는 `useActionState` 패턴 (기존 void `action()` 래퍼와 다름); DEVIATION-4 Preview migration 인벤토리 목록에 신규 migration 추가 (목록 등재는 Preview/Production 적용 승인이 아님). 그 외 기록된 편차: `saveConfigAction` schedulerEnabled 패스스루의 단계 이동(2/3단계), `findConsultationsBySubject` keys 파라미터 PLAN 누락 보완, M2의 ledger 수준 이동, `syntheticProviderCalls: 0` 표기, factory FX 날짜 오버라이드, README 1500ms 문구 정정, runner CLI 결정적 모드 노출, report 141행 캡 수정.
+- Verification (로컬 BUILD, 2026-11-12, 격리 PostgreSQL 16 포트 55435): 단위 232파일/2809테스트 전부 통과; eval 스위트 93/93; 결정적 eval 134 fixture — finalCorrect 98/134, finalSafe 134/134, 오분류 0건, 비용 0원, fetch 0건 (4건 WRONG은 전부 HANDOFF 기권 — 커버리지 한계이지 오분류가 아님); 통합 스위트 재실행 중 (기준 202 + 신규 6건). tsc `--noEmit` 0건; lint 0 error (경고 9건, P0 파일 0건). `npm run build`는 미실행 (tsc + lint + 테스트로 검증; dev 서버 부재 확인 후 별도 실행 가능).
+- Scope: 본 ADR은 P0 코드 구현의 결정 기록만을 다룬다. 스케줄러 활성화(`schedulerEnabled` ON)·`CRON_SECRET` 등록·신규 migration의 Preview/Production 적용·PR merge·배포·실제 카카오 발송·실제 학부모 정보 조회·OpenAI 실호출·배포 잠금 해제(OQ-15)·GO 판정은 모두 별도 승인이다. P0 완료 후에도 법률 검토·운영 승인 전 GO 판정을 하지 않는다.
+- Residual risks: (1) 자동 삭제 코드는 구현됐으나 가동 전 — 가동 전까지 만료된 암호문·해시는 DB에 남는다. (2) 백업 덤프 안의 암호화 기록은 삭제 후 최대 30일까지 남을 수 있다 — 고지에 포함해야 한다 (최종 문안 법률 검토 후 확정). (3) 이름·주소 등 자유 텍스트 개인정보는 여전히 암호화 저장된다 (전송은 없음). (4) 결정적 분류기의 커버리지는 모델 방식보다 낮다 (eval 가이던스 9/24·가용성 4/17 등) — HANDOFF 증가는 안전 방향이나 상담 완료율이 낮아질 수 있다. (5) 통합 스위트에서 200ms 스테이지 bound가 콜드스타트·병렬 부하에 민감하다 — 첫 풀런에서 UNKNOWN settle로 예산 행이 오염돼 후속 claim이 차단된 사례가 있어, 재실행·리셋 절차를 BUILD 보고서에 기록했다.
+- Change history: 2026-11-12 Accepted (사용자 결정) + BUILD 완료 (커밋 `4cc4cea`·`f529e15`·`69e1ebd`·`5f97edc`·`8945557`·`b541b87`, 로컬 전용, push 금지).
