@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { saveGuidance } from "@/server/ai-service/admin";
 import { saveApprovedGuidance, readApprovedGuidanceState } from "@/server/ai-service/guidance-admin";
 import approvedRegistry from "@/server/ai-service/approved-guidance-v1.json";
 import { safePublicText } from "@/server/ai-service/public-text";
@@ -138,6 +139,40 @@ describe("fake TransactionClient (D-12)", () => {
         await f.db.$transaction(async (tx) => {
             expect((tx as Record<string, unknown>).$transaction).toBeUndefined();
         });
+    });
+});
+describe("single-transaction structure (D-12 / SPEC §7.3)", () => {
+    // Counts top-level $transaction entries and records the operations-log
+    // length at each entry, so the test proves the writes happened inside
+    // the one transaction instead of before or after it. The fake
+    // TransactionClient has no nested $transaction (D-12), so any nested
+    // call would throw instead of being counted.
+    function countTransactions(f: ReturnType<typeof fakeDb>) {
+        const entries: number[] = [];
+        const db = f.db as unknown as { $transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown> };
+        const original = db.$transaction.bind(db);
+        db.$transaction = async (fn) => {
+            entries.push(f.operations.length);
+            return original(fn);
+        };
+        return entries;
+    }
+    it("saveGuidance enters exactly one transaction and writes inside it", async () => {
+        const f = fakeDb();
+        const entries = countTransactions(f);
+        const saved = await saveGuidance(f.db, "PREVIEW", admin, { topic: "PREPARATION", content: prep, approved: true, expectedVersion: 0 });
+        expect(saved.content).toBe(prep);
+        expect(entries).toEqual([0]);
+        expect(f.operations).toEqual(["lock", "lock", "lock", "aiServiceKnowledgeEntry.findUnique", "aiServiceKnowledgeEntry.upsert"]);
+    });
+    it("saveApprovedGuidance enters exactly one transaction and writes the guidance + audit rows inside it", async () => {
+        const f = fakeDb();
+        const entries = countTransactions(f);
+        const saved = await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "PREPARATION", content: prep, expectedVersion: 0 }, approvedRegistry);
+        expect(saved.content).toBe(prep);
+        expect(entries).toEqual([0]);
+        expect(f.operations).toEqual(["lock", "lock", "lock", "aiServiceKnowledgeEntry.findUnique", "aiServiceKnowledgeEntry.upsert", "aiServiceGuidanceAudit.create"]);
+        expect(f.state.aiServiceGuidanceAudit).toHaveLength(1);
     });
 });
 describe("readApprovedGuidanceState", () => {
