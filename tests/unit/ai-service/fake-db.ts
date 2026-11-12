@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "@/server/ai-service/repository";
 type Row = Record<string, unknown>;
 const modelNames = ["aiServiceConfig", "aiServiceRequest", "aiServiceBudgetMonth", "aiServiceQuotaBucket", "aiServiceDailyMetric",
-    "aiServiceRetentionJob", "aiServiceKeyPin", "aiServiceReconciliation", "aiServiceDeletionAudit", "aiServiceProgramPublication", "aiServiceClassPublication", "aiServiceKnowledgeEntry", "program", "classSchedule"] as const;
+    "aiServiceRetentionJob", "aiServiceKeyPin", "aiServiceReconciliation", "aiServiceDeletionAudit", "aiServiceGuidanceAudit", "aiServiceProgramPublication", "aiServiceClassPublication", "aiServiceKnowledgeEntry", "program", "classSchedule"] as const;
 function matches(row: Row, where: Row = {}): boolean {
     return Object.entries(where).every(([key, value]) => {
         if (key === "OR")
@@ -59,7 +59,22 @@ export function fakeDb() {
     const state: Record<string, Row[]> = Object.fromEntries(modelNames.map(n => [n, []]));
     const operations: string[] = [];
     let serial = Promise.resolve(), failure: string | null = null;
-    const tx: Record<string, unknown> = { $queryRaw: async () => [], $executeRaw: async () => { operations.push("lock"); return 1; } };
+    const tx: Record<string, unknown> = { $queryRaw: async () => [], $executeRaw: async () => { operations.push("lock"); return 1; },
+        // Nested $transaction (savepoint): saveGuidance runs its own
+        // transaction() inside the registration wrapper's outer transaction.
+        // A nested failure restores only the nested snapshot; the outer
+        // transaction restores everything when the error propagates.
+        $transaction: async <T>(fn: (tx: unknown) => Promise<T>) => {
+            const before = structuredClone(state);
+            try {
+                return await fn(tx);
+            }
+            catch (error) {
+                for (const key of modelNames)
+                    state[key] = before[key];
+                throw error;
+            }
+        } };
     for (const name of modelNames) {
         const operation = (op: string) => {
             operations.push(name + "." + op);

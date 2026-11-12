@@ -30,6 +30,20 @@ function numericLocation(text: string) {
         /^(?:[\p{L} ]{1,40}동\s*)?\d{1,3}층(?:\s*\d{1,4}호)?$/u.test(value) ||
         /^[\p{L} ]{1,60}(?:로|길)\s*\d{1,4}(?:-\d{1,4})?$/u.test(value);
 }
+function numericGatePass(normalized: string): boolean {
+    if (scheduleNotice(normalized))
+        return true;
+    // Branch 2 (OQ-16): per-sentence relative-time notices. Every digit in a
+    // sentence must sit inside a validated "N시간 전" phrase anchored on
+    // "수업 시작"/"시작" (1-24 hours only). Anything else stays rejected.
+    const sentences = normalized.split(/[.!?。\n]+/).map((s) => s.trim()).filter(Boolean);
+    return sentences.every((s) => !/\p{N}/u.test(s) || relativeTimeCovered(s));
+}
+function relativeTimeCovered(sentence: string): boolean {
+    const cleaned = sentence.replace(/(?:수업\s*)?시작\s*(\d{1,2})시간\s*전/g,
+        (m, h) => (Number(h) >= 1 && Number(h) <= 24 ? "" : m));
+    return !/\p{N}/u.test(cleaned);
+}
 /** No numeric arbitrary free text. Trusted numeric fields and whole notices are separate projections. */
 export function safePublicText(value: string, max = 1000, kind: PublicTextKind = "FREE") {
     // Preserve numeric provenance before NFKC can turn Roman/annotation numerals into letters.
@@ -54,7 +68,7 @@ export function safePublicText(value: string, max = 1000, kind: PublicTextKind =
         /[<>]|https?:|[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:\+?82[- ]?)?0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}/i.test(normalized) ||
         /ignore.*instructions|system\s*prompt|이전\s*지시.*무시|개인정보.*조회|SQL/i.test(normalized))
         throw new ServiceDenied();
-    if ((sourceNumbers.length > 0 || /\p{N}/u.test(normalized)) && !(kind === "LOCATION" ? numericLocation(normalized) : scheduleNotice(normalized)))
+    if ((sourceNumbers.length > 0 || /\p{N}/u.test(normalized)) && !(kind === "LOCATION" ? numericLocation(normalized) : numericGatePass(normalized)))
         throw new ServiceDenied();
     return normalized;
 }

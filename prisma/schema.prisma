@@ -1396,6 +1396,16 @@ model AiServiceDeletionAudit {
   @@index([environment, createdAt])
   @@index([environment, requestId])
 }
+model AiServiceGuidanceAudit {
+  id String @id @default(cuid())
+  environment String
+  topic String
+  version Int
+  contentSha256 String
+  actorId String
+  createdAt DateTime @default(now())
+  @@index([environment, topic, createdAt])
+}
 model AiServiceProgramPublication {
   id String @id @default(cuid())
   environment String
