@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { assertAdmin, parse, ServiceDenied, type Actor, type Environment } from "./contracts";
-import { saveGuidance } from "./admin";
+import { assertAdmin, parse, guidanceSchema, ServiceDenied, type Actor, type Environment } from "./contracts";
+import { saveGuidanceInTransaction } from "./admin";
+import { safePublicText } from "./public-text";
 import { transaction, type Database } from "./repository";
 import approvedRegistry from "./approved-guidance-v1.json";
 export type ApprovedGuidanceEntry = {
@@ -31,11 +32,13 @@ function sha256Hex(value: string): string {
 /**
  * Approved-guidance registration (OQ-16). Only the two operator-approved v1
  * texts may be stored, and only by an authenticated ADMIN in PREVIEW.
- * Validation order (PLAN §4.3): topic allowlist -> PREVIEW-only -> ADMIN ->
+ * Validation order (SPEC §4.3): topic allowlist -> PREVIEW-only -> ADMIN ->
  * content sha256 against the approved registry (raw submitted bytes, before
- * trim) -> existing saveGuidance (schema, safePublicText, optimistic version)
- * -> audit row in the same transaction. Any failure returns the fixed error
- * only and stores nothing.
+ * trim) -> guidanceSchema parse + safePublicText (before entering the
+ * transaction, SPEC §4.3 item 9) -> inner write + audit row in a single
+ * real transaction (D-12, option 2: no nested $transaction — a Prisma
+ * TransactionClient has no $transaction method at runtime). Any failure
+ * returns the fixed error only and stores nothing.
  */
 export async function saveApprovedGuidance(db: Database, environment: Environment, actor: Actor, value: unknown, registry: ApprovedGuidanceRegistry = approvedRegistry) {
     const input = parse(submissionSchema, value);
@@ -50,13 +53,10 @@ export async function saveApprovedGuidance(db: Database, environment: Environmen
     const digest = sha256Hex(input.content);
     if (digest !== entry.sha256)
         throw new ServiceDenied();
+    const guidanceInput = parse(guidanceSchema, { topic: input.topic, content: input.content, approved: true, expectedVersion: input.expectedVersion });
+    safePublicText(guidanceInput.content);
     return transaction(db, environment, async (tx) => {
-        // Option 1 (PLAN §1.6): reuse saveGuidance inside the outer
-        // transaction. A Prisma TransactionClient supports the callback form
-        // of $transaction (savepoints), and repository.transaction() only uses
-        // that form, so the cast is sound at runtime; the integration test
-        // proves the nesting against real PostgreSQL.
-        const saved = await saveGuidance(tx as unknown as Database, environment, actor, { topic: input.topic, content: input.content, approved: true, expectedVersion: input.expectedVersion });
+        const saved = await saveGuidanceInTransaction(tx, environment, actor, guidanceInput);
         await tx.aiServiceGuidanceAudit.create({ data: { environment, topic: input.topic, version: saved.version, contentSha256: digest, actorId: actor.userId } });
         return saved;
     });

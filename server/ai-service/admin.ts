@@ -1,7 +1,7 @@
 import { programDigest, classDigest } from "./publication-digest";
 import { z } from "zod";
 import { assertAdmin, parse, configSchema, publicationSchema, guidanceSchema, ServiceDenied, type Actor, type Environment } from "./contracts";
-import { transaction, type Database } from "./repository";
+import { transaction, type Database, type Tx } from "./repository";
 import { safePublicText } from "./tools";
 import { decrypt, hashes, type Keys } from "./crypto";
 import { RETENTION_CADENCE } from "./retention";
@@ -57,18 +57,26 @@ export async function savePublication(db: Database, environment: Environment, ac
             update: { ...approval, version: { increment: 1 } } });
     });
 }
+type GuidanceInput = z.infer<typeof guidanceSchema>;
+/**
+ * Inner guidance write (D-12): optimistic version check + upsert only.
+ * Runs inside the caller's transaction and never calls transaction() itself,
+ * so it can be reused by saveApprovedGuidance without a nested $transaction
+ * (a Prisma TransactionClient has no $transaction method at runtime).
+ */
+export async function saveGuidanceInTransaction(tx: Tx, environment: Environment, actor: Actor, input: GuidanceInput) {
+    const where = { environment_topic: { environment, topic: input.topic } };
+    const old = await tx.aiServiceKnowledgeEntry.findUnique({ where });
+    if ((old?.version ?? 0) !== input.expectedVersion)
+        throw new ServiceDenied();
+    return tx.aiServiceKnowledgeEntry.upsert({ where, create: { environment, topic: input.topic, content: input.content, approved: input.approved, updatedById: actor.userId },
+        update: { content: input.content, approved: input.approved, version: { increment: 1 }, updatedById: actor.userId } });
+}
 export async function saveGuidance(db: Database, environment: Environment, actor: Actor, value: unknown) {
     assertAdmin(actor);
     const input = parse(guidanceSchema, value);
     safePublicText(input.content);
-    return transaction(db, environment, async (tx) => {
-        const where = { environment_topic: { environment, topic: input.topic } };
-        const old = await tx.aiServiceKnowledgeEntry.findUnique({ where });
-        if ((old?.version ?? 0) !== input.expectedVersion)
-            throw new ServiceDenied();
-        return tx.aiServiceKnowledgeEntry.upsert({ where, create: { environment, topic: input.topic, content: input.content, approved: input.approved, updatedById: actor.userId },
-            update: { content: input.content, approved: input.approved, version: { increment: 1 }, updatedById: actor.userId } });
-    });
+    return transaction(db, environment, (tx) => saveGuidanceInTransaction(tx, environment, actor, input));
 }
 export async function readState(db: Database, environment: Environment, actor: Actor, now: Date) {
     assertAdmin(actor);
