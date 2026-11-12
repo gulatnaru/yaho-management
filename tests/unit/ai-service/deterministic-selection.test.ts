@@ -52,6 +52,7 @@ describe("deterministic selection (OQ-12 P0-A hybrid, no model call)", () => {
         "야호 준비물 알려줘. 아이 이름은 합성아기야",
         "야호 일정 알려줘. 서울특별시 합성구 합성로 123에 살아",
         "야호 준비물 알려줘. 전화번호는 010-1234-5678이야",
+        "야호 준비물 알려줘. 123-456-789로 보내면 돼",
     ])("returns null when personal or health text rides along: %s", async question => {
         expect(decideSelection(question, await catalog())).toBeNull();
     });

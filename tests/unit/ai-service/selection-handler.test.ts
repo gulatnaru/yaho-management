@@ -69,4 +69,10 @@ describe("handler selection boundaries and billing", () => {
             expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 2, unknownCount: 1 });
         } finally { vi.useRealTimers(); }
     });
+    it("returns handoff before claim when the account-number word rides along (COND-1)", async () => {
+        const { run, execute, f } = setup();
+        expect(await run("야호 준비물 알려줘. 계좌번호는 123-456-789야")).toBe(HANDOFF);
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.state.aiServiceRequest).toHaveLength(0);
+    });
 });
