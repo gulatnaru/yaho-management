@@ -132,6 +132,14 @@ describe("saveApprovedGuidance (OQ-16 registration)", () => {
         expect(f.state.aiServiceGuidanceAudit).toHaveLength(2);
     });
 });
+describe("fake TransactionClient (D-12)", () => {
+    it("has no nested $transaction: calling it must fail in unit tests", async () => {
+        const f = fakeDb();
+        await f.db.$transaction(async (tx) => {
+            expect((tx as Record<string, unknown>).$transaction).toBeUndefined();
+        });
+    });
+});
 describe("readApprovedGuidanceState", () => {
     it("returns nothing before registration and both rows after", async () => {
         const f = fakeDb();

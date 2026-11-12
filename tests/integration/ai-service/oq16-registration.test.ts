@@ -107,4 +107,67 @@ describe.sequential("OQ-16 registration on real PostgreSQL (isolated DB 55435)",
         await expect(db.aiServiceGuidanceAudit.create({ data: { environment: "PREVIEW", topic: "POLICY", version: 1,
             contentSha256: "0".repeat(64), actorId: "synthetic-admin" } })).rejects.toThrow();
     });
+
+    it("rejects a version conflict without an audit row", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowBefore).not.toBeNull();
+        await expect(saveApprovedGuidance(db, "PREVIEW", admin, { topic: "RAIN", content: rain, expectedVersion: 99 }, approvedRegistry))
+            .rejects.toThrow("AI_SERVICE_DENIED");
+        expect(await guidanceAuditCount()).toBe(before);
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rain });
+    });
+
+    it("rejects a duplicate submission with a stale expectedVersion", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowBefore).not.toBeNull();
+        expect(rowBefore!.version).toBeGreaterThan(0);
+        await expect(saveApprovedGuidance(db, "PREVIEW", admin, { topic: "RAIN", content: rain, expectedVersion: rowBefore!.version - 1 }, approvedRegistry))
+            .rejects.toThrow("AI_SERVICE_DENIED");
+        expect(await guidanceAuditCount()).toBe(before);
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rain });
+    });
+
+    it("admits exactly one of two concurrent submissions", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowBefore).not.toBeNull();
+        const current = rowBefore!.version;
+        const attempt = () => saveApprovedGuidance(db, "PREVIEW", admin, { topic: "RAIN", content: rain, expectedVersion: current }, approvedRegistry);
+        const results = await Promise.allSettled([attempt(), attempt()]);
+        const fulfilled = results.filter((r) => r.status === "fulfilled");
+        const rejected = results.filter((r) => r.status === "rejected");
+        expect(fulfilled).toHaveLength(1);
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+        expect(((rejected[0] as PromiseRejectedResult).reason as Error).message).toContain("AI_SERVICE_DENIED");
+        expect(await guidanceAuditCount()).toBe(before + 1);
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowAfter).toMatchObject({ version: current + 1, content: rain });
+    });
+
+    it("rolls back the guidance row when the audit write fails", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowBefore).not.toBeNull();
+        // Sabotage the audit INSERT on this throwaway cluster only: a
+        // trigger that rejects every audit row, so the wrapper's audit
+        // create fails inside the same transaction as the guidance upsert.
+        await db.$executeRaw`DROP TRIGGER IF EXISTS _oq16_fail_audit ON "AiServiceGuidanceAudit"`;
+        await db.$executeRaw`CREATE OR REPLACE FUNCTION public._oq16_fail_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'INJECTED_AUDIT_FAILURE'; END $$`;
+        await db.$executeRaw`CREATE TRIGGER _oq16_fail_audit BEFORE INSERT ON "AiServiceGuidanceAudit" FOR EACH ROW EXECUTE FUNCTION public._oq16_fail_audit()`;
+        try {
+            await expect(saveApprovedGuidance(db, "PREVIEW", admin, { topic: "RAIN", content: rain, expectedVersion: rowBefore!.version }, approvedRegistry))
+                .rejects.toThrow("AI_SERVICE_DENIED");
+            expect(await guidanceAuditCount()).toBe(before);
+            const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+            expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rain });
+        } finally {
+            await db.$executeRaw`DROP TRIGGER IF EXISTS _oq16_fail_audit ON "AiServiceGuidanceAudit"`;
+            await db.$executeRaw`DROP FUNCTION IF EXISTS public._oq16_fail_audit()`;
+        }
+    });
 });

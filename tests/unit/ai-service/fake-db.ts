@@ -59,22 +59,11 @@ export function fakeDb() {
     const state: Record<string, Row[]> = Object.fromEntries(modelNames.map(n => [n, []]));
     const operations: string[] = [];
     let serial = Promise.resolve(), failure: string | null = null;
-    const tx: Record<string, unknown> = { $queryRaw: async () => [], $executeRaw: async () => { operations.push("lock"); return 1; },
-        // Nested $transaction (savepoint): saveGuidance runs its own
-        // transaction() inside the registration wrapper's outer transaction.
-        // A nested failure restores only the nested snapshot; the outer
-        // transaction restores everything when the error propagates.
-        $transaction: async <T>(fn: (tx: unknown) => Promise<T>) => {
-            const before = structuredClone(state);
-            try {
-                return await fn(tx);
-            }
-            catch (error) {
-                for (const key of modelNames)
-                    state[key] = before[key];
-                throw error;
-            }
-        } };
+    const tx: Record<string, unknown> = { $queryRaw: async () => [], $executeRaw: async () => { operations.push("lock"); return 1; } };
+    // NOTE (D-12): the fake TransactionClient deliberately has NO nested
+    // $transaction. A real Prisma TransactionClient has no $transaction
+    // method at runtime, so any code that calls tx.$transaction must fail
+    // in unit tests instead of passing on a hand-made savepoint model.
     for (const name of modelNames) {
         const operation = (op: string) => {
             operations.push(name + "." + op);
