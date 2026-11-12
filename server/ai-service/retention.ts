@@ -14,6 +14,9 @@ export async function purgeExpired(db: Database, environment: Environment, now: 
             await recoverInTransaction(tx, environment, now);
             const expired = await tx.aiServiceRequest.findMany({ where: { environment, expiresAt: { lte: now } }, select: { id: true }, orderBy: { expiresAt: "asc" }, take: 100 });
             // All privacy-bearing request rows disappear. Monetary holds stay in monthly aggregate.
+            // Deleting an expired UNKNOWN row likewise leaves its unknownCount increment and
+            // unreleased reservedKrw in the budget month, so claim stays blocked until
+            // reconcileMonth resolveAllHeld clears them — purge is not recovery.
             const result = await tx.aiServiceRequest.deleteMany({ where: { environment, id: { in: expired.map(r => r.id) }, expiresAt: { lte: now } } });
             await tx.aiServiceQuotaBucket.deleteMany({ where: { environment, expiresAt: { lte: now } } });
             await tx.aiServiceRetentionJob.update({ where: { environment }, data: { status: "IDLE", attempts: 0,

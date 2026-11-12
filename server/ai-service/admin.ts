@@ -155,7 +155,10 @@ const deleteConsultationInput = z.object({
  * unauthorized row fail with the identical fixed error, so existence is never
  * disclosed. PROCESSING rows release their reservedKrw from the budget month
  * (same decrement as the recoverInTransaction FAILED path); SETTLED, UNKNOWN,
- * and FAILED rows change no budget. Each deleted row writes one audit row
+ * and FAILED rows change no budget. Deleting an UNKNOWN row does not unblock
+ * claim: its unknownCount increment and unreleased reservedKrw stay in the
+ * budget month, so the month stays blocked until reconcileMonth resolveAllHeld
+ * clears them — deleting a row is not recovery. Each deleted row writes one audit row
  * (request UUID + actor + reason code + scope only). Quota-bucket aliases are
  * left alone: they expire within 2 hours on their own.
  */
@@ -173,7 +176,7 @@ export async function deleteConsultation(db: Database, environment: Environment,
             const row = await tx.aiServiceRequest.findFirst({ where: { id: parsed.requestId as string, environment } });
             targets = row && row.subjectHashes.some((h) => subjectHashes.includes(h)) ? [row] : [];
         } else {
-            targets = await tx.aiServiceRequest.findMany({ where: { environment, subjectHashes: { hasSome: subjectHashes } }, take: 100 });
+            targets = await tx.aiServiceRequest.findMany({ where: { environment, subjectHashes: { hasSome: subjectHashes } }, orderBy: { createdAt: "desc" }, take: 100 });
         }
         if (targets.length === 0)
             throw new ServiceDenied();
