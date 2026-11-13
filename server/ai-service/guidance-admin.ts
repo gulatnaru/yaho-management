@@ -32,8 +32,8 @@ function sha256Hex(value: string): string {
 /**
  * Approved-guidance registration (OQ-16). Only the two operator-approved v1
  * texts may be stored, and only by an authenticated ADMIN in PREVIEW.
- * Validation order (SPEC §4.3): newline normalization (D-13) -> topic
- * allowlist -> PREVIEW-only -> ADMIN -> content sha256 against the approved
+ * Validation order (SPEC §4.3): topic allowlist -> PREVIEW-only -> ADMIN ->
+ * newline normalization (D-13) -> content sha256 against the approved
  * registry (normalized submitted bytes, before trim) -> guidanceSchema parse
  * + safePublicText (before entering the transaction, SPEC §4.3 item 9) ->
  * inner write + audit row in a single real transaction (D-12, option 2: no
