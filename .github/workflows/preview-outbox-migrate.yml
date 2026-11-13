@@ -1,18 +1,35 @@
-# Preview-only official Prisma migrate deploy for the NotificationOutbox migration.
+# Preview-only official Prisma migrate deploy for the OQ-16 guidance-audit migration.
+# CI-BRANCH VERSION. Prepared 2026-11-13 under the approved OQ-16 Preview execution.
+# Target path on the CI branch:
+#   .github/workflows/preview-outbox-migrate.yml
+# (NOT a new workflow name.) WHY THIS PATH: GitHub workflow_dispatch can only be
+# triggered for a workflow whose file exists on the default branch. The path
+# preview-outbox-migrate.yml already exists on default (workflow ID 397767921,
+# state active), so dispatching that path with --ref ci-preview-oq16-guidance-audit-migrate
+# resolves, and the run uses THIS branch's version of the file. A new file existing
+# only on a branch is NOT dispatchable. Main's file is NEVER modified by this branch,
+# and this branch must NEVER be merged to main (merging would overwrite main's
+# outbox workflow). Delete this branch after the migration.
 # Manual execution ONLY (workflow_dispatch). Never auto-triggered.
 # Target: Preview Supabase project ONLY, verified by parsed project ref before any DB touch.
 # Secrets referenced by NAME only (values never printed, never stored in this file):
 #   PREVIEW_DIRECT_URL   - Preview Direct/Session-pooler connection string
 #   PREVIEW_PROJECT_REF  - expected Preview project ref (registered as a repo secret)
-# Verification is decided by command exit code only: DO blocks raise on mismatch.
-# The Preview runtime role is unconfirmed from this connection, so no runtime-role
-# claim is made here; the later C smoke test proves it (app writes via its own
-# runtime connection).
-# Application code, schema, and migration files are NOT part of this workflow;
-# the migrate run checks out the verified commit 1337a195af87e3ecbaf4eaffccc259516bbf25e0.
-# DO NOT MERGE without an explicit merge decision (see PR description).
-
-name: preview-outbox-migrate
+# The guidance_audit migration file is embedded EXACTLY as reviewed (OQ-16 HEAD
+# cbdef6d, tree clean). Before deploy, its sha256 hash is verified
+# against the approved value; any mismatch aborts the run. The base tree is the
+# verified main tip 749f29d97b6a6df2ce89f556c0154909c380ead6 (ls-remote 2026-11-13,
+# unchanged since P0). NOTE: actions/checkout
+# uses the pinned main-tip SHA as the ref (same as the G2/G3/G4/P0 CI precedents,
+# whose runs succeeded). The migration SQL is inline because the OQ-16 branch is
+# NOT pushed before the migration, so the runner cannot check it out.
+# Prisma is pinned to 6.19.3 via npx (the isolated-verified version); no npm ci
+# is needed because migrate/db-execute do not require the repo's node_modules.
+# The CI branch also carries a vercel.json gate
+# (deploymentEnabled: {"ci-preview-oq16-guidance-audit-migrate": false})
+# so the push itself creates no Vercel deployment.
+# DO NOT MERGE without an explicit merge decision (and never merge this branch).
+name: preview-oq16-guidance-audit-migrate
 
 on:
   workflow_dispatch:
@@ -26,17 +43,75 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: preview-oq16-guidance-audit-migrate
+  cancel-in-progress: false
+
 jobs:
   migrate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "1337a195af87e3ecbaf4eaffccc259516bbf25e0"
+          ref: "749f29d97b6a6df2ce89f556c0154909c380ead6"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      - name: Write oq16-guidance-audit migration file (reviewed content, hash-checked)
+        run: |
+          set -euo pipefail
+          mkdir -p prisma/migrations/20261112161600_ai_service_guidance_audit
+          cat > prisma/migrations/20261112161600_ai_service_guidance_audit/migration.sql << 'OQ16_GUIDANCE_AUDIT_MIGRATION_SQL'
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+          
+          -- CreateTable
+          CREATE TABLE "AiServiceGuidanceAudit" (
+              "id" TEXT NOT NULL,
+              "environment" TEXT NOT NULL,
+              "topic" TEXT NOT NULL,
+              "version" INTEGER NOT NULL,
+              "contentSha256" TEXT NOT NULL,
+              "actorId" TEXT NOT NULL,
+              "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          
+              CONSTRAINT "AiServiceGuidanceAudit_pkey" PRIMARY KEY ("id")
+          );
+          
+          -- CreateIndex
+          CREATE INDEX "AiServiceGuidanceAudit_environment_topic_createdAt_idx" ON "AiServiceGuidanceAudit"("environment", "topic", "createdAt");
+          
+          -- Audit rows carry no guidance text and no Kakao identity: only the
+          -- environment, topic, version, content sha256, ADMIN actor, and timestamps.
+          ALTER TABLE "AiServiceGuidanceAudit" ADD CONSTRAINT "ai_service_guidance_audit_values"
+           CHECK ("environment" IN ('PREVIEW','PRODUCTION')
+           AND "topic" IN ('PREPARATION','RAIN'));
+          
+          -- Guard trigger: UPDATE is always refused; DELETE is refused only while the
+          -- row is inside the 1-year audit retention window. Rows older than 365 days
+          -- may be purged. Same shape as the AiServiceDeletionAudit guard (P0).
+          CREATE FUNCTION "ai_service_guidance_audit_guard"() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+           IF TG_OP = 'UPDATE' THEN
+            RAISE EXCEPTION 'AI_SERVICE_GUIDANCE_AUDIT_APPEND_ONLY';
+           END IF;
+           IF TG_OP = 'DELETE' AND OLD."createdAt" > now() - interval '365 days' THEN
+            RAISE EXCEPTION 'AI_SERVICE_GUIDANCE_AUDIT_RETAINED';
+           END IF;
+           RETURN OLD;
+          END $$;
+          CREATE TRIGGER "ai_service_guidance_audit_guard_trigger" BEFORE UPDATE OR DELETE ON "AiServiceGuidanceAudit"
+           FOR EACH ROW EXECUTE FUNCTION "ai_service_guidance_audit_guard"();
+          
+          -- No public client role receives direct table access.
+          ALTER TABLE "AiServiceGuidanceAudit" ENABLE ROW LEVEL SECURITY;
+          REVOKE ALL ON TABLE "AiServiceGuidanceAudit" FROM anon, authenticated;
+          
+          COMMIT;
+          OQ16_GUIDANCE_AUDIT_MIGRATION_SQL
+          echo "bd186e5a5d3d254af3bdf87f0caaad03c1b7dca5394e00f3f2f9ab7f8e6a159a  prisma/migrations/20261112161600_ai_service_guidance_audit/migration.sql" > /tmp/oq16-guidance-audit-checksum.txt
+          sha256sum -c /tmp/oq16-guidance-audit-checksum.txt
       - name: Pre-connection target guard (Preview only, no DB touch)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
@@ -108,59 +183,85 @@ jobs:
             exit 1
           fi
           echo "Pre-connection guard passed: target yaho-preview, Preview project ref match, port 5432"
-      - name: Status check + official migrate deploy (Preview only)
+      - name: Preflight (Preview only, read-only checks)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
           DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
         run: |
           set -euo pipefail
-          # Never print DATABASE_URL or DIRECT_URL.
-          # A) Connection + failed-migration + outbox-absent check (read-only).
-          # Decided by exit code only: the DO block raises on any mismatch,
-          # so success means all conditions hold. No result rows are parsed.
-          # The error text is used only to label the abort, never to pass.
-          set +e
-          PRECHECK_OUTPUT="$(npx prisma db execute --schema prisma/schema.prisma --stdin 2>&1 <<'SQL'
+          # A) Read-only preflight: no failed/incomplete, guidance-audit absent, applied 24.
+          # Decided by exit code only: the DO block raises on any mismatch.
+          if ! npx --yes prisma@6.19.3 db execute --schema prisma/schema.prisma --stdin <<'SQL'
           DO $$
           BEGIN
             IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) THEN
               RAISE EXCEPTION 'failed or incomplete migration exists';
             END IF;
-            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox') THEN
-              RAISE EXCEPTION 'outbox migration already applied (not pending)';
+            IF EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name = '20261112161600_ai_service_guidance_audit') THEN
+              RAISE EXCEPTION 'guidance-audit migration already present';
+            END IF;
+            IF (SELECT COUNT(*) FROM "_prisma_migrations") <> 24 THEN
+              RAISE EXCEPTION 'applied count is not 23';
             END IF;
           END $$;
           SQL
-          )"
-          PRECHECK_EXIT=$?
-          set -e
-          if [ "$PRECHECK_EXIT" -ne 0 ]; then
-            case "$PRECHECK_OUTPUT" in
-              *'failed or incomplete migration exists'*)
-                echo "ABORT: failed or incomplete migration exists"
-                ;;
-              *'outbox migration already applied'*)
-                echo "ABORT: outbox migration already applied (not pending)"
-                ;;
-              *)
-                echo "ABORT: cannot connect or query migration history (connection failure)"
-                ;;
-            esac
+          then
+            echo "ABORT: preflight failed (see command error above)"
             exit 1
           fi
-          # B) Prisma-native pending check (content-based; robust to exit-code semantics).
-          STATUS_BEFORE="$(npx prisma migrate status --schema prisma/schema.prisma || true)"
-          if ! echo "$STATUS_BEFORE" | grep -q '20261026090000_notification_outbox'; then
-            echo "ABORT: outbox migration is not listed as pending (history mismatch)"
+          # B) Prisma-native status classification.
+          # Prisma 6.19.3 status exits 1 for BOTH pending and errors, so the exit code
+          # alone cannot distinguish them; the output must be classified.
+          # Orphans (the 2 Phase 21 rows present in DB but not in this checkout) are
+          # listed in a SEPARATE section, so a global grep would wrongly abort:
+          # parse ONLY the pending section.
+          STATUS_FILE="$(mktemp)"
+          STATUS_EXIT=0
+          npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$STATUS_FILE" 2>&1 || STATUS_EXIT=$?
+          echo "--- migrate status output (migration names only, no secrets) ---"
+          cat "$STATUS_FILE"
+          echo "--- end status output ---"
+          if [ "$STATUS_EXIT" -eq 0 ]; then
+            echo "ABORT: status reports up to date (no pending) - oq16-guidance-audit already applied or unexpected state"
             exit 1
           fi
-          PENDING="$(echo "$STATUS_BEFORE" | grep -E '^[0-9]{14}_' || true)"
-          if [ "$PENDING" != "20261026090000_notification_outbox" ]; then
-            echo "ABORT: pending is not exactly the outbox migration (multiple pending or format mismatch)"
+          if ! grep -q 'have not yet been applied' "$STATUS_FILE"; then
+            if grep -qE 'Error:|P[0-9]{4}|Can'"'"'t|cannot|drift|checksum' "$STATUS_FILE"; then
+              echo "ABORT: migrate status errored (connection, schema, or drift) - no deploy attempted"
+            else
+              echo "ABORT: status output format unexpected (no pending section header)"
+            fi
             exit 1
           fi
-          npx prisma migrate deploy --schema prisma/schema.prisma
-          npx prisma migrate status --schema prisma/schema.prisma
+          # Take only migration-name lines (strip leading whitespace); the orphan
+          # section can follow the pending section without a blank line, and a
+          # plain section capture would then swallow orphan names too.
+          # NOTE: with exactly 1 pending migration Prisma prints the SINGULAR
+          # "The migration have not yet been applied:" (plural only for 2+),
+          # so match on 'have not yet been applied:' without the noun.
+          PENDING="$(awk '/have not yet been applied:/{flag=1; next} flag && /^$/{exit} flag {gsub(/^[[:space:]]+/, ""); if ($0 ~ /^[0-9]{14}_/) print}' "$STATUS_FILE")"
+          echo "PENDING=[$PENDING]"
+          EXPECTED_PENDING="20261112161600_ai_service_guidance_audit"
+          if [ "$PENDING" != "$EXPECTED_PENDING" ]; then
+            echo "ABORT: pending is not exactly the guidance-audit migration"
+            exit 1
+          fi
+          echo "Preflight passed: applied 24, pending exactly the guidance-audit migration, failed 0"
+      - name: Official migrate deploy (Preview only)
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma
+          POST_FILE="$(mktemp)"
+          POST_EXIT=0
+          npx --yes prisma@6.19.3 migrate status --schema prisma/schema.prisma > "$POST_FILE" 2>&1 || POST_EXIT=$?
+          if [ "$POST_EXIT" -ne 0 ] || ! grep -q 'up to date' "$POST_FILE"; then
+            echo "ABORT: post-deploy status is not up to date"
+            exit 1
+          fi
+          echo "Deploy complete: post-deploy status is up to date"
       - name: Post-apply verification (DO block, exit code decides)
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_URL }}
@@ -168,38 +269,50 @@ jobs:
         run: |
           set -euo pipefail
           # Decided by exit code only: the DO block raises on any mismatch.
-          # Each privilege is checked individually. No result rows are parsed.
-          # NOTE: the Preview runtime role is NOT verified here (its identity
-          # is unconfirmed from this connection), so no runtime-role claim is
-          # made by this step; the later C smoke test proves it, because the
-          # app writes via its own runtime connection.
-          if ! npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+          if ! npx --yes prisma@6.19.3 db execute --schema prisma/schema.prisma --stdin <<'SQL'
           DO $$
           DECLARE
             v_count integer;
+            v_check text;
             v_rls boolean;
             v_priv text;
           BEGIN
-            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'NotificationOutbox';
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations";
+            IF v_count <> 25 THEN RAISE EXCEPTION 'verification failed: total'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: failed'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261112161600_ai_service_guidance_audit';
+            IF v_check <> 'bd186e5a5d3d254af3bdf87f0caaad03c1b7dca5394e00f3f2f9ab7f8e6a159a' THEN RAISE EXCEPTION 'verification failed: guidance-audit checksum'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261112161600_ai_service_guidance_audit' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: guidance-audit history'; END IF;
+            SELECT COUNT(*) INTO v_count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'AiServiceGuidanceAudit';
             IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: table'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'NotificationOutboxStatus' AND n.nspname = 'public';
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: enum'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'NotificationOutbox' AND indexname IN ('NotificationOutbox_dedupeKey_key', 'NotificationOutbox_status_nextRetryAt_idx', 'NotificationOutbox_status_leaseExpiresAt_idx');
-            IF v_count <> 3 THEN RAISE EXCEPTION 'verification failed: indexes'; END IF;
-            SELECT BOOL_OR(relrowsecurity) INTO v_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'NotificationOutbox' AND n.nspname = 'public';
+            SELECT COUNT(*) INTO v_count FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'AiServiceGuidanceAudit' AND indexname IN ('AiServiceGuidanceAudit_environment_topic_createdAt_idx');
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: indexes'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_constraint WHERE conname = 'ai_service_guidance_audit_values' AND contype = 'c';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: check constraint'; END IF;
+            SELECT BOOL_OR(relrowsecurity) INTO v_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'AiServiceGuidanceAudit' AND n.nspname = 'public';
             IF v_rls IS NOT TRUE THEN RAISE EXCEPTION 'verification failed: RLS'; END IF;
-            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename = 'NotificationOutbox';
+            SELECT COUNT(*) INTO v_count FROM pg_policies WHERE schemaname = 'public' AND tablename = 'AiServiceGuidanceAudit';
             IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: policies'; END IF;
-            SELECT COUNT(*) INTO v_count FROM "_prisma_migrations" WHERE migration_name = '20261026090000_notification_outbox' AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
-            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: history'; END IF;
+            SELECT COUNT(*) INTO v_count FROM pg_trigger WHERE tgname = 'ai_service_guidance_audit_guard_trigger';
+            IF v_count <> 1 THEN RAISE EXCEPTION 'verification failed: trigger'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "AiServiceGuidanceAudit";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: AiServiceGuidanceAudit not empty'; END IF;
+            SELECT COUNT(*) INTO v_count FROM "AiServiceKnowledgeEntry";
+            IF v_count <> 0 THEN RAISE EXCEPTION 'verification failed: AiServiceKnowledgeEntry not empty'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261112090000_ai_service_deletion_audit';
+            IF v_check <> 'e4514cc1880398aaf975b8b10e8ac4b3dfa2e744c28f822cbe4c94ac29ac35d1' THEN RAISE EXCEPTION 'verification failed: deletion_audit checksum changed'; END IF;
+            SELECT checksum INTO v_check FROM "_prisma_migrations" WHERE migration_name = '20261107120000_notification_closure_executor';
+            IF v_check <> '7a6afb15d213830c4999e293fdaf93648aac367c164b11d40d9f4ecd8b08207b' THEN RAISE EXCEPTION 'verification failed: closure_executor checksum changed'; END IF;
             FOREACH v_priv IN ARRAY ARRAY['INSERT', 'SELECT', 'UPDATE', 'DELETE'] LOOP
-              IF NOT has_table_privilege('postgres', '"NotificationOutbox"', v_priv) THEN
+              IF NOT has_table_privilege('postgres', '"AiServiceGuidanceAudit"', v_priv) THEN
                 RAISE EXCEPTION 'verification failed: postgres %', v_priv;
               END IF;
-              IF has_table_privilege('anon', '"NotificationOutbox"', v_priv) THEN
+              IF has_table_privilege('anon', '"AiServiceGuidanceAudit"', v_priv) THEN
                 RAISE EXCEPTION 'verification failed: anon %', v_priv;
               END IF;
-              IF has_table_privilege('authenticated', '"NotificationOutbox"', v_priv) THEN
+              IF has_table_privilege('authenticated', '"AiServiceGuidanceAudit"', v_priv) THEN
                 RAISE EXCEPTION 'verification failed: authenticated %', v_priv;
               END IF;
             END LOOP;
@@ -209,5 +322,11 @@ jobs:
             echo "ABORT: post-apply verification failed (see command error above)"
             exit 1
           fi
-          echo "Post-apply verification passed: table, enum, indexes, RLS, policies, history, privileges"
-          echo "Runtime-role privilege: NOT claimed here (role unconfirmed); proven by the later C smoke test"
+          echo "Post-apply verification passed: 25 history rows, AiServiceGuidanceAudit (empty, RLS, trigger, 1 index, check), guidance-audit checksum, deletion_audit unchanged, closure_executor unchanged, AiServiceKnowledgeEntry empty"
+      - name: Failure diagnostic (runs only on failure)
+        if: failure()
+        run: |
+          echo "Deploy did not complete. Do NOT re-run or resolve without review."
+          echo "Check _prisma_migrations for failed rows (finished_at NULL) and inspect the failed step's log."
+          echo "A failed migration blocks later deploys (P3009) until its state is reviewed."
+          echo "No data was modified by this diagnostic step."
