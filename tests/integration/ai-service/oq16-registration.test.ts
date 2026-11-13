@@ -170,4 +170,34 @@ describe.sequential("OQ-16 registration on real PostgreSQL (isolated DB 55435)",
             await db.$executeRaw`DROP FUNCTION IF EXISTS public._oq16_fail_audit()`;
         }
     });
+
+    it("(e) accepts CRLF and lone-CR submissions on real PostgreSQL (D-13)", async () => {
+        const before = await guidanceAuditCount();
+        const rainRow = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rainRow).not.toBeNull();
+        const savedRain = await saveApprovedGuidance(db, "PREVIEW", admin, { topic: "RAIN", content: rain.replace(/\n/g, "\r\n"), expectedVersion: rainRow!.version }, approvedRegistry);
+        expect(savedRain.content).toBe(rain);
+        expect(await guidanceAuditCount()).toBe(before + 1);
+        const rainAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(sha256(rainAfter!.content)).toBe(approvedRegistry.entries.RAIN.sha256);
+        const prepRow = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } } });
+        expect(prepRow).not.toBeNull();
+        const savedPrep = await saveApprovedGuidance(db, "PREVIEW", admin, { topic: "PREPARATION", content: prep.replace(/\n/g, "\r"), expectedVersion: prepRow!.version }, approvedRegistry);
+        expect(savedPrep.content).toBe(prep);
+        expect(await guidanceAuditCount()).toBe(before + 2);
+        const prepAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } } });
+        expect(sha256(prepAfter!.content)).toBe(approvedRegistry.entries.PREPARATION.sha256);
+    });
+
+    it("(f) still rejects a non-newline byte change with CRLF newlines (D-13 negative control)", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowBefore).not.toBeNull();
+        const tampered = rain.replace(/\n/g, "\r\n").replace("2시간", "3시간");
+        await expect(saveApprovedGuidance(db, "PREVIEW", admin, { topic: "RAIN", content: tampered, expectedVersion: rowBefore!.version }, approvedRegistry))
+            .rejects.toThrow("AI_SERVICE_DENIED");
+        expect(await guidanceAuditCount()).toBe(before);
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
+        expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rain });
+    });
 });

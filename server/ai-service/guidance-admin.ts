@@ -32,13 +32,16 @@ function sha256Hex(value: string): string {
 /**
  * Approved-guidance registration (OQ-16). Only the two operator-approved v1
  * texts may be stored, and only by an authenticated ADMIN in PREVIEW.
- * Validation order (SPEC §4.3): topic allowlist -> PREVIEW-only -> ADMIN ->
- * content sha256 against the approved registry (raw submitted bytes, before
- * trim) -> guidanceSchema parse + safePublicText (before entering the
- * transaction, SPEC §4.3 item 9) -> inner write + audit row in a single
- * real transaction (D-12, option 2: no nested $transaction — a Prisma
- * TransactionClient has no $transaction method at runtime). Any failure
- * returns the fixed error only and stores nothing.
+ * Validation order (SPEC §4.3): newline normalization (D-13) -> topic
+ * allowlist -> PREVIEW-only -> ADMIN -> content sha256 against the approved
+ * registry (normalized submitted bytes, before trim) -> guidanceSchema parse
+ * + safePublicText (before entering the transaction, SPEC §4.3 item 9) ->
+ * inner write + audit row in a single real transaction (D-12, option 2: no
+ * nested $transaction — a Prisma TransactionClient has no $transaction method
+ * at runtime). Any failure returns the fixed error only and stores nothing.
+ * The form submission layer turns textarea newlines into CRLF, so the hash
+ * is computed on the LF-normalized content (D-13); the stored content is
+ * byte-identical to the approved LF original.
  */
 export async function saveApprovedGuidance(db: Database, environment: Environment, actor: Actor, value: unknown, registry: ApprovedGuidanceRegistry = approvedRegistry) {
     const input = parse(submissionSchema, value);
@@ -50,10 +53,16 @@ export async function saveApprovedGuidance(db: Database, environment: Environmen
     const entry = registry.entries[input.topic];
     if (!entry)
         throw new ServiceDenied();
-    const digest = sha256Hex(input.content);
+    // D-13 (SPEC §4.3 step 0): the form submission layer turns textarea
+    // newlines into CRLF, so normalize newlines to LF before the hash
+    // comparison. Every later step (hash, schema parse, safePublicText,
+    // storage) uses this same normalized value, so the stored content stays
+    // byte-identical to the approved LF original.
+    const content = input.content.replace(/\r\n?/g, "\n");
+    const digest = sha256Hex(content);
     if (digest !== entry.sha256)
         throw new ServiceDenied();
-    const guidanceInput = parse(guidanceSchema, { topic: input.topic, content: input.content, approved: true, expectedVersion: input.expectedVersion });
+    const guidanceInput = parse(guidanceSchema, { topic: input.topic, content, approved: true, expectedVersion: input.expectedVersion });
     safePublicText(guidanceInput.content);
     return transaction(db, environment, async (tx) => {
         const saved = await saveGuidanceInTransaction(tx, environment, actor, guidanceInput);

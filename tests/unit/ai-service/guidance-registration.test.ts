@@ -124,6 +124,34 @@ describe("saveApprovedGuidance (OQ-16 registration)", () => {
         expect(f.state.aiServiceKnowledgeEntry).toHaveLength(0);
         expect(f.state.aiServiceGuidanceAudit).toHaveLength(0);
     });
+    it("accepts CRLF newlines (D-13): the form layer submits CRLF, storage stays LF", async () => {
+        const f = fakeDb();
+        const crlfPrep = prep.replace(/\n/g, "\r\n");
+        const savedPrep = await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "PREPARATION", content: crlfPrep, expectedVersion: 0 }, approvedRegistry);
+        expect(savedPrep.content).toBe(prep);
+        expect(f.state.aiServiceGuidanceAudit[0]).toMatchObject({ topic: "PREPARATION", contentSha256: approvedRegistry.entries.PREPARATION.sha256 });
+        const crlfRain = rain.replace(/\n/g, "\r\n");
+        const savedRain = await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "RAIN", content: crlfRain, expectedVersion: 0 }, approvedRegistry);
+        expect(savedRain.content).toBe(rain);
+        expect(f.state.aiServiceGuidanceAudit[1]).toMatchObject({ topic: "RAIN", contentSha256: approvedRegistry.entries.RAIN.sha256 });
+        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(2);
+    });
+    it("accepts lone CR newlines (D-13) and stores the LF original", async () => {
+        const f = fakeDb();
+        const crPrep = prep.replace(/\n/g, "\r");
+        const saved = await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "PREPARATION", content: crPrep, expectedVersion: 0 }, approvedRegistry);
+        expect(saved.content).toBe(prep);
+        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(1);
+        expect(f.state.aiServiceGuidanceAudit).toHaveLength(1);
+    });
+    it("still rejects a non-newline byte change even with CRLF newlines (D-13 negative control)", async () => {
+        const f = fakeDb();
+        const tampered = prep.replace(/\n/g, "\r\n").replace("운동화", "운동화!");
+        await expect(saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "PREPARATION", content: tampered, expectedVersion: 0 }, approvedRegistry))
+            .rejects.toThrow("AI_SERVICE_DENIED");
+        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(0);
+        expect(f.state.aiServiceGuidanceAudit).toHaveLength(0);
+    });
     it("re-registers the same text with the next expectedVersion", async () => {
         const f = fakeDb();
         await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "PREPARATION", content: prep, expectedVersion: 0 }, approvedRegistry);
