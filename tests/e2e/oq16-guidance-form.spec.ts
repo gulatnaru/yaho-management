@@ -6,10 +6,11 @@ import { PrismaClient } from "@prisma/client";
 import { hash } from "bcryptjs";
 
 // The DB safety gate is enforced by playwright.oq16.config.ts at load
-// (it imports the /tmp db-safety copy that allows port 55435). This spec
-// deliberately imports no gate itself: it must still load cleanly under
-// the main config's `playwright test --list` (where it is skipped — see
-// below) even when the /tmp files are gone after a VM replacement.
+// (it imports the repo gate with port 55435 explicitly allowed via
+// `additionalPorts`). This spec deliberately imports no gate itself: it
+// must still load cleanly under the main config's `playwright test --list`
+// (where it is skipped — see below) even when the /tmp files are gone
+// after a VM replacement.
 
 // OQ-16 form-layer regression test (D-13). The browser fills the real
 // guidance form and clicks "안내 저장", so the submission goes through the

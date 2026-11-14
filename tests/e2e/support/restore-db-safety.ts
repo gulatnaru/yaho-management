@@ -6,8 +6,9 @@ import { assertSafeE2eDatabaseUrls, type DatabaseConnectionMetadata } from "./db
  * The existing gate in db-safety.ts pins the database name to `yaho_e2e` with an
  * exact match, so it cannot validate the experiment's derived databases. This
  * helper validates a derived URL WITHOUT changing the existing gate's meaning:
- * db-safety.ts is never edited, and its exact-match rule still applies to the
- * base URLs first (see assertRestoreDatabaseUrls below).
+ * the gate's default is still the exact 55432-only match, and its exact-match
+ * rule still applies to the base URLs first (see assertRestoreDatabaseUrls
+ * below). The gate's opt-in `additionalPorts` is not used here.
  *
  * A derived URL is accepted only when every field matches the CI-local service
  * and the database name is exactly one of this run's two databases.

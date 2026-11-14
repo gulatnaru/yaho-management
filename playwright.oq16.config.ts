@@ -1,10 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
-// The repo gate pins port 55432; this form test runs against the isolated
-// integration cluster on 55435 (OQ-16 schema + test ADMIN live there), so
-// it uses the /tmp copy with ports {55432, 55435} — the same pattern as
-// /tmp/integration-55435.config.ts. Regenerate /tmp/db-safety-55435.ts
-// after a VM replacement (it is wiped with /tmp).
-import { assertSafeE2eDatabaseUrls } from "/tmp/db-safety-55435";
+// The repo gate pins port 55432 by default; this form test runs against the
+// isolated integration cluster on 55435 (OQ-16 schema + test ADMIN live
+// there), so it explicitly allows 55435 here only — via the repo gate's
+// opt-in `additionalPorts`. No /tmp copy is involved: this config must load
+// on any machine (including the Vercel build machine, where /tmp is empty),
+// so it imports the repo gate like every other Playwright config.
+import { assertSafeE2eDatabaseUrls } from "./tests/e2e/support/db-safety";
 
 /**
  * OQ-16 폼 계층 회귀 테스트 전용 Playwright 설정 (메인 playwright.config.ts와 별개).
@@ -21,10 +22,14 @@ import { assertSafeE2eDatabaseUrls } from "/tmp/db-safety-55435";
 if (process.env.PLAYWRIGHT_PREVIEW_E2E === "1" || process.env.VERCEL_ENV) {
     throw new Error("OQ16_FORM_LOCAL_ONLY");
 }
-assertSafeE2eDatabaseUrls({
+assertSafeE2eDatabaseUrls(
+  {
     DATABASE_URL: process.env.DATABASE_URL,
     DIRECT_URL: process.env.DIRECT_URL,
-});
+  },
+  // Isolated integration cluster only — the default gate stays 55432-only.
+  { additionalPorts: ["55435"] },
+);
 
 function requiredLoopbackUrl(name: string): string {
     const value = process.env[name];
