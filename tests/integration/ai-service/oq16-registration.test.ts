@@ -82,6 +82,30 @@ describe.sequential("OQ-16 registration on real PostgreSQL (isolated DB 55435)",
         expect(await guidanceAuditCount()).toBe(before);
     });
 
+    it("rejects a TEACHER actor without changing rows or audit", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } } });
+        expect(rowBefore).not.toBeNull();
+        await expect(saveApprovedGuidance(db, "PREVIEW", { userId: "synthetic-teacher", role: "TEACHER", active: true },
+            { topic: "PREPARATION", content: prep, expectedVersion: 1 }, approvedRegistry))
+            .rejects.toThrow("AI_SERVICE_DENIED");
+        expect(await guidanceAuditCount()).toBe(before);
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } } });
+        expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rowBefore!.content });
+    });
+
+    it("rejects an inactive ADMIN actor without changing rows or audit", async () => {
+        const before = await guidanceAuditCount();
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } } });
+        expect(rowBefore).not.toBeNull();
+        await expect(saveApprovedGuidance(db, "PREVIEW", { userId: "synthetic-admin", role: "ADMIN", active: false },
+            { topic: "PREPARATION", content: prep, expectedVersion: 1 }, approvedRegistry))
+            .rejects.toThrow("AI_SERVICE_DENIED");
+        expect(await guidanceAuditCount()).toBe(before);
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } } });
+        expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rowBefore!.content });
+    });
+
     it("returns the RAIN v1 text verbatim through get_approved_guidance", async () => {
         const tools = createTools(db, "PREVIEW");
         const result = await tools.execute({ name: "get_approved_guidance", args: { topic: "RAIN" } }, signal());

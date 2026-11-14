@@ -85,3 +85,55 @@ describe("deterministic selection (OQ-12 P0-A hybrid, no model call)", () => {
         }
     });
 });
+
+// Classifier phrasing (2026-11-14, SPEC §3 / PLAN §4.2 Level A).
+// Added red-first: the 8 accepted phrasings must return null on the
+// pre-change code, and the probes must stay HANDOFF before and after.
+describe("classifier phrasing: accepted phrasings (SPEC §3)", () => {
+    it.each<[string, ToolCall]>([
+        ["추우면 수업하나요?", guidance("RAIN")],
+        ["추워도 수업 진행해요?", guidance("RAIN")],
+        ["한파에도 숲체험 하나요?", guidance("RAIN")],
+        ["어떤 신발을 신나요?", guidance("PREPARATION")],
+        ["운동화를 신어야 하나요?", guidance("PREPARATION")],
+        ["비 오면 진행하나요?", guidance("RAIN")],
+        ["비가 오는 날에도 수업하나요?", guidance("RAIN")],
+        ["우천 시 수업하나요?", guidance("RAIN")],
+    ])("accepts and authorizes: %s", async (question, call) => {
+        const base = await catalog();
+        expect(decideSelection(question, base)).toEqual(call);
+        expect(authorizeSelection(question, call, base)).toEqual({ allowed: true, call });
+    });
+    it.each([
+        "비 오는 날 준비물과 환불 알려줘", // R1: forbidden 환불 + two topics
+        "영하 10도면 무조건 취소하나요?", // R2: forbidden 취소 + residual 무조건
+        "우리 아이가 알레르기가 있는데 어떤 옷을 입나요?", // R3: 옷 is not a trigger, residual remains
+        "준비물과 예약자 명단 알려줘", // R4: forbidden 예약자·명단
+    ])("rejects: %s", async question => {
+        const base = await catalog();
+        expect(decideSelection(question, base)).toBeNull();
+        for (const topic of ["PREPARATION", "RAIN", "POLICY"] as const)
+            expect(authorizeSelection(question, guidance(topic), base)).toEqual({ allowed: false });
+    });
+    it("R5 (OQ-5): selection returns the POLICY call; execution handoff is asserted in the simulation (S2)", async () => {
+        const base = await catalog();
+        expect(decideSelection("운영 정책 안내를 보여 주세요", base)).toEqual(guidance("POLICY"));
+    });
+    it.each([
+        "추석 일정 알려주세요", // residual 추석 — bare 추 is not a trigger
+        "비용이 얼마예요?", // residual 비용얼마예요 — no topic, rest remains
+        "비공개 수업 하나요?", // forbidden 비공개
+        "환불 하나요?", // forbidden 환불
+        "정원 하나요?", // forbidden 정원
+        "예약자 명단 하나요?", // forbidden 예약자·명단
+        "영하에도 수업하나요?", // residual 영하 — 영하 is neither trigger nor queryWord
+        "추운데도 수업하나요?", // residual 추운데 — out of scope (OQ-3)
+    ])("probe stays HANDOFF: %s", async question => {
+        expect(decideSelection(question, await catalog())).toBeNull();
+    });
+    it("documents the bare-하나요 side effect (SPEC §5.3-4): single-topic + no residue now grounds", async () => {
+        const base = await catalog();
+        expect(decideSelection("준비물 하나요?", base)).toEqual(guidance("PREPARATION"));
+        expect(decideSelection("우천 하나요?", base)).toEqual(guidance("RAIN"));
+    });
+});

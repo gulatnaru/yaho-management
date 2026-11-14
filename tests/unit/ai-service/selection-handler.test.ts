@@ -76,3 +76,53 @@ describe("handler selection boundaries and billing", () => {
         expect(f.state.aiServiceRequest).toHaveLength(0);
     });
 });
+
+// Handler gate + classifier phrasing (2026-11-14, SPEC §3 / PLAN §4.2 Level B).
+// Added red-first: the 8 accepted phrasings return HANDOFF on the pre-change
+// code (5 gate-blocked, 3 classifier-blocked — see the gate baseline probe).
+// The mocked tools return "합성 준비물은 모자입니다." for any guidance call,
+// so this level asserts gate pass + grounded reply, not the v1 wording
+// (that is the simulation's job, S1).
+describe("handler gate + classifier phrasing (SPEC §3)", () => {
+    it.each([
+        "추우면 수업하나요?",
+        "추워도 수업 진행해요?",
+        "한파에도 숲체험 하나요?",
+        "어떤 신발을 신나요?",
+        "운동화를 신어야 하나요?",
+        "비 오면 진행하나요?",
+        "비가 오는 날에도 수업하나요?",
+        "우천 시 수업하나요?",
+    ])("grounds the accepted phrasing: %s", async question => {
+        const { run, execute, f } = setup();
+        expect(await run(question)).toBe("합성 준비물은 모자입니다.");
+        expect(execute).toHaveBeenCalledTimes(4);
+        expect(f.state.aiServiceRequest[0].status).toBe("SETTLED");
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0 });
+    });
+    it.each([
+        "비용이 얼마예요?",
+        "비공개 수업 하나요?",
+        "환불 하나요?",
+        "정원 하나요?",
+        "영하에도 수업하나요?",
+        "추운데도 수업하나요?",
+    ])("gate blocks before claim: %s", async question => {
+        const { run, execute, f } = setup();
+        expect(await run(question)).toBe(HANDOFF);
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.state.aiServiceRequest).toHaveLength(0);
+    });
+    it.each([
+        "추석 일정 알려주세요", // gate passes on 일정, classifier blocks on residual 추석
+        "예약자 명단 하나요?", // gate passes on 예약, classifier blocks on forbidden 예약자·명단
+        "비 오는 날 준비물과 환불 알려줘", // R1: gate passes on 준비물, forbidden 환불 blocks
+        "준비물과 예약자 명단 알려줘", // R4: gate passes on 준비물, forbidden 예약자·명단 blocks
+    ])("classifier blocks after preloads only: %s", async question => {
+        const { run, execute, f } = setup();
+        expect(await run(question)).toBe(HANDOFF);
+        expect(execute).toHaveBeenCalledTimes(2);
+        expect(f.state.aiServiceRequest[0].status).toBe("SETTLED");
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0 });
+    });
+});

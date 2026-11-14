@@ -47,7 +47,7 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         // Reject obvious secret/PII/execution requests before external dispatch, regardless of model behavior.
         // OQ-12 P0-A: health/allergy vocabulary and birthdate words are also
         // gated here — such questions go to staff without any model call.
-        if (!/야호|숲|프로그램|일정|예약|준비물|우천|비가|운영정책/.test(utterance) ||
+        if (!/야호|숲|프로그램|일정|예약|준비물|우천|비가|운영정책|추우면|추워도|한파|신발|운동화|비\s*오면/.test(utterance) ||
             /(?:이전|모든)\s*지시|무시|system\s*prompt|ignore|SQL|개인정보|비밀번호|카드번호|계좌번호|주민번호|생년월일|0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}|[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(utterance)
             || healthKeywordPattern.test(utterance))
             return skillReply();
