@@ -28,7 +28,7 @@ describe("isolated Skill flow", () => {
             const r = await call();
             expect(r.status).toBe(503);
             expect(r.headers.get("cache-control")).toBe("no-store");
-            expect(await r.json()).toMatchObject({ version: "2.0" });
+            expect(await r.json()).toEqual({ version: "2.0", template: { outputs: [{ simpleText: { text: HANDOFF } }] } });
         }
         await expect(adminContext()).rejects.toThrow("AI_SERVICE_DENIED");
     });

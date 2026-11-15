@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { readState } from "@/server/ai-service/admin";
 import { verifySeedProfile } from "@/server/ai-service/seed-profile";
@@ -10,6 +10,7 @@ const actor = { userId: "p1-seed-integration", role: "ADMIN", active: true };
 const now = new Date();
 const fixture = { environment: "PREVIEW" as const, paused: true, schedulerEnabled: false, provider: "OPENAI", model: "gpt-6-luna", priceVersion: "price-v1", inputNanoUsdPerToken: 100, outputNanoUsdPerToken: 500, fxMilliKrwPerUsd: 1400000, fxCheckedAt: now, fxSource: "synthetic-source", updatedById: actor.userId };
 const state = async () => (await readState(db, "PREVIEW", actor, now)).config;
+beforeEach(async () => { await db.aiServiceConfig.deleteMany({ where: { environment: "PREVIEW" } }); });
 afterEach(async () => { await db.aiServiceConfig.deleteMany({ where: { environment: "PREVIEW", updatedById: actor.userId } }); });
 afterAll(async () => { await db.$disconnect(); });
 describe.sequential("seed profiles on isolated PostgreSQL", () => {
