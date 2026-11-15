@@ -33,6 +33,7 @@ describe("AI service server-rendered request summary", () => {
             f.seed("aiServiceRequest", { id: `synthetic-${index}`, environment: "PREVIEW", status,
                 dispatched: status === "SETTLED" || status === "UNKNOWN", createdAt: now, expiresAt: new Date(+now + 1) });
         f.seed("aiServiceRequest", { id: "synthetic-expired", environment: "PREVIEW", status: "UNKNOWN", dispatched: true, createdAt: now, expiresAt: now });
+        f.seed("aiServiceDeletionAudit", { environment: "PREVIEW", kind: "EMERGENCY_PAUSE", actorId: "synthetic-admin", createdAt: now });
 
         const html = renderToStaticMarkup(await AiServicePage());
 
@@ -43,6 +44,7 @@ describe("AI service server-rendered request summary", () => {
         expect(html).toContain(`<time dateTime="${now.toISOString()}">${now.toISOString()}</time>`);
         expect(html).toContain("현재 환경의 보관기간(90일) 내 전체 요청 기준 · 만료·삭제된 요청 제외");
         expect(html).toContain("호출 시도는 외부 호출 발송이 기록된 요청 수입니다.");
+        expect(html).toMatch(/최근 중단 실행자: (?:<!-- -->)?synthetic-admin/);
         for (const label of ["설정 저장", "공개 설정 저장", "안내 저장", "예산·청구 대조", "삭제 작업 재시도", "유효 상담 기록"])
             expect(html).toContain(label);
         expect(html).toContain("/ai-service/synthetic-3");

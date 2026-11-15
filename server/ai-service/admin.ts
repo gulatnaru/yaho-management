@@ -106,8 +106,8 @@ export async function readState(db: Database, environment: Environment, actor: A
         const retention = await tx.aiServiceRetentionJob.findUnique({ where: { environment } });
         const config = await tx.aiServiceConfig.findUnique({ where: { environment } });
         const oldestAudit = await tx.aiServiceDeletionAudit.findFirst({ where: { environment }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
-        const emergencyPauses = await tx.aiServiceDeletionAudit.findMany({ where: { environment, kind: "EMERGENCY_PAUSE" }, select: { createdAt: true } });
-        const lastEmergencyPauseAt = emergencyPauses.reduce<Date | null>((latest, row) => !latest || row.createdAt > latest ? row.createdAt : latest, null);
+        const emergencyPauses = await tx.aiServiceDeletionAudit.findMany({ where: { environment, kind: "EMERGENCY_PAUSE" }, select: { createdAt: true, actorId: true } });
+        const lastEmergencyPause = emergencyPauses.reduce<(typeof emergencyPauses)[number] | null>((latest, row) => !latest || row.createdAt > latest.createdAt ? row : latest, null);
         return {
             summary: { ...summary, asOf: now },
             monitoring: {
@@ -118,7 +118,8 @@ export async function readState(db: Database, environment: Environment, actor: A
                 nextRetentionRetryAt: retention?.nextRetryAt ?? null,
                 retentionErrorCode: retention?.errorCode === "RETENTION_FAILED" ? "RETENTION_FAILED" : null,
                 emergencyPauseCount: await tx.aiServiceDeletionAudit.count({ where: { environment, kind: "EMERGENCY_PAUSE" } }),
-                lastEmergencyPauseAt,
+                lastEmergencyPauseAt: lastEmergencyPause?.createdAt ?? null,
+                lastEmergencyPauseById: lastEmergencyPause?.actorId ?? null,
                 auditCount: await tx.aiServiceDeletionAudit.count({ where: { environment } }),
                 auditOldestCreatedAt: oldestAudit?.createdAt ?? null,
             },

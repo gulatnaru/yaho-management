@@ -25,14 +25,22 @@ export async function saveConfigAction(form: FormData) {
             fxMilliKrwPerUsd: Number(v.fxMilliKrwPerUsd) }, new Date());
     });
 }
-export async function pauseServiceAction(form: FormData): Promise<void> {
+export type PauseServiceState = { paused: true; version: number; alreadyPaused: boolean; pausedAt: string } | { formError: "AI_SERVICE_DENIED" } | null;
+export async function pauseServiceAction(_previousState: PauseServiceState, form: FormData): Promise<PauseServiceState> {
+    try {
+    let result: Exclude<PauseServiceState, { formError: string } | null> | null = null;
     await action(async () => {
         // adminContext()는 첫 문장으로 assertDeploymentApproved()를 호출하므로, 잠금이 닫혀 있는 동안에는 P-1 액션도 실행되지 않는다.
         // 이것은 결함이 아니라 설계상 정합이다 — 잠금이 닫혀 있으면 Skill 라우트와 관리자 변이가 전부 503/거부 상태라 상담이 이미 열려 있지 않기 때문이다. P-1이 필요한 상황은 잠금이 열려 있는 상태뿐이다.
         const c = await adminContext();
         const { expectedVersion } = parse(z.object({ expectedVersion: z.coerce.number().int().nonnegative() }).strict(), { expectedVersion: form.get("expectedVersion") ?? undefined });
-        await pauseService(c.db, c.environment, c.actor, { expectedVersion });
+        const paused = await pauseService(c.db, c.environment, c.actor, { expectedVersion });
+        result = { ...paused, pausedAt: paused.pausedAt.toISOString() };
     });
+    return result;
+    } catch {
+        return { formError: "AI_SERVICE_DENIED" };
+    }
 }
 export async function savePublicationAction(form: FormData) {
     await action(async () => {

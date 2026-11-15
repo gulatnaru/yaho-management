@@ -58,6 +58,21 @@ describe.sequential("emergency pause on isolated PostgreSQL", () => {
         expect(await config()).toMatchObject({ paused: true, version: 2 });
         expect(await audits()).toHaveLength(baselineAudits.length + 2);
     });
+    it("reports the latest actor after a different ADMIN confirms the pause", async () => {
+        const secondActor = { ...actor, userId: "p1-integration-second-admin" };
+        const secondBaseline = await db.aiServiceDeletionAudit.count({ where: { environment: "PREVIEW", kind: "EMERGENCY_PAUSE", actorId: secondActor.userId } });
+        const first = await pauseService(db, "PREVIEW", actor, { expectedVersion: 1 });
+        expect(first.alreadyPaused).toBe(false);
+        expect((await readState(db, "PREVIEW", actor, now)).monitoring).toMatchObject({ emergencyPauseCount: baselineEmergency.length + 1, lastEmergencyPauseById: actor.userId });
+        const second = await pauseService(db, "PREVIEW", secondActor, { expectedVersion: 1 });
+        expect(second.alreadyPaused).toBe(true);
+        expect((await readState(db, "PREVIEW", actor, now)).monitoring).toMatchObject({ emergencyPauseCount: baselineEmergency.length + 2, lastEmergencyPauseById: secondActor.userId });
+        expect(await config()).toMatchObject({ updatedById: actor.userId, version: first.version });
+        const rows = await db.aiServiceDeletionAudit.findMany({ where: { environment: "PREVIEW", kind: "EMERGENCY_PAUSE" } });
+        expect(rows).toHaveLength(baselineEmergency.length + 2);
+        expect(await audits()).toHaveLength(baselineAudits.length + 1);
+        expect(rows.filter(row => row.actorId === secondActor.userId)).toHaveLength(secondBaseline + 1);
+    });
     it("I5 reports the latest emergency audit", async () => {
         const latest = Math.max(+now, ...baselineEmergency.map(row => +row.createdAt));
         const timestamps = [new Date(latest + 1), new Date(latest + 2)];
