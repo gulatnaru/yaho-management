@@ -85,7 +85,7 @@ describe.sequential("D scenarios: synthetic-only public skill boundary", () => {
         const before = await rows();
         const response = await POST(request(payload("야호 비가 오면 운영하나요")));
         expect(response.status).toBe(200);
-        expect(await response.json()).toEqual(skillReply("우천 시 운영 안내를 확인해 주세요."));
+        expect(await response.json()).toEqual(skillReply("합성 안내: 우천 시 운영 안내를 확인해 주세요."));
         const after = await rows();
         expect(after).toHaveLength(before.length + 1);
         const created = after.find(row => !before.some(old => old.id === row.id));

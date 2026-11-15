@@ -37,7 +37,7 @@ export function createSyntheticTools(scope: SyntheticScope): Tools {
         }
         if (call.name === "get_class_availability") throw new ServiceDenied();
         if (call.args.topic === "PREPARATION") return { kind: "GUIDANCE", content: "합성 안내: 움직이기 편한 복장과 신발을 준비해 주세요." };
-        if (call.args.topic === "RAIN") return { kind: "GUIDANCE", content: "우천 시 운영 안내를 확인해 주세요." };
+        if (call.args.topic === "RAIN") return { kind: "GUIDANCE", content: "합성 안내: 우천 시 운영 안내를 확인해 주세요." };
         throw new ServiceDenied();
     } };
 }

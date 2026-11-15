@@ -27,6 +27,7 @@ async function visitAiService(page: Page, ready: Locator) {
             return;
         } catch (error) {
             if (retries >= 3 || !(await page.getByRole("button", { name: "다시 시도" }).isVisible())) throw error;
+            console.warn(`visitAiService retry ${retries + 1}/3: ${error instanceof Error ? error.message : String(error)}`);
             await page.waitForTimeout(1_000);
             await page.reload();
         }
