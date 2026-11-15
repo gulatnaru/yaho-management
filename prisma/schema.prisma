@@ -1386,6 +1386,7 @@ model AiServiceConfig {
 }
 model AiServiceDeletionAudit {
   id String @id @default(cuid())
+  seq BigInt @default(autoincrement())
   environment String
   kind String
   requestId String

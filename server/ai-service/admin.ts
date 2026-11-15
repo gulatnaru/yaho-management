@@ -106,8 +106,7 @@ export async function readState(db: Database, environment: Environment, actor: A
         const retention = await tx.aiServiceRetentionJob.findUnique({ where: { environment } });
         const config = await tx.aiServiceConfig.findUnique({ where: { environment } });
         const oldestAudit = await tx.aiServiceDeletionAudit.findFirst({ where: { environment }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
-        const emergencyPauses = await tx.aiServiceDeletionAudit.findMany({ where: { environment, kind: "EMERGENCY_PAUSE" }, select: { createdAt: true, actorId: true } });
-        const lastEmergencyPause = emergencyPauses.reduce<(typeof emergencyPauses)[number] | null>((latest, row) => !latest || row.createdAt > latest.createdAt ? row : latest, null);
+        const lastEmergencyPause = await tx.aiServiceDeletionAudit.findFirst({ where: { environment, kind: "EMERGENCY_PAUSE" }, orderBy: { seq: "desc" }, select: { createdAt: true, actorId: true } });
         return {
             summary: { ...summary, asOf: now },
             monitoring: {

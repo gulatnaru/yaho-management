@@ -16,11 +16,11 @@ let baselineEmergency: { createdAt: Date }[];
 beforeEach(async () => {
     baselineAudits = await audits();
     baselineEmergency = await db.aiServiceDeletionAudit.findMany({ where: { environment: "PREVIEW", kind: "EMERGENCY_PAUSE" }, select: { createdAt: true } });
-    expect(await db.aiServiceConfig.findUnique({ where: { environment: "PREVIEW" } })).toBeNull();
+    await db.aiServiceConfig.deleteMany({ where: { environment: "PREVIEW" } });
     await db.aiServiceConfig.create({ data: { environment: "PREVIEW", ...data, updatedById: actor.userId, updatedAt: new Date(+now - 10000) } });
 });
 afterEach(async () => {
-    await db.aiServiceConfig.deleteMany({ where: { environment: "PREVIEW", updatedById: actor.userId } });
+    await db.aiServiceConfig.deleteMany({ where: { environment: "PREVIEW", updatedById: { in: [actor.userId, "p1-concurrent-second-admin"] } } });
 });
 afterAll(async () => { await db.$disconnect(); });
 describe.sequential("emergency pause on isolated PostgreSQL", () => {
@@ -72,6 +72,26 @@ describe.sequential("emergency pause on isolated PostgreSQL", () => {
         expect(rows).toHaveLength(baselineEmergency.length + 2);
         expect(await audits()).toHaveLength(baselineAudits.length + 1);
         expect(rows.filter(row => row.actorId === secondActor.userId)).toHaveLength(secondBaseline + 1);
+    });
+    it("reports the max-seq audit after concurrent pauses by different ADMINs", async () => {
+        const secondActor = { ...actor, userId: "p1-concurrent-second-admin" };
+        const before = await db.aiServiceDeletionAudit.findMany({ where: { environment: "PREVIEW", kind: "EMERGENCY_PAUSE" }, select: { id: true } });
+        const results = await Promise.all([
+            pauseService(db, "PREVIEW", actor, { expectedVersion: 1 }),
+            pauseService(db, "PREVIEW", secondActor, { expectedVersion: 1 }),
+        ]);
+        expect(results.map(result => result.alreadyPaused).sort()).toEqual([false, true]);
+        const rows = await db.aiServiceDeletionAudit.findMany({ where: { environment: "PREVIEW", kind: "EMERGENCY_PAUSE" }, orderBy: { seq: "asc" } });
+        expect(rows).toHaveLength(baselineEmergency.length + 2);
+        const newRows = rows.filter(row => !before.some(old => old.id === row.id));
+        expect(newRows).toHaveLength(2);
+        expect(newRows[0].seq < newRows[1].seq).toBe(true);
+        expect(newRows.map(row => row.actorId).sort()).toEqual([actor.userId, secondActor.userId].sort());
+        expect((await readState(db, "PREVIEW", actor, now)).monitoring).toMatchObject({
+            emergencyPauseCount: baselineEmergency.length + 2,
+            lastEmergencyPauseById: newRows[1].actorId,
+            lastEmergencyPauseAt: newRows[1].createdAt,
+        });
     });
     it("I5 reports the latest emergency audit", async () => {
         const latest = Math.max(+now, ...baselineEmergency.map(row => +row.createdAt));

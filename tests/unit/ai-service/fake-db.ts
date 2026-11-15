@@ -81,7 +81,15 @@ export function fakeDb() {
             return structuredClone(row);
         };
         tx[name] = {
-            findFirst: async ({ where = {} }: Row = {}) => { operation("findFirst"); return structuredClone(find(where as Row) ?? null); },
+            findFirst: async ({ where = {}, orderBy }: Row = {}) => {
+                operation("findFirst");
+                if (name === "aiServiceDeletionAudit" && (orderBy as Row | undefined)?.seq === "desc") {
+                    const rows = state[name].filter(r => matches(r, where as Row));
+                    rows.sort((a, b) => a.seq === b.seq ? 0 : (a.seq as bigint) > (b.seq as bigint) ? -1 : 1);
+                    return structuredClone(rows[0] ?? null);
+                }
+                return structuredClone(find(where as Row) ?? null);
+            },
             findUnique: async ({ where }: Row) => { operation("findUnique"); return structuredClone(find(where as Row) ?? null); },
             findMany: async ({ where = {}, take, select }: Row = {}) => { operation("findMany"); return structuredClone(state[name].filter(r => matches(r, where as Row)).slice(0, typeof take === "number" ? take : undefined).map(r => select ? Object.fromEntries(Object.keys(select as Row).filter(k => (select as Row)[k]).map(k => [k, r[k]])) : r)); },
             count: async ({ where = {} }: Row = {}) => { operation("count"); return state[name].filter(r => matches(r, where as Row)).length; },

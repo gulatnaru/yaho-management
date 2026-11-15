@@ -56,10 +56,10 @@ describe("emergency pause", () => {
         form.set("expectedVersion", "0");
         expect(await pauseServiceAction(null, form)).toEqual({ formError: "AI_SERVICE_DENIED" });
     });
-    it("reports latest emergency audit irrespective of insertion order", async () => {
+    it("reports latest emergency audit by seq rather than createdAt", async () => {
         const f = fixture(); expect((await readState(f.db, "PREVIEW", actor, now)).monitoring).toMatchObject({ emergencyPauseCount: 0, lastEmergencyPauseAt: null, lastEmergencyPauseById: null });
-        for (const [kind, offset, actorId] of [["EMERGENCY_PAUSE", 1, "first-admin"], ["EMERGENCY_PAUSE", 3, "latest-admin"], ["DELETE_SINGLE", 10, "other-admin"], ["EMERGENCY_PAUSE", 2, "first-admin"]] as const) f.seed("aiServiceDeletionAudit", { environment: "PREVIEW", kind, actorId, createdAt: new Date(+now + offset) });
-        expect((await readState(f.db, "PREVIEW", actor, now)).monitoring).toMatchObject({ emergencyPauseCount: 3, lastEmergencyPauseAt: new Date(+now + 3), lastEmergencyPauseById: "latest-admin" });
+        for (const [kind, offset, actorId, seq] of [["EMERGENCY_PAUSE", 3, "first-admin", 1n], ["EMERGENCY_PAUSE", 2, "second-admin", 2n], ["DELETE_SINGLE", 10, "other-admin", 3n], ["EMERGENCY_PAUSE", 1, "latest-admin", 4n]] as const) f.seed("aiServiceDeletionAudit", { environment: "PREVIEW", kind, actorId, seq, createdAt: new Date(+now + offset) });
+        expect((await readState(f.db, "PREVIEW", actor, now)).monitoring).toMatchObject({ emergencyPauseCount: 3, lastEmergencyPauseAt: new Date(+now + 1), lastEmergencyPauseById: "latest-admin" });
     });
     it("retains the deployment lock", () => { expect(() => assertDeploymentApproved()).toThrow("AI_SERVICE_DENIED"); });
 });
