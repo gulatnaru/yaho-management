@@ -127,8 +127,8 @@ export async function readState(db: Database, environment: Environment, actor: A
             classes: await tx.aiServiceClassPublication.findMany({ where: { environment }, take: 50 }),
             knowledge: await tx.aiServiceKnowledgeEntry.findMany({ where: { environment }, take: 3 }),
             budgets: await tx.aiServiceBudgetMonth.findMany({ where: { environment }, orderBy: { month: "desc" }, take: 12 }),
-            consultations: await tx.aiServiceRequest.findMany({ where: { environment, expiresAt: { gt: now } },
-                select: { id: true, status: true, createdAt: true, expiresAt: true, category: true }, orderBy: { createdAt: "desc" }, take: 50 }),
+            consultations: (await tx.aiServiceRequest.findMany({ where: { environment, expiresAt: { gt: now } },
+                select: { id: true, status: true, createdAt: true, expiresAt: true, category: true, authKind: true }, orderBy: { createdAt: "desc" }, take: 50 })).map(row => ({ ...row, authKind: row.authKind ?? "unknown" })),
             retention,
             expiredCount: await tx.aiServiceRequest.count({ where: { environment, expiresAt: { lte: now } } }),
         };

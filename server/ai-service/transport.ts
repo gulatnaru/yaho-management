@@ -16,6 +16,8 @@ export function authenticateSkill(headers: Headers, secrets: SkillSecrets, envir
     const { prod, test } = secrets;
     if (!prod || prod.length < 32 || prod.length > 256 || !supplied || supplied.length > 256)
         throw new ServiceDenied();
+    if (test !== undefined && (test.length < 32 || test.length > 256 || test === prod))
+        throw new ServiceDenied();
     const suppliedHash = createHash("sha256").update(supplied).digest();
     if (timingSafeEqual(suppliedHash, createHash("sha256").update(prod).digest()))
         return "prod";
@@ -38,4 +40,20 @@ export function parseSkill(raw: string, botId: string) {
     if (input.bot.id !== botId || input.userRequest.callbackUrl)
         throw new ServiceDenied();
     return input;
+}
+
+// Only authentication can issue a context; structural copies and strings are rejected.
+const issued = new WeakMap<object, { kind: SkillAuthContext; environment: Environment }>();
+export type VerifiedSkillAuth = object & { readonly __verifiedSkillAuth: unique symbol };
+export function authenticateSkillContext(headers: Headers, secrets: SkillSecrets, environment: Environment): VerifiedSkillAuth {
+    const kind = authenticateSkill(headers, secrets, environment);
+    const context = Object.freeze({}) as VerifiedSkillAuth;
+    issued.set(context, { kind, environment });
+    return context;
+}
+export function verifiedSkillKind(context: unknown, environment: Environment): SkillAuthContext {
+    if (typeof context !== "object" || context === null) throw new ServiceDenied();
+    const evidence = issued.get(context);
+    if (!evidence || evidence.environment !== environment) throw new ServiceDenied();
+    return evidence.kind;
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { claimAuth } from "./auth-fixture";
 import { programDigest } from "@/server/ai-service/publication-digest";
 import { safePublicText, createTools, groundedReply } from "@/server/ai-service/tools";
 import { saveGuidance, savePublication } from "@/server/ai-service/admin";
@@ -61,7 +62,7 @@ async function runSettlement(usage: BillingUsage) {
     seedConfig(f);
     f.state.aiServiceConfig[0].provider = "OPENAI";
     const k = keys();
-    const c = await claim(f.db, { environment: "PREVIEW", now, hmacPins: hmacPins(k, "PREVIEW"),
+    const c = await claim(f.db, { authContext: claimAuth(), environment: "PREVIEW", now, hmacPins: hmacPins(k, "PREVIEW"),
         requestHashes: hashes(k, "request", "PREVIEW", "synthetic-request-0001"),
         payloadHashes: hashes(k, "payload", "PREVIEW", "synthetic"),
         subjectHashes: hashes(k, "subject", "PREVIEW", "synthetic") });
@@ -124,7 +125,7 @@ describe("Review1-M2 premium usage is charged or held", () => {
         seedConfig(f);
         f.seed("aiServiceBudgetMonth", { id: "b", environment: "PREVIEW", month: "2026-10", capKrw: 1000, usedKrw: 998, reservedKrw: 0, correctionKrw: 0, unknownCount: 0, version: 1 });
         const k = keys();
-        const input = (id: string) => ({ environment: "PREVIEW" as const, now, hmacPins: hmacPins(k, "PREVIEW"), requestHashes: hashes(k, "request", "PREVIEW", id), payloadHashes: hashes(k, "payload", "PREVIEW", "synthetic"), subjectHashes: hashes(k, "subject", "PREVIEW", "synthetic") });
+        const input = (id: string) => ({ authContext: claimAuth(), environment: "PREVIEW" as const, now, hmacPins: hmacPins(k, "PREVIEW"), requestHashes: hashes(k, "request", "PREVIEW", id), payloadHashes: hashes(k, "payload", "PREVIEW", "synthetic"), subjectHashes: hashes(k, "subject", "PREVIEW", "synthetic") });
         const result = await Promise.allSettled([claim(f.db, input("synthetic-request-0001")), claim(f.db, input("synthetic-request-0002"))]);
         expect(result.filter(r => r.status === "fulfilled")).toHaveLength(1);
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 998, reservedKrw: 2 });

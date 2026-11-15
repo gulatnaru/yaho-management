@@ -1,3 +1,4 @@
+import { verifiedSkillKind, type VerifiedSkillAuth } from "./transport";
 import { billingContract, validatedBillingUsage, type BillingUsage } from "./billing";
 import type { HmacPin } from "./crypto";
 import { createHash, randomUUID } from "node:crypto";
@@ -6,6 +7,7 @@ import { hardCap, RETENTION_MS, ServiceDenied, type Environment, assertAdmin, ty
 import { conservativeKrw, monthKst, reserveKrw, type Price } from "./cost";
 import { transaction, type Database, type Tx } from "./repository";
 export type ClaimInput = {
+    authContext: VerifiedSkillAuth;
     environment: Environment;
     hmacPins: HmacPin[];
     requestHashes: string[];
@@ -52,6 +54,7 @@ export async function recoverInTransaction(tx: Tx, environment: Environment, now
     }
 }
 export async function claim(db: Database, input: ClaimInput) {
+    const authKind = verifiedSkillKind(input.authContext, input.environment);
     validatePins(input);
     hashes(input.requestHashes);
     hashes(input.payloadHashes);
@@ -64,7 +67,7 @@ export async function claim(db: Database, input: ClaimInput) {
         await checkPins(tx, environment, input.hmacPins, true);
         const old = await tx.aiServiceRequest.findFirst({ where: { environment, requestHashes: { hasSome: input.requestHashes } } });
         if (old) {
-            if (!input.payloadHashes.includes(old.payloadHash) || old.expiresAt <= now)
+            if (old.authKind !== authKind || !input.payloadHashes.includes(old.payloadHash) || old.expiresAt <= now)
                 throw new ServiceDenied();
             return { kind: "DUPLICATE" as const, status: old.status };
         }
@@ -104,7 +107,7 @@ export async function claim(db: Database, input: ClaimInput) {
                 await tx.aiServiceQuotaBucket.create({ data: { environment, kind: w.kind, window: w.window, aliases: w.aliases, accepted: 1, expiresAt: w.expiresAt } });
         }
         await tx.aiServiceBudgetMonth.update({ where: { id: bucket.id }, data: { reservedKrw: { increment: reservedKrw }, version: { increment: 1 } } });
-        const row = await tx.aiServiceRequest.create({ data: { id: randomUUID(), environment, month, requestKey: input.requestHashes[0], requestHashes: input.requestHashes,
+        const row = await tx.aiServiceRequest.create({ data: { id: randomUUID(), environment, authKind, month, requestKey: input.requestHashes[0], requestHashes: input.requestHashes,
                 payloadHash: input.payloadHashes[0], subjectHashes: input.subjectHashes, reservedKrw,
                 // OQ-12 P0-A (P-3): the live path no longer calls a model, so the
                 // row is marked DETERMINISTIC/deterministic-v1 instead of the

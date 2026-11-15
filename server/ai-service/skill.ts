@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { HANDOFF, ServiceDenied, healthKeywordPattern, skillHandoffCard, skillReply, skillSchema } from "./contracts";
 import { handleSkill, type Dependencies } from "./handler";
-import { authenticateSkill } from "./transport";
+import { verifiedSkillKind, type VerifiedSkillAuth } from "./transport";
 
 const DEADLINE_MS = 4000;
 const requestIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
@@ -46,7 +46,7 @@ const replySchema = z.object({
 }).strict();
 
 /** Trusted internal service seam; never pass model output directly to this adapter. */
-export type SkillService = (headers: Headers, raw: string, stableRequestId: string, deps: Dependencies) => Promise<unknown>;
+export type SkillService = (headers: Headers, raw: string, stableRequestId: string, deps: Dependencies, authContext?: VerifiedSkillAuth) => Promise<unknown>;
 
 /**
  * HANDOFF as a textCard with an operator button. The card builder enforces the
@@ -66,12 +66,12 @@ function handoffCard() {
  * The caller must supply a stable request identity: Kakao's real identity/retry
  * contract is still an activation gate. Never derive it from user/utterance.
  */
-export async function handleKakaoSkill(headers: Headers, raw: string, stableRequestId: string, deps: Dependencies, service: SkillService = handleSkill) {
+export async function handleKakaoSkill(headers: Headers, raw: string, stableRequestId: string, deps: Dependencies, service: SkillService = handleSkill, authContext?: VerifiedSkillAuth) {
     const started = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
         // Authentication must precede even JSON parsing and any service/DB access.
-        authenticateSkill(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment);
+        verifiedSkillKind(authContext, deps.environment);
         if (Buffer.byteLength(raw, "utf8") > 16384)
             throw new ServiceDenied();
         const input = requestSchema.parse(JSON.parse(raw));
@@ -97,7 +97,7 @@ export async function handleKakaoSkill(headers: Headers, raw: string, stableRequ
         // The race also bounds a noncooperative delegate or settlement. Its attached
         // rejection handler consumes late errors without publishing a late reply.
         const result = await Promise.race([
-            Promise.resolve().then(() => service(headers, normalized, stableRequestId, deps)),
+            Promise.resolve().then(() => service(headers, normalized, stableRequestId, deps, authContext)),
             deadline,
         ]);
         if (Date.now() - started >= DEADLINE_MS)

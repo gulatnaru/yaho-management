@@ -1,5 +1,6 @@
+import { assertSyntheticScope, type SyntheticScope } from "./synthetic-scope";
 import { HANDOFF, ServiceDenied, healthKeywordPattern, skillReply, type Environment } from "./contracts";
-import { authenticateSkill, parseSkill } from "./transport";
+import { authenticateSkillContext, verifiedSkillKind, parseSkill, type VerifiedSkillAuth } from "./transport";
 import { hashes, hmacPins, validateKeys, encrypt, type Keys } from "./crypto";
 import { claim, markDispatched, settle } from "./ledger";
 import { transaction, type Database } from "./repository";
@@ -15,10 +16,11 @@ export type Dependencies = {
     testSecret?: string;
     botId: string;
     tools: Tools;
+    syntheticScope?: SyntheticScope;
     clock?: () => Date;
 };
 /** All current public routes remain disabled. This DI core is exercised with synthetic test doubles only. */
-export async function handleSkill(headers: Headers, raw: string, stableRequestId: string, deps: Dependencies) {
+export async function handleSkill(headers: Headers, raw: string, stableRequestId: string, deps: Dependencies, authContext?: VerifiedSkillAuth) {
     const clock = deps.clock ?? (() => new Date()), started = Date.now();
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 3000);
     let claimed: Awaited<ReturnType<typeof claim>> | undefined;
@@ -38,7 +40,8 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         }
     }
     try {
-        authenticateSkill(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment);
+        const verified = authContext ?? authenticateSkillContext(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment);
+        verifiedSkillKind(verified, deps.environment);
         const input = parseSkill(raw, deps.botId);
         if (!/^[A-Za-z0-9_-]{16,128}$/.test(stableRequestId))
             throw new ServiceDenied();
@@ -51,7 +54,8 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
             /(?:이전|모든)\s*지시|무시|system\s*prompt|ignore|SQL|개인정보|비밀번호|카드번호|계좌번호|주민번호|생년월일|0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}|[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(utterance)
             || healthKeywordPattern.test(utterance))
             return skillReply();
-        claimed = await stage(() => claim(deps.db, { environment: deps.environment, now: clock(), hmacPins: hmacPins(deps.keys, deps.environment),
+        if (deps.syntheticScope) assertSyntheticScope(deps.syntheticScope);
+        claimed = await stage(() => claim(deps.db, { authContext: verified, environment: deps.environment, now: clock(), hmacPins: hmacPins(deps.keys, deps.environment),
             requestHashes: hashes(deps.keys, "request", deps.environment, stableRequestId),
             payloadHashes: hashes(deps.keys, "payload", deps.environment, utterance),
             subjectHashes: hashes(deps.keys, "subject", deps.environment, input.userRequest.user.id) }), 350);

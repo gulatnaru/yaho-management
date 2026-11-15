@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { claim, markDispatched, settle, reconcileMonth } from "@/server/ai-service/ledger";
 import { purgeExpired } from "@/server/ai-service/retention";
 import { fakeDb, seedConfig, now } from "./fake-db";
+import { claimAuth } from "./auth-fixture";
 const hash = (c: string) => "v1:" + c.repeat(64);
-function input(id = "a", date = now) { return { environment: "PREVIEW" as const, hmacPins: [{ version: "v1", fingerprint: "1".repeat(64) }], now: date, requestHashes: [hash(id)], payloadHashes: [hash("b")], subjectHashes: [hash("c")] }; }
+function input(id = "a", date = now) { return { authContext: claimAuth(), environment: "PREVIEW" as const, hmacPins: [{ version: "v1", fingerprint: "1".repeat(64) }], now: date, requestHashes: [hash(id)], payloadHashes: [hash("b")], subjectHashes: [hash("c")] }; }
 const actor = { userId: "synthetic-admin", role: "ADMIN", active: true };
 async function setup() {
     const f = fakeDb();
@@ -34,7 +35,7 @@ describe("Prisma repository contracts (serialized doubles, NOT PostgreSQL proof)
     it("productionuses7000 independently of Preview1000", async () => {
         const f = fakeDb();
         seedConfig(f, "PRODUCTION");
-        const c = await claim(f.db, { ...input(), environment: "PRODUCTION" });
+        const c = await claim(f.db, { ...input(), environment: "PRODUCTION", authContext: claimAuth("PRODUCTION") });
         expect(c.kind).toBe("CLAIMED");
         expect(f.state.aiServiceBudgetMonth[0].capKrw).toBe(7000);
     });

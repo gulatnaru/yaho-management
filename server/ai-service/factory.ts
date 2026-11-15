@@ -1,12 +1,12 @@
 import { readServiceKeys } from "./keys";
 import { ServiceDenied } from "./contracts";
-import { createTools } from "./tools";
+import { createSyntheticTools, type SyntheticScope } from "./synthetic-scope";
 import type { Database } from "./repository";
 import type { Environment } from "./contracts";
 import type { Dependencies } from "./handler";
 
 /**
- * Live (non-test) dependency assembly for the AI Service Skill route.
+ * Scoped synthetic dependency assembly for the preview Skill route.
  *
  * OQ-12 P0-A: the live path no longer calls a model, so this factory assembles
  * no provider and validates no OpenAI API key. A missing key must not fail
@@ -30,6 +30,7 @@ export type LiveDependenciesInput = {
     db: Database;
     environment: Environment;
     botId: string;
+    scope: SyntheticScope;
 };
 
 export function createLiveDependencies(input: LiveDependenciesInput): Dependencies {
@@ -39,6 +40,6 @@ export function createLiveDependencies(input: LiveDependenciesInput): Dependenci
     // Empty string means unset (same convention as the operational secret).
     const testSecret = input.env.AI_SERVICE_SKILL_TEST_SECRET || undefined;
     if (testSecret && (testSecret.length < 32 || testSecret.length > 256 || testSecret === secret)) throw new ServiceDenied();
-    const tools = createTools(input.db, input.environment);
-    return { db: input.db, environment: input.environment, keys, secret, testSecret, botId: input.botId, tools };
+    const tools = createSyntheticTools(input.scope);
+    return { db: input.db, environment: input.environment, keys, secret, testSecret, botId: input.botId, tools, syntheticScope: input.scope };
 }

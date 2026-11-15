@@ -134,13 +134,16 @@ describe("fixed new scope preserves approved migration and old runner",()=>{
   mkdirSync(path.join(root,"20261017000000_unapproved"));writeFileSync(path.join(root,"20261017000000_unapproved","migration.sql"),"-- unapproved");
   expect(()=>evaluateAiServicePreviewMigration(rows,root)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
- it("accepts the current 27-migration repository under the updated Preview policy",()=>{
-  const root=path.resolve("prisma/migrations"),names=listRepositoryMigrations(root);
+ it("accepts the approved 27-migration inventory and rejects the new local-only migration",()=>{
+  const {root}=approvedMigrationFixture(),names=listRepositoryMigrations(root);
   expect(names).toHaveLength(27);
   expect(names).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES]);
   expect(migrationChecksum(root,"20260825090000_phase6_safety_attendance")).toBe("35594760d05aa8c59029548e64489af0ff9363edeb9a90b058a512233ab94eba");
   const rows=names.map(name=>({migration_name:name,checksum:migrationChecksum(root,name),finished_at:new Date(),rolled_back_at:null}));
   expect(evaluateAiServicePreviewMigration(rows,root)).toMatchObject({pendingMigrations:[],deployRequired:false});
+  const actual=path.resolve("prisma/migrations");
+  expect(listRepositoryMigrations(actual)).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES, "20261115180000_ai_service_request_auth_kind"]);
+  expect(()=>evaluateAiServicePreviewMigration(rows,actual)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
  it("rejects the Phase 6 Production CRLF checksum in applied rows and in repository files",()=>{
   const {root,rows}=approvedMigrationFixture();

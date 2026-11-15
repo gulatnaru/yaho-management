@@ -1446,6 +1446,7 @@ model AiServiceKnowledgeEntry {
 }
 model AiServiceRequest {
   id String @id
+  authKind String?
   environment String
   month String
   requestKey String

@@ -5,6 +5,7 @@ import { readConsultation, deleteConsultation } from "@/server/ai-service/admin"
 import { purgeOldAudits, runRetentionCron } from "@/server/ai-service/retention";
 import { hashes } from "@/server/ai-service/crypto";
 import { handleKakaoSkill } from "@/server/ai-service/skill";
+import { authenticateSkillContext } from "@/server/ai-service/transport";
 import { createTools } from "@/server/ai-service/tools";
 import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 import { skillReply, type Environment } from "@/server/ai-service/contracts";
@@ -156,7 +157,7 @@ describe.sequential("OQ-12 P0 on real PostgreSQL (isolated DB 55435)", () => {
         const reply = await handleKakaoSkill(new Headers({ "x-yaho-skill-key": deps.secret }), JSON.stringify({
             bot: { id: deps.botId }, userRequest: { utterance: "야호 준비물을 알려 주세요.", user: { id: subject } },
             action: { id: "synthetic-eval-action", name: "synthetic" },
-        }), `oq12-p0-read-${suffix}`, deps);
+        }), `oq12-p0-read-${suffix}`, deps, undefined, authenticateSkillContext(new Headers({ "x-yaho-skill-key": deps.secret }), { prod: deps.secret, test: deps.testSecret }, environment));
         expect(reply).toEqual(skillReply(guidance));
         const row = await db.aiServiceRequest.findFirst({ where: { environment: "PREVIEW" }, orderBy: { createdAt: "desc" } });
         expect(row).not.toBeNull();

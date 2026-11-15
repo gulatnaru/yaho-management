@@ -1,5 +1,6 @@
 import { programDigest, classDigest } from "@/server/ai-service/publication-digest";
 import { describe, it, expect } from "vitest";
+import { claimAuth } from "./auth-fixture";
 import { randomBytes } from "node:crypto";
 import { encrypt, decrypt, hashes, validateKeys, type Keys } from "@/server/ai-service/crypto";
 import { RETENTION_MS, HANDOFF } from "@/server/ai-service/contracts";
@@ -149,7 +150,7 @@ describe("configuration and pause", () => {
         const f = fakeDb();
         seedConfig(f);
         f.state.aiServiceConfig[0].paused = true;
-        await expect(import("@/server/ai-service/ledger").then(m => m.claim(f.db, { environment: "PREVIEW", hmacPins: [{ version: "v1", fingerprint: "1".repeat(64) }], now,
+        await expect(import("@/server/ai-service/ledger").then(m => m.claim(f.db, { authContext: claimAuth(), environment: "PREVIEW", hmacPins: [{ version: "v1", fingerprint: "1".repeat(64) }], now,
             requestHashes: ["v1:" + "a".repeat(64)], payloadHashes: ["v1:" + "b".repeat(64)], subjectHashes: ["v1:" + "c".repeat(64)] }))).rejects.toThrow();
         expect(f.state.aiServiceRequest).toHaveLength(0);
     });

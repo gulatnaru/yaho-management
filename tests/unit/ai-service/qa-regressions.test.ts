@@ -5,10 +5,11 @@ import { hashes, hmacPins, type Keys } from "@/server/ai-service/crypto";
 import { claim, markDispatched, settle, reconcileMonth, type ReconciliationInput } from "@/server/ai-service/ledger";
 import { purgeExpired } from "@/server/ai-service/retention";
 import { fakeDb, seedConfig, now } from "./fake-db";
+import { claimAuth } from "./auth-fixture";
 const actor = { userId: "synthetic-admin", role: "ADMIN", active: true };
 function keys(): Keys { return { encryption: { v1: Buffer.alloc(32, 1) }, hmac: { v1: Buffer.alloc(32, 2) }, activeEncryption: "v1", activeHmac: "v1" }; }
 function input(k: Keys, id = "synthetic-request-A", date = now) {
-    return { environment: "PREVIEW" as const, now: date, hmacPins: hmacPins(k, "PREVIEW"), requestHashes: hashes(k, "request", "PREVIEW", id),
+    return { authContext: claimAuth(), environment: "PREVIEW" as const, now: date, hmacPins: hmacPins(k, "PREVIEW"), requestHashes: hashes(k, "request", "PREVIEW", id),
         payloadHashes: hashes(k, "payload", "PREVIEW", "synthetic-payload"), subjectHashes: hashes(k, "subject", "PREVIEW", "synthetic-guardian") };
 }
 async function unknown(f: ReturnType<typeof fakeDb>, k: Keys, id: string) {

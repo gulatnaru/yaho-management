@@ -1,3 +1,4 @@
+import { authenticateSkillContext } from "../transport";
 import {z} from "zod";
 import {Prisma} from "@prisma/client";
 import {handleSkill} from "../handler";
@@ -31,7 +32,7 @@ async function pgDenied(kind:keyof typeof pgFailures,fn:()=>Promise<unknown>){
  }
  throw new ValidationDenied();
 }
-function input(c:ValidationContext,id:string,date=c.now){return{environment:"PREVIEW" as const,now:date,hmacPins:hmacPins(c.keys,"PREVIEW"),requestHashes:hashes(c.keys,"request","PREVIEW",c.scope.runId+id),payloadHashes:hashes(c.keys,"payload","PREVIEW","synthetic-only"),subjectHashes:hashes(c.keys,"subject","PREVIEW","synthetic-"+c.scope.runId)};}
+function input(c:ValidationContext,id:string,date=c.now){return{authContext:authenticateSkillContext(new Headers({"x-yaho-skill-key":"synthetic-validation-secret-0123456789"}),{prod:"synthetic-validation-secret-0123456789"},"PREVIEW"),environment:"PREVIEW" as const,now:date,hmacPins:hmacPins(c.keys,"PREVIEW"),requestHashes:hashes(c.keys,"request","PREVIEW",c.scope.runId+id),payloadHashes:hashes(c.keys,"payload","PREVIEW","synthetic-only"),subjectHashes:hashes(c.keys,"subject","PREVIEW","synthetic-"+c.scope.runId)};}
 async function claimed(c:ValidationContext,id:string){const row=await claim(c.db,input(c,id));ensure(row.kind==="CLAIMED");return row.row;}
 export async function runScenario(c:ValidationContext,scenario:Scenario,locks?:()=>Promise<Record<string,boolean>>):Promise<ValidationResult>{
  const checks:Record<string,boolean>={};

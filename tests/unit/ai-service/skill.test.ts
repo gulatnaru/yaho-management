@@ -4,10 +4,20 @@ import { POST as publicSkill } from "@/app/api/ai-service/v1/skill/route";
 import { HANDOFF, HANDOFF_CARD_BUTTON_LABEL, HANDOFF_CARD_TITLE, skillCardReplySchema, skillHandoffCard, skillReply } from "@/server/ai-service/contracts";
 import { hashes } from "@/server/ai-service/crypto";
 import { handleSkill, type Dependencies } from "@/server/ai-service/handler";
-import { handleKakaoSkill, type SkillService } from "@/server/ai-service/skill";
+import { handleKakaoSkill as adapter, type SkillService } from "@/server/ai-service/skill";
 import { createTools } from "@/server/ai-service/tools";
+import { authenticateSkillContext } from "@/server/ai-service/transport";
 import { fakeDb, now, seedConfig } from "./fake-db";
 import { realRequestPayload } from "./real-request-fixture";
+
+
+// Simulates the route authentication boundary before invoking the adapter.
+async function handleKakaoSkill(headers: Headers, raw: string, id: string, deps: Dependencies, service?: SkillService) {
+    let context;
+    try { context = authenticateSkillContext(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment); }
+    catch { return skillHandoffCard(); }
+    return adapter(headers, raw, id, deps, service, context);
+}
 
 const secret = "synthetic-skill-secret-0123456789abcdef";
 const requestId = "synthetic-skill-request-001";

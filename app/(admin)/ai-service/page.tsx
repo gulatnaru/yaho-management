@@ -106,7 +106,7 @@ export default async function AiServicePage() {
    <ConsultationDeleteForm />
   </section>
   <section className="rounded border p-4"><h2 className="font-bold">유효 상담 기록</h2>
-   {state.consultations.length === 0 ? <p>조회 가능한 상담이 없습니다.</p> : <ul>{state.consultations.map(c => <li key={c.id}><Link className="underline" href={"/ai-service/" + c.id}>{c.createdAt.toISOString()} · {c.status}</Link></li>)}</ul>}
+   {state.consultations.length === 0 ? <p>조회 가능한 상담이 없습니다.</p> : <ul>{state.consultations.map(c => <li key={c.id}><Link className="underline" href={"/ai-service/" + c.id}>{c.createdAt.toISOString()} · {c.status} · 인증: {c.authKind}</Link></li>)}</ul>}
   </section>
  </main>;
 }

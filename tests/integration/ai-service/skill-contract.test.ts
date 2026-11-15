@@ -4,6 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { POST as publicSkill } from "@/app/api/ai-service/v1/skill/route";
 import { skillHandoffCard, skillReply, type Environment } from "@/server/ai-service/contracts";
 import { handleKakaoSkill } from "@/server/ai-service/skill";
+import { authenticateSkillContext } from "@/server/ai-service/transport";
 import { createTools } from "@/server/ai-service/tools";
 import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 import { realRequestPayload } from "@/tests/unit/ai-service/real-request-fixture";
@@ -28,6 +29,7 @@ function depsFor(environment: Environment, testSecretValue: string | undefined =
     };
 }
 const headersFor = (value: string) => new Headers({ "x-yaho-skill-key": value });
+const contextFor = (value: string) => authenticateSkillContext(headersFor(value), { prod: prodSecret, test: testSecret }, "PREVIEW");
 const countRequests = () => db.aiServiceRequest.count({ where: { environment: "PREVIEW" } });
 
 async function cleanupPreviewRows() {
@@ -73,7 +75,7 @@ afterAll(async () => {
 describe.sequential("real Kakao Skill request contract (isolated DB 55435)", () => {
     it("I-1 grounds a version-less real request against real PostgreSQL", async () => {
         const before = await countRequests();
-        const reply = await handleKakaoSkill(headersFor(prodSecret), JSON.stringify(realRequestPayload()), `skill-contract-i1-${suffix}`, depsFor("PREVIEW"));
+        const reply = await handleKakaoSkill(headersFor(prodSecret), JSON.stringify(realRequestPayload()), `skill-contract-i1-${suffix}`, depsFor("PREVIEW"), undefined, contextFor(prodSecret));
         expect(reply).toEqual(skillReply(guidance));
         expect(reply.version).toBe("2.0");
         expect(await countRequests()).toBe(before + 1);
@@ -89,7 +91,7 @@ describe.sequential("real Kakao Skill request contract (isolated DB 55435)", () 
         // shared fixed clock would tie createdAt and make the "latest row"
         // lookup below nondeterministic.
         const handoffPayload = realRequestPayload(); handoffPayload.userRequest.utterance = "야호 준비물과 우천 안내";
-        const reply = await handleKakaoSkill(headersFor(prodSecret), JSON.stringify(handoffPayload), `skill-contract-i2-${suffix}`, depsFor("PREVIEW", testSecret, new Date("2026-10-15T00:01:00Z")));
+        const reply = await handleKakaoSkill(headersFor(prodSecret), JSON.stringify(handoffPayload), `skill-contract-i2-${suffix}`, depsFor("PREVIEW", testSecret, new Date("2026-10-15T00:01:00Z")), undefined, contextFor(prodSecret));
         expect(reply).toEqual(skillHandoffCard());
         expect(reply.version).toBe("2.0");
         expect(await countRequests()).toBe(before + 1);
@@ -99,17 +101,18 @@ describe.sequential("real Kakao Skill request contract (isolated DB 55435)", () 
 
     it("I-3 rejects version 1.0 before any ledger row is created", async () => {
         const before = await countRequests();
-        const reply = await handleKakaoSkill(headersFor(prodSecret), JSON.stringify({ ...realRequestPayload(), version: "1.0" }), `skill-contract-i3-${suffix}`, depsFor("PREVIEW"));
+        const reply = await handleKakaoSkill(headersFor(prodSecret), JSON.stringify({ ...realRequestPayload(), version: "1.0" }), `skill-contract-i3-${suffix}`, depsFor("PREVIEW"), undefined, contextFor(prodSecret));
         expect(reply).toEqual(skillHandoffCard());
         expect(await countRequests()).toBe(before);
     });
 
     it("I-4 allows the test secret in PREVIEW and rejects it in PRODUCTION", async () => {
         const before = await countRequests();
-        const allowed = await handleKakaoSkill(headersFor(testSecret), JSON.stringify(realRequestPayload()), `skill-contract-i4a-${suffix}`, depsFor("PREVIEW", testSecret, new Date("2026-10-15T00:02:00Z")));
+        const allowed = await handleKakaoSkill(headersFor(testSecret), JSON.stringify(realRequestPayload()), `skill-contract-i4a-${suffix}`, depsFor("PREVIEW", testSecret, new Date("2026-10-15T00:02:00Z")), undefined, contextFor(testSecret));
         expect(allowed).toEqual(skillReply(guidance));
         expect(await countRequests()).toBe(before + 1);
-        const denied = await handleKakaoSkill(headersFor(testSecret), JSON.stringify(realRequestPayload()), `skill-contract-i4b-${suffix}`, depsFor("PRODUCTION"));
+        expect(() => authenticateSkillContext(headersFor(testSecret), { prod: prodSecret, test: testSecret }, "PRODUCTION")).toThrow();
+        const denied = await handleKakaoSkill(headersFor(testSecret), JSON.stringify(realRequestPayload()), `skill-contract-i4b-${suffix}`, depsFor("PRODUCTION"), undefined, contextFor(testSecret));
         expect(denied).toEqual(skillHandoffCard());
         expect(await countRequests()).toBe(before + 1);
     });

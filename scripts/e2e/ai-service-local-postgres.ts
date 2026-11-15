@@ -1,3 +1,4 @@
+import {authenticateSkillContext} from "../../server/ai-service/transport";
 /** Explicit opt-in. Never reads .env or accepts a remote datasource. Stop the owned disposable cluster after use. */
 import assert from "node:assert/strict";
 import {createHash,randomUUID} from "node:crypto";
@@ -19,7 +20,9 @@ async function main(){
  const digest=(s:string)=>createHash("sha256").update(s).digest("hex");
  const pin={version:"v1",fingerprint:digest("local-synthetic-key")};
  let now=new Date("2030-01-05T00:00:00Z"),passed=0;
- const input=(id:string,subject=id)=>({environment:"PREVIEW" as const,now,hmacPins:[pin],requestHashes:["v1:"+digest(run+id)],payloadHashes:["v1:"+digest("synthetic")],subjectHashes:["v1:"+digest(run+subject)]});
+ const authSecret="synthetic-local-validation-secret-0123456789";
+ const authContext=authenticateSkillContext(new Headers({"x-yaho-skill-key":authSecret}),{prod:authSecret},"PREVIEW");
+ const input=(id:string,subject=id)=>({authContext,environment:"PREVIEW" as const,now,hmacPins:[pin],requestHashes:["v1:"+digest(run+id)],payloadHashes:["v1:"+digest("synthetic")],subjectHashes:["v1:"+digest(run+subject)]});
  const check=async(name:string,fn:()=>Promise<void>)=>{await fn();passed++;console.log(JSON.stringify({check:name,result:"PASS"}));};
  const claimed=async(id:string)=>{const c=await retry(()=>claim(a,input(id)));assert.equal(c.kind,"CLAIMED");if(c.kind!=="CLAIMED")throw Error("CLAIM_FAILED");return c.row;};
  const fail=async(fn:()=>Promise<unknown>)=>{await assert.rejects(fn,e=>e instanceof ServiceDenied&&e.message==="AI_SERVICE_DENIED");};

@@ -1,10 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { skillHandoffCard, skillReply, type Environment } from "@/server/ai-service/contracts";
 import { handleSkill, type Dependencies } from "@/server/ai-service/handler";
-import { handleKakaoSkill } from "@/server/ai-service/skill";
+import { handleKakaoSkill as adapter, type SkillService } from "@/server/ai-service/skill";
 import { createTools } from "@/server/ai-service/tools";
+import { authenticateSkillContext } from "@/server/ai-service/transport";
 import { fakeDb, now, seedConfig } from "./fake-db";
 import { realRequestPayload, type RealRequestPayload } from "./real-request-fixture";
+
+
+// Simulates the route authentication boundary before invoking the adapter.
+async function handleKakaoSkill(headers: Headers, raw: string, id: string, deps: Dependencies, service?: SkillService) {
+    let context;
+    try { context = authenticateSkillContext(headers, { prod: deps.secret, test: deps.testSecret }, deps.environment); }
+    catch { return skillHandoffCard(); }
+    return adapter(headers, raw, id, deps, service, context);
+}
 
 const prodSecret = "synthetic-prod-secret-0123456789abcdef";
 const testSecret = "synthetic-test-secret-0123456789abcdef";
@@ -53,7 +63,7 @@ describe("Skill auth matrix (prod/test secrets, surface is never an auth signal)
     });
 
     it("A-3 rejects the test secret in PRODUCTION", async () => {
-        const { runWithService, f } = setup(undefined, "PRODUCTION");
+        const { runWithService, f } = setup("PRODUCTION");
         const { reply, service } = await runWithService(realRequestPayload(), new Headers({ "x-yaho-skill-key": testSecret }));
         expect(reply).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
@@ -61,12 +71,12 @@ describe("Skill auth matrix (prod/test secrets, surface is never an auth signal)
     });
 
     it("A-4 allows the prod secret in PRODUCTION", async () => {
-        const { run } = setup(undefined, "PRODUCTION");
+        const { run } = setup("PRODUCTION");
         expect(await run()).toEqual(skillReply(guidance));
     });
 
     it.each(["PREVIEW", "PRODUCTION"] as const)("A-5 rejects a wrong secret in %s", async environment => {
-        const { runWithService, f } = setup(undefined, environment);
+        const { runWithService, f } = setup(environment);
         const { reply, service } = await runWithService(realRequestPayload(), new Headers({ "x-yaho-skill-key": "synthetic-wrong-secret-0123456789abcdef" }));
         expect(reply).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
@@ -74,7 +84,7 @@ describe("Skill auth matrix (prod/test secrets, surface is never an auth signal)
     });
 
     it.each(["PREVIEW", "PRODUCTION"] as const)("A-6 rejects a missing header in %s", async environment => {
-        const { runWithService, f } = setup(undefined, environment);
+        const { runWithService, f } = setup(environment);
         const { reply, service } = await runWithService(realRequestPayload(), new Headers());
         expect(reply).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
@@ -111,7 +121,7 @@ describe("Skill auth matrix (prod/test secrets, surface is never an auth signal)
     });
 
     it("A-12 rejects BuilderBotTest surface with the test secret in PRODUCTION", async () => {
-        const { runWithService, f } = setup(undefined, "PRODUCTION");
+        const { runWithService, f } = setup("PRODUCTION");
         const { reply, service } = await runWithService(withSurface("BuilderBotTest"), new Headers({ "x-yaho-skill-key": testSecret }));
         expect(reply).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
@@ -119,7 +129,7 @@ describe("Skill auth matrix (prod/test secrets, surface is never an auth signal)
     });
 
     it("A-13 rejects Kakaotalk.plusfriend surface with the test secret in PRODUCTION", async () => {
-        const { runWithService, f } = setup(undefined, "PRODUCTION");
+        const { runWithService, f } = setup("PRODUCTION");
         const { reply, service } = await runWithService(withSurface("Kakaotalk.plusfriend"), new Headers({ "x-yaho-skill-key": testSecret }));
         expect(reply).toEqual(skillHandoffCard());
         expect(service).not.toHaveBeenCalled();
