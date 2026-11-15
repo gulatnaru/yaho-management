@@ -126,3 +126,31 @@ describe("handler gate + classifier phrasing (SPEC §3)", () => {
         expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0 });
     });
 });
+
+// DB-MAJOR-1 (2026-11-15, decision (a) — residual risk accepted):
+// Keyword-less personal data ("운동화 123-456-789") and spaced health words
+// ("운동화 알 레 르 기 있어요") pass the gate on the new carrier vocabulary and
+// reach claim BEFORE the classifier rejects them. The behavior pinned here is
+// "claim, then HANDOFF settlement" — NOT "blocked before claim". The utterance
+// is encrypted into the request row (P0-B design); the final reply is HANDOFF
+// and nothing is sent to an external model. Do NOT describe these cases as
+// "blocked" — the gate does not block them.
+describe("DB-MAJOR-1: carrier phrasings settle after claim (decision (a))", () => {
+    it.each([
+        "운동화 123-456-789", // gate passes on 운동화; no PII keyword, no health match; classifier rejects on numeric residue
+        "운동화 알 레 르 기 있어요", // gate passes: spaced 알 레 르 기 does not match 알레르기; classifier rejects on 알레르기 residue
+        "야호 123-456-789", // pre-existing carrier: 야호 was a gate word before this change, so this path already existed
+    ])("settles after claim, then HANDOFF: %s", async question => {
+        const { run, execute, f } = setup();
+        expect(await run(question)).toBe(HANDOFF);
+        expect(execute).toHaveBeenCalledTimes(2); // preloads only
+        expect(f.state.aiServiceRequest[0].status).toBe("SETTLED");
+        expect(f.state.aiServiceBudgetMonth[0]).toMatchObject({ usedKrw: 0, reservedKrw: 0 });
+    });
+    it("contrast — gate still blocks before claim when the PII keyword rides along", async () => {
+        const { run, execute, f } = setup();
+        expect(await run("운동화 계좌번호 123-456-789")).toBe(HANDOFF);
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.state.aiServiceRequest).toHaveLength(0);
+    });
+});

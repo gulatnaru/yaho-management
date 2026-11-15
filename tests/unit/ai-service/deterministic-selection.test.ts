@@ -137,3 +137,21 @@ describe("classifier phrasing: accepted phrasings (SPEC §3)", () => {
         expect(decideSelection("우천 하나요?", base)).toEqual(guidance("RAIN"));
     });
 });
+
+// DB-MINOR-1 (2026-11-15): "가용성은 열리지 않았다" was a battery/catalog-conditional
+// observation, not a general rule. Availability depends on the catalog and the
+// uniqueness rule: a single-class program grounds get_class_availability, while
+// a two-class program (합성 탐험숲: eval-class-saturday + eval-class-december)
+// fails uniqueness and stays null. The call returns only an AVAILABLE/UNAVAILABLE
+// fixed phrase — never a raw seat count (tools.ts).
+describe("DB-MINOR-1: availability depends on catalog + uniqueness", () => {
+    it("grounds availability for a single-class program", async () => {
+        const base = await catalog();
+        const call: ToolCall = { name: "get_class_availability", args: { classHandle: HANDLES.artClass } };
+        expect(decideSelection("야호 합성 자연미술 신청 하나요?", base)).toEqual(call);
+        expect(authorizeSelection("야호 합성 자연미술 신청 하나요?", call, base)).toEqual({ allowed: true, call });
+    });
+    it("stays null for a two-class program (uniqueness fails)", async () => {
+        expect(decideSelection("합성 탐험숲 신청 하나요?", await catalog())).toBeNull();
+    });
+});
