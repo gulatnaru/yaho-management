@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import Link from "next/link";
 import { adminContext } from "@/server/ai-service/admin-context";
 import { readState } from "@/server/ai-service/admin";
-import { saveConfigAction, saveGuidanceAction, savePublicationAction, reconcileAction, retryRetentionAction } from "./actions";
+import { pauseServiceAction, saveConfigAction, saveGuidanceAction, savePublicationAction, reconcileAction, retryRetentionAction } from "./actions";
 import { ConsultationDeleteForm } from "./_components/consultation-delete-form";
 export const dynamic = "force-dynamic";
 const input = "rounded border px-3 py-2 w-full";
@@ -47,6 +47,12 @@ export default async function AiServicePage() {
     <label>환율 출처<Input className={input} name="fxSource" maxLength={120} defaultValue={config?.fxSource ?? ""} required/></label>
     <Button className={button}>설정 저장</Button>
    </form>
+  </section>
+  <section className="rounded border p-4"><h2 className="font-bold">긴급 중단 (P-1)</h2>
+   <p>FX 상태와 무관하게 상담을 즉시 중단합니다. 중단 후 다음 요청부터 claim이 거부되며 진행 중 요청은 끊지 않습니다.</p>
+   <p>재개는 별도 승인 후 설정 저장으로만 가능하며 FX 72시간 검사를 받습니다. 제출 전에 현재 버전을 다시 읽으세요. 운영 중 설정의 버전이 바뀌었다면 거부됩니다.</p>
+   <p>현재 상태: {config ? (config.paused ? "중단됨" : "운영 중") : "설정 없음"} · 버전 {config?.version ?? 0} · 긴급 중단 {state.monitoring.emergencyPauseCount}건 · 최근 중단 (UTC): {state.monitoring.lastEmergencyPauseAt?.toISOString() ?? "없음"}</p>
+   <form action={pauseServiceAction}><input type="hidden" name="expectedVersion" value={config?.version ?? 0}/><Button className="rounded bg-red-700 px-3 py-2 font-bold text-white hover:bg-red-800">긴급 중단</Button></form>
   </section>
   <section className="rounded border p-4"><h2 className="font-bold">프로그램·일정 공개</h2>
    <p>공개 링크와 독립입니다. 프로그램과 일정 모두 허용해야 합니다.</p>

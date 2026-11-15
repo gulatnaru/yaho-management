@@ -2,7 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { adminContext } from "@/server/ai-service/admin-context";
-import { saveConfig, saveGuidance, savePublication, findConsultationsBySubject, deleteConsultation } from "@/server/ai-service/admin";
+import { pauseService, saveConfig, saveGuidance, savePublication, findConsultationsBySubject, deleteConsultation } from "@/server/ai-service/admin";
 import { reconcileMonth } from "@/server/ai-service/ledger";
 import { retryRetention } from "@/server/ai-service/retention";
 import { parse, ServiceDenied } from "@/server/ai-service/contracts";
@@ -23,6 +23,15 @@ export async function saveConfigAction(form: FormData) {
             schedulerEnabled: parse(z.enum(["true", "false"]), v.schedulerEnabled) === "true",
             inputNanoUsdPerToken: Number(v.inputNanoUsdPerToken), outputNanoUsdPerToken: Number(v.outputNanoUsdPerToken),
             fxMilliKrwPerUsd: Number(v.fxMilliKrwPerUsd) }, new Date());
+    });
+}
+export async function pauseServiceAction(form: FormData): Promise<void> {
+    await action(async () => {
+        // adminContext()는 첫 문장으로 assertDeploymentApproved()를 호출하므로, 잠금이 닫혀 있는 동안에는 P-1 액션도 실행되지 않는다.
+        // 이것은 결함이 아니라 설계상 정합이다 — 잠금이 닫혀 있으면 Skill 라우트와 관리자 변이가 전부 503/거부 상태라 상담이 이미 열려 있지 않기 때문이다. P-1이 필요한 상황은 잠금이 열려 있는 상태뿐이다.
+        const c = await adminContext();
+        const { expectedVersion } = parse(z.object({ expectedVersion: z.coerce.number().int().nonnegative() }).strict(), { expectedVersion: form.get("expectedVersion") ?? undefined });
+        await pauseService(c.db, c.environment, c.actor, { expectedVersion });
     });
 }
 export async function savePublicationAction(form: FormData) {

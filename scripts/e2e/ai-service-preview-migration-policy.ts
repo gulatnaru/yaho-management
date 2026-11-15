@@ -3,7 +3,7 @@ import {AI_MIGRATION} from "@/server/ai-consultations/runtime";
 import {SERVICE_MIGRATION,SERVICE_MIGRATION_SHA256} from "@/server/ai-service/preview/rollback";
 import type {PrismaMigrationRow} from "@/lib/e2e/preview-safety";
 export function previewMigrationScope(value:string|undefined){if(value===undefined||value==="MOCK")return"MOCK";if(value==="AI_SERVICE")return"AI_SERVICE";throw new Error("PREVIEW_MIGRATION_SCOPE_DENIED");}
-// Approved Preview migration baseline — union 25.
+// Approved Preview migration baseline — union 26.
 //
 // Rationale (user-approved 2026-11-08, Phase 21 + G4 Preview integration):
 // the Preview integration branch is G4 HEAD 350733d plus the PR #53 Mock and
@@ -12,8 +12,9 @@ export function previewMigrationScope(value:string|undefined){if(value===undefin
 // (20261014090000), the AI Service follow-up (20261015090000), the Outbox and
 // dispatch-guard migrations, the 5 RBAC migrations, the closure-executor
 // migration, the OQ-12 P0 deletion-audit migration (20261112090000), and the
-// OQ-16 guidance-audit migration (20261112161600) —
-// 25 in total, in this exact order. Any other inventory (missing,
+// OQ-16 guidance-audit migration (20261112161600), and the emergency-pause
+// audit CHECK migration (20261115160000) —
+// 26 in total, in this exact order. Any other inventory (missing,
 // extra, reordered, or re-hashed) is denied. This is a name+order+checksum
 // verification, not a count check: the count follows from the exact list.
 //
@@ -23,6 +24,8 @@ export function previewMigrationScope(value:string|undefined){if(value===undefin
 // scheduler stays inert until the operations gate is passed. The same holds
 // for the OQ-16 guidance-audit migration listed below: listing records its
 // checksum only and does NOT authorize applying it to Preview or Production.
+// The emergency-pause audit migration is also listed for checksum integrity only;
+// its application requires separate approval.
 //
 // Phase 6 CRLF: the Production record for 20260825090000_phase6_safety_attendance
 // holds the CRLF-variant checksum 5a4c6615cddc07185dfee17dd887e479aea2e9eb8fc98ed703b690f9b9118799
@@ -60,6 +63,7 @@ export const APPROVED_PREVIEW_MIGRATIONS: readonly {name:string;sha256:string}[]
  {name:"20261107120000_notification_closure_executor",sha256:"7a6afb15d213830c4999e293fdaf93648aac367c164b11d40d9f4ecd8b08207b"},
  {name:"20261112090000_ai_service_deletion_audit",sha256:"e4514cc1880398aaf975b8b10e8ac4b3dfa2e744c28f822cbe4c94ac29ac35d1"},
  {name:"20261112161600_ai_service_guidance_audit",sha256:"bd186e5a5d3d254af3bdf87f0caaad03c1b7dca5394e00f3f2f9ab7f8e6a159a"},
+ {name:"20261115160000_ai_service_audit_emergency_pause",sha256:"f18237d109d4e2e5f8573eb7697c5b21efad5444a6e5f6b7666ba7bbf2d476db"},
 ];
 export const APPROVED_PREVIEW_MIGRATION_NAMES: readonly string[]=APPROVED_PREVIEW_MIGRATIONS.map(entry=>entry.name);
 export function evaluateAiServicePreviewMigration(rows:PrismaMigrationRow[],migrationRoot:string){

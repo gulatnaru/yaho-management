@@ -20,6 +20,17 @@ export async function saveConfig(db: Database, environment: Environment, actor: 
             update: { ...data, version: { increment: 1 }, updatedById: actor.userId } });
     });
 }
+export async function pauseService(db: Database, environment: Environment, actor: Actor, input: { expectedVersion: number }): Promise<{ paused: true; version: number; alreadyPaused: boolean; pausedAt: Date }> {
+    assertAdmin(actor);
+    const { expectedVersion } = parse(z.object({ expectedVersion: z.number().int().nonnegative() }).strict(), input);
+    return transaction(db, environment, async (tx) => {
+        const old = await tx.aiServiceConfig.findUnique({ where: { environment } });
+        if (!old || (!old.paused && old.version !== expectedVersion)) throw new ServiceDenied();
+        const current = old.paused ? old : await tx.aiServiceConfig.update({ where: { environment }, data: { paused: true, version: { increment: 1 }, updatedById: actor.userId } });
+        await tx.aiServiceDeletionAudit.create({ data: { environment, kind: "EMERGENCY_PAUSE", requestId: `config:${environment}`, actorId: actor.userId, reasonCode: "EMERGENCY_PAUSE", scope: "CONFIG" } });
+        return { paused: true, version: current.version, alreadyPaused: old.paused, pausedAt: current.updatedAt };
+    });
+}
 export async function savePublication(db: Database, environment: Environment, actor: Actor, value: unknown) {
     assertAdmin(actor);
     const input = parse(publicationSchema, value);
@@ -95,6 +106,8 @@ export async function readState(db: Database, environment: Environment, actor: A
         const retention = await tx.aiServiceRetentionJob.findUnique({ where: { environment } });
         const config = await tx.aiServiceConfig.findUnique({ where: { environment } });
         const oldestAudit = await tx.aiServiceDeletionAudit.findFirst({ where: { environment }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
+        const emergencyPauses = await tx.aiServiceDeletionAudit.findMany({ where: { environment, kind: "EMERGENCY_PAUSE" }, select: { createdAt: true } });
+        const lastEmergencyPauseAt = emergencyPauses.reduce<Date | null>((latest, row) => !latest || row.createdAt > latest ? row.createdAt : latest, null);
         return {
             summary: { ...summary, asOf: now },
             monitoring: {
@@ -104,6 +117,8 @@ export async function readState(db: Database, environment: Environment, actor: A
                 lastRetentionSuccessAt: retention?.lastSuccessAt ?? null,
                 nextRetentionRetryAt: retention?.nextRetryAt ?? null,
                 retentionErrorCode: retention?.errorCode === "RETENTION_FAILED" ? "RETENTION_FAILED" : null,
+                emergencyPauseCount: await tx.aiServiceDeletionAudit.count({ where: { environment, kind: "EMERGENCY_PAUSE" } }),
+                lastEmergencyPauseAt,
                 auditCount: await tx.aiServiceDeletionAudit.count({ where: { environment } }),
                 auditOldestCreatedAt: oldestAudit?.createdAt ?? null,
             },

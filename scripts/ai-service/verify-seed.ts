@@ -1,11 +1,12 @@
 import { PrismaClient } from "@prisma/client";
 import { readState } from "../../server/ai-service/admin";
 import { environmentSchema, type Actor } from "../../server/ai-service/contracts";
+import { verifySeedProfile, type SeedProfile } from "../../server/ai-service/seed-profile";
 
 /**
  * Read-only seed verification for the AI Service (PLAN §1 W-4).
  *
- * Usage: npx tsx scripts/ai-service/verify-seed.ts <environment>
+ * Usage: npx tsx scripts/ai-service/verify-seed.ts <environment> <profile>
  * The environment comes from the argument only; this script has no
  * environment branches and no database URL (the Prisma client reads
  * DATABASE_URL / DIRECT_URL from the process environment).
@@ -21,21 +22,17 @@ import { environmentSchema, type Actor } from "../../server/ai-service/contracts
  * This phase runs it against the isolated database with synthetic data
  * only. It must not be run against real data.
  */
-const EXPECTED = {
-    paused: false,
-    provider: "OPENAI",
-    model: "gpt-6-luna",
-    priceVersion: "price-v1",
-    inputNanoUsdPerToken: 100,
-    outputNanoUsdPerToken: 500,
-    fxMilliKrwPerUsd: 1_400_000,
-    fxSource: "mid-market 2026-11-07 ~1364; planning 1400",
-} as const;
-const FX_MAX_AGE_MS = 72 * 3600 * 1000;
 const TOPICS = ["PREPARATION", "RAIN", "POLICY"] as const;
 
 async function main() {
-    const environment = environmentSchema.parse(process.argv[2] ?? null);
+    const parsedEnvironment = environmentSchema.safeParse(process.argv[2] ?? null);
+    const profile = process.argv[3];
+    if (!parsedEnvironment.success || (profile !== "safe-off" && profile !== "preview-synthetic") || process.argv.length !== 4) {
+        console.error("Usage: npx tsx scripts/ai-service/verify-seed.ts <environment> <safe-off|preview-synthetic>");
+        process.exitCode = 2;
+        return;
+    }
+    const environment = parsedEnvironment.data;
     const actor: Actor = { userId: "verify-seed-script", role: "ADMIN", active: true };
     const db = new PrismaClient();
     try {
@@ -46,24 +43,9 @@ async function main() {
         if (!config) {
             failures.push("config row is missing");
         } else {
-            const checks: [string, unknown, unknown][] = [
-                ["paused", config.paused, EXPECTED.paused],
-                ["provider", config.provider, EXPECTED.provider],
-                ["model", config.model, EXPECTED.model],
-                ["priceVersion", config.priceVersion, EXPECTED.priceVersion],
-                ["inputNanoUsdPerToken", config.inputNanoUsdPerToken, EXPECTED.inputNanoUsdPerToken],
-                ["outputNanoUsdPerToken", config.outputNanoUsdPerToken, EXPECTED.outputNanoUsdPerToken],
-                ["fxMilliKrwPerUsd", config.fxMilliKrwPerUsd, EXPECTED.fxMilliKrwPerUsd],
-                ["fxSource", config.fxSource, EXPECTED.fxSource],
-            ];
-            for (const [name, actual, expected] of checks) {
-                console.log(`config.${name}: ${String(actual)} (expected ${String(expected)}) ${actual === expected ? "OK" : "MISMATCH"}`);
-                if (actual !== expected) failures.push(`config.${name} is ${String(actual)}, expected ${String(expected)}`);
-            }
-            const fxAgeMs = now.getTime() - new Date(config.fxCheckedAt).getTime();
-            const fxFresh = fxAgeMs >= 0 && fxAgeMs <= FX_MAX_AGE_MS;
-            console.log(`config.fxCheckedAt: ${new Date(config.fxCheckedAt).toISOString()} (age ${Math.round(fxAgeMs / 3600000)}h, limit 72h) ${fxFresh ? "OK" : "MISMATCH"}`);
-            if (!fxFresh) failures.push("config.fxCheckedAt is older than 72h");
+            const result = verifySeedProfile(config, profile as SeedProfile, now);
+            for (const line of result.lines) console.log(line);
+            failures.push(...result.failures);
         }
         console.log(`programs: ${state.programs.length} rows`);
         for (const p of state.programs) console.log(`  program ${p.id}: enabled=${p.enabled}`);

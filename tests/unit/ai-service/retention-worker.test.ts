@@ -89,7 +89,7 @@ describe("inactive daily retention worker using serialized doubles only", () => 
         f.seed("aiServiceRetentionJob", { environment: "PREVIEW", status: "FAILED", attempts: 2, lastSuccessAt: now, nextRetryAt: expiresAt, errorCode: "SYNTHETIC_PRIVATE_ERROR" });
         const state = await readState(f.db, "PREVIEW", admin, expiresAt);
         expect(state.expiredCount).toBe(1);
-        expect(state.monitoring).toEqual({ retentionCadence: "DAILY", schedulerActive: false, retentionAttempts: 2, lastRetentionSuccessAt: now, nextRetentionRetryAt: expiresAt, retentionErrorCode: null, auditCount: 0, auditOldestCreatedAt: null });
+        expect(state.monitoring).toEqual({ retentionCadence: "DAILY", schedulerActive: false, retentionAttempts: 2, lastRetentionSuccessAt: now, nextRetentionRetryAt: expiresAt, retentionErrorCode: null, auditCount: 0, auditOldestCreatedAt: null, emergencyPauseCount: 0, lastEmergencyPauseAt: null });
         expect(JSON.stringify(state.monitoring)).not.toContain("SYNTHETIC_PRIVATE");
     });
 });
