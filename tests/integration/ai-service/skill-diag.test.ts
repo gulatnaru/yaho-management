@@ -9,6 +9,7 @@ import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_INTEGRATION_LOCAL_ONLY");
 assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
 const ids: string[] = [];
+const realCreate = prisma.aiServiceSkillDiag.create.bind(prisma.aiServiceSkillDiag);
 const prod = "p".repeat(32), test = "t".repeat(32);
 const payload = JSON.stringify({ bot: { id: "synthetic-bot" }, userRequest: { user: { id: "synthetic-test-run-123" }, block: { id: "synthetic-block" }, utterance: "야호 준비물을 알려 주세요" } });
 function setup() {
@@ -19,7 +20,14 @@ function setup() {
 }
 const req = (key = test, body = payload) => new Request("http://localhost/api/ai-service/v1/skill", { method: "POST", headers: { "x-yaho-skill-key": key }, body });
 async function counts() { return Promise.all([prisma.aiServiceRequest.count(), prisma.aiServiceBudgetMonth.count(), prisma.aiServiceQuotaBucket.count()]); }
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => {
+    vi.unstubAllEnvs();
+    const create = prisma.aiServiceSkillDiag.create;
+    if (vi.isMockFunction(create)) create.mockReset().mockImplementation(realCreate);
+    const log = console.error;
+    if (vi.isMockFunction(log)) log.mockRestore();
+    vi.useRealTimers();
+});
 afterAll(async () => { await prisma.aiServiceSkillDiag.deleteMany({ where: { correlationId: { in: ids } } }); await prisma.$disconnect(); });
 describe.sequential("skill diagnostics against isolated PostgreSQL", () => {
     it.each([

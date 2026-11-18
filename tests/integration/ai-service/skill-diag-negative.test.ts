@@ -8,13 +8,20 @@ assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: 
 const secret = "synthetic-only-secret-0123456789abcdef";
 const pii = ["010-1234-5678", "synthetic@example.invalid", "900101-1234567", "synthetic-health-condition"];
 const ids: string[] = [];
+const realCreate = prisma.aiServiceSkillDiag.create.bind(prisma.aiServiceSkillDiag);
 function setup() {
     vi.stubEnv("VERCEL_ENV", "preview"); vi.stubEnv("AI_SERVICE_SYNTHETIC_ENABLED", "true");
     vi.stubEnv("AI_SERVICE_SKILL_SECRET", "p".repeat(32)); vi.stubEnv("AI_SERVICE_SKILL_TEST_SECRET", secret);
     vi.stubEnv("AI_SERVICE_SYNTHETIC_RUN_ID", "test-run-123"); vi.stubEnv("AI_SERVICE_SYNTHETIC_EXPIRES_AT", "2999-01-01T00:00:00Z");
 }
 const request = (key: string, body: string) => new Request("http://localhost/api/ai-service/v1/skill", { method: "POST", headers: { "x-yaho-skill-key": key }, body });
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(() => {
+    vi.unstubAllEnvs();
+    const create = prisma.aiServiceSkillDiag.create;
+    if (vi.isMockFunction(create)) create.mockReset().mockImplementation(realCreate);
+    const log = console.error;
+    if (vi.isMockFunction(log)) log.mockRestore();
+});
 afterAll(async () => { await prisma.aiServiceSkillDiag.deleteMany({ where: { correlationId: { in: ids } } }); await prisma.$disconnect(); });
 describe.sequential("diagnostic output excludes supplied data", () => {
     it.each(["{", "{}", JSON.stringify({ bot: { id: pii.join(" ") }, userRequest: { user: { id: secret }, block: { id: secret }, utterance: pii.join(" ") } })])("T-NEG-1/2/3 excludes secret and PII for malformed or mismatched input", async body => {
