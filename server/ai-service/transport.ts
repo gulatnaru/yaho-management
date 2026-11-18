@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { SkillDiagCode as C, SkillDiagDenied } from "./skill-diag";
 import { parse, ServiceDenied, skillSchema, type Environment } from "./contracts";
 /**
  * Authenticate before parsing or storing any user input. Secret never becomes model input.
@@ -14,17 +15,20 @@ export type SkillAuthContext = "prod" | "test";
 export function authenticateSkill(headers: Headers, secrets: SkillSecrets, environment: Environment): SkillAuthContext {
     const supplied = headers.get("x-yaho-skill-key");
     const { prod, test } = secrets;
-    if (!prod || prod.length < 32 || prod.length > 256 || !supplied || supplied.length > 256)
-        throw new ServiceDenied();
-    if (test !== undefined && (test.length < 32 || test.length > 256 || test === prod))
-        throw new ServiceDenied();
+    if (!prod) throw new SkillDiagDenied(C.S3_REG_PROD_MISSING);
+    if (prod.length < 32 || prod.length > 256) throw new SkillDiagDenied(C.S3_REG_PROD_LENGTH);
+    if (supplied === null) throw new SkillDiagDenied(C.S3_SUPPLIED_ABSENT);
+    if (supplied === "") throw new SkillDiagDenied(C.S3_SUPPLIED_EMPTY);
+    if (supplied.length > 256) throw new SkillDiagDenied(C.S3_SUPPLIED_TOO_LONG);
+    if (test !== undefined && (test.length < 32 || test.length > 256)) throw new SkillDiagDenied(C.S3_REG_TEST_LENGTH);
+    if (test !== undefined && test === prod) throw new SkillDiagDenied(C.S3_REG_TEST_EQUALS_PROD);
     const suppliedHash = createHash("sha256").update(supplied).digest();
     if (timingSafeEqual(suppliedHash, createHash("sha256").update(prod).digest()))
         return "prod";
     if (environment === "PREVIEW" && test && test.length >= 32 && test.length <= 256 && test !== prod &&
         timingSafeEqual(suppliedHash, createHash("sha256").update(test).digest()))
         return "test";
-    throw new ServiceDenied();
+    throw new SkillDiagDenied(C.S3_MISMATCH, test !== undefined);
 }
 export function parseSkill(raw: string, botId: string) {
     if (Buffer.byteLength(raw) > 16384)

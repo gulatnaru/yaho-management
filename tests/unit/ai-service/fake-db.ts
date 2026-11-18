@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "@/server/ai-service/repository";
 type Row = Record<string, unknown>;
 const modelNames = ["aiServiceConfig", "aiServiceRequest", "aiServiceBudgetMonth", "aiServiceQuotaBucket", "aiServiceDailyMetric",
-    "aiServiceRetentionJob", "aiServiceKeyPin", "aiServiceReconciliation", "aiServiceDeletionAudit", "aiServiceGuidanceAudit", "aiServiceProgramPublication", "aiServiceClassPublication", "aiServiceKnowledgeEntry", "program", "classSchedule"] as const;
+    "aiServiceRetentionJob", "aiServiceSkillDiag", "aiServiceKeyPin", "aiServiceReconciliation", "aiServiceDeletionAudit", "aiServiceGuidanceAudit", "aiServiceProgramPublication", "aiServiceClassPublication", "aiServiceKnowledgeEntry", "program", "classSchedule"] as const;
 function matches(row: Row, where: Row = {}): boolean {
     return Object.entries(where).every(([key, value]) => {
         if (key === "OR")

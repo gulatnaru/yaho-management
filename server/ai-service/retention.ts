@@ -58,6 +58,22 @@ export async function purgeOldAudits(db: Database, environment: Environment, now
     return { auditDeleted };
 }
 
+/** Purge diagnostics older than 90 days, bounded to 100 rows per transaction. */
+export async function purgeOldSkillDiag(db: Database, environment: Environment, now: Date) {
+    const cutoff = new Date(now.getTime() - 90 * 24 * 3600000);
+    let diagDeleted = 0;
+    for (;;) {
+        const deleted = await transaction(db, environment, async tx => {
+            const batch = await tx.aiServiceSkillDiag.findMany({ where: { environment, emittedAt: { lte: cutoff } }, select: { id: true }, take: 100 });
+            if (!batch.length) return 0;
+            return (await tx.aiServiceSkillDiag.deleteMany({ where: { environment, id: { in: batch.map(r => r.id) }, emittedAt: { lte: cutoff } } })).count;
+        });
+        diagDeleted += deleted;
+        if (!deleted) break;
+    }
+    return { diagDeleted };
+}
+
 export type RetentionCronResult =
     | { status: 200; body: { deleted: number; auditDeleted: number; waiting: boolean; expiredRemaining: number } }
     | { status: 401 | 503; body: { error: string } };
@@ -103,6 +119,7 @@ export async function runRetentionCron(
                 break;
         }
         const { auditDeleted } = await purgeOldAudits(db, environment, now);
+        await purgeOldSkillDiag(db, environment, now);
         const expiredRemaining = await transaction(db, environment, (tx) =>
             tx.aiServiceRequest.count({ where: { environment, expiresAt: { lte: now } } }));
         return { status: 200, body: { deleted, auditDeleted, waiting, expiredRemaining } };

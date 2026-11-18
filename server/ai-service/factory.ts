@@ -1,5 +1,5 @@
 import { readServiceKeys } from "./keys";
-import { ServiceDenied } from "./contracts";
+import { SkillDiagCode as C, SkillDiagDenied } from "./skill-diag";
 import { createSyntheticTools, type SyntheticScope } from "./synthetic-scope";
 import type { Database } from "./repository";
 import type { Environment } from "./contracts";
@@ -36,10 +36,12 @@ export type LiveDependenciesInput = {
 export function createLiveDependencies(input: LiveDependenciesInput): Dependencies {
     const keys = readServiceKeys(input.env);
     const secret = input.env.AI_SERVICE_SKILL_SECRET;
-    if (!secret || secret.length < 32 || secret.length > 256) throw new ServiceDenied();
+    if (!secret) throw new SkillDiagDenied(C.S8B_REG_PROD_MISSING);
+    if (secret.length < 32 || secret.length > 256) throw new SkillDiagDenied(C.S8B_REG_PROD_LENGTH);
     // Empty string means unset (same convention as the operational secret).
     const testSecret = input.env.AI_SERVICE_SKILL_TEST_SECRET || undefined;
-    if (testSecret && (testSecret.length < 32 || testSecret.length > 256 || testSecret === secret)) throw new ServiceDenied();
+    if (testSecret && (testSecret.length < 32 || testSecret.length > 256)) throw new SkillDiagDenied(C.S8B_REG_TEST_LENGTH);
+    if (testSecret && testSecret === secret) throw new SkillDiagDenied(C.S8B_REG_TEST_EQUALS_PROD);
     const tools = createSyntheticTools(input.scope);
     return { db: input.db, environment: input.environment, keys, secret, testSecret, botId: input.botId, tools, syntheticScope: input.scope };
 }

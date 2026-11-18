@@ -1555,3 +1555,16 @@ model AiServiceReconciliation {
   @@unique([environment, reference])
   @@index([environment, month])
 }
+
+model AiServiceSkillDiag {
+  id                   String   @id @default(cuid())
+  correlationId        String   @unique
+  environment          String
+  stageCode            String
+  testSecretConfigured Boolean?
+  deploymentId         String?
+  diagVersion          Int      @default(1)
+  emittedAt            DateTime @default(now())
+
+  @@index([environment, emittedAt])
+}

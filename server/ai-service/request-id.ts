@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ServiceDenied } from "./contracts";
+import { SkillDiagCode as C, SkillDiagDenied } from "./skill-diag";
 
 /**
  * Stable request identity for the live Skill route (SPEC OQ-9, user-approved
@@ -38,8 +38,10 @@ export function deriveStableRequestId(input: {
     utterance: string;
     now: Date;
 }): string {
-    if (!input.botId || !input.userId || !input.utterance || !Number.isFinite(input.now.getTime()))
-        throw new ServiceDenied();
+    if (!input.botId) throw new SkillDiagDenied(C.S7B_BOT_EMPTY);
+    if (!input.userId) throw new SkillDiagDenied(C.S7B_USER_EMPTY);
+    if (!input.utterance) throw new SkillDiagDenied(C.S7B_UTTERANCE_EMPTY);
+    if (!Number.isFinite(input.now.getTime())) throw new SkillDiagDenied(C.S7B_CLOCK_INVALID);
     const window = Math.floor(input.now.getTime() / 300000).toString(10);
     const canonical = JSON.stringify([
         "ai-service-stable-request-v1",
