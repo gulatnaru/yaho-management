@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
@@ -8,8 +9,9 @@ import { deriveStableRequestId } from "@/server/ai-service/request-id";
 import { assertSyntheticSkillEnabled } from "@/server/ai-service/runtime";
 import { createLiveDependencies } from "@/server/ai-service/factory";
 import { readServiceKeys } from "@/server/ai-service/keys";
-import { ServiceDenied } from "@/server/ai-service/contracts";
-import { purgeOldSkillDiag } from "@/server/ai-service/retention";
+import { RETENTION_MS, ServiceDenied, skillReply, type Actor } from "@/server/ai-service/contracts";
+import { countEligibleSkillDiag, purgeOldSkillDiag, purgeSkillDiagManual } from "@/server/ai-service/retention";
+import { readState } from "@/server/ai-service/admin";
 import { fakeDb } from "./fake-db";
 
 const prod = "p".repeat(32), test = "t".repeat(32);
@@ -19,6 +21,16 @@ const scopeEnv = { AI_SERVICE_SYNTHETIC_RUN_ID: "test-run-123", AI_SERVICE_SYNTH
 const payload = { bot: { id: "synthetic-bot" }, userRequest: { user: { id: "synthetic-test-run-123" }, block: { id: "synthetic-block" }, utterance: "야호 준비물을 알려 주세요" } };
 function codeOf(fn: () => unknown) { try { fn(); throw new Error("expected rejection"); } catch (error) { expect(error).toBeInstanceOf(SkillDiagDenied); return (error as SkillDiagDenied).diagCode; } }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+
+describe("golden 503 body fixture", () => {
+    it("pins the code-captured skillReply bytes and SHA-256 without a trailing newline", () => {
+        const bytes = readFileSync("tests/fixtures/ai-service/skill-503-golden-body.json");
+        expect(bytes.toString("utf8")).toBe(JSON.stringify(skillReply()));
+        expect(bytes.length).toBe(146);
+        expect(bytes.at(-1)).toBe("}".charCodeAt(0));
+        expect(createHash("sha256").update(bytes).digest("hex")).toBe("5f3c796c2c42970c626a15ba7d5e900df5b54876fa19d432d58e5d7676641b63");
+    });
+});
 
 describe("diagnostic guard classification", () => {
     it.each([
@@ -135,5 +147,122 @@ describe("emission and retention", () => {
         expect(await purgeOldSkillDiag(f.db, "PREVIEW", now)).toEqual({ diagDeleted: 205 });
         expect(f.state.aiServiceSkillDiag.map(r => r.id)).toEqual(["live", "other"]);
         expect(f.operations.filter(op => op === "aiServiceSkillDiag.deleteMany")).toHaveLength(3);
+    });
+});
+
+describe("manual diag purge", () => {
+    const actor: Actor = { userId: "synthetic-diag-admin", role: "ADMIN", active: true };
+    const cutoff = new Date(+now - RETENTION_MS);
+    function seedEligible(f: ReturnType<typeof fakeDb>, count: number) {
+        for (let i = 0; i < count; i++) f.seed("aiServiceSkillDiag", { id: `eligible-${i}`, environment: "PREVIEW", emittedAt: cutoff });
+    }
+    const failure = (remainingEligible: number, partialDiagDeleted = 0) => ({ formError: "AI_SERVICE_DENIED", partialDiagDeleted, remainingEligible, auditWritten: false });
+
+    it("counts the inclusive cutoff, scopes environment and returns zero for fresh rows", async () => {
+        const f = fakeDb();
+        expect(await countEligibleSkillDiag(f.db, "PREVIEW", now)).toBe(0);
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: new Date(+cutoff + 1) });
+        expect(await countEligibleSkillDiag(f.db, "PREVIEW", now)).toBe(0);
+        f.seed("aiServiceSkillDiag", { environment: "PRODUCTION", emittedAt: cutoff });
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: cutoff });
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: new Date(+cutoff - 1) });
+        expect(await countEligibleSkillDiag(f.db, "PREVIEW", now)).toBe(2);
+        expect(await countEligibleSkillDiag(f.db, "PRODUCTION", now)).toBe(1);
+        expect(f.operations.every(op => !op.endsWith("create") && !op.endsWith("deleteMany"))).toBe(true);
+    });
+    it("uses RETENTION_MS in purgeOldSkillDiag rather than the duplicated literal", () => {
+        const source = readFileSync("server/ai-service/retention.ts", "utf8").split("export async function purgeOldSkillDiag(")[1].split("export type")[0];
+        expect(source).toContain("new Date(now.getTime() - RETENTION_MS)");
+        expect(source).not.toContain("90 * 24 * 3600000");
+    });
+    it("purges 205 rows in batches and writes one exact audit per non-empty run", async () => {
+        const f = fakeDb(); seedEligible(f, 205);
+        f.seed("aiServiceSkillDiag", { id: "live", environment: "PREVIEW", emittedAt: new Date(+cutoff + 1) });
+        f.seed("aiServiceSkillDiag", { id: "other", environment: "PRODUCTION", emittedAt: cutoff });
+        const runUuid = randomUUID();
+        const result = await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, runUuid);
+        expect(result).toEqual({ diagDeleted: 205, beforeEligible: 205, afterEligible: 0, auditWritten: true, auditId: expect.any(String) });
+        expect(f.operations.filter(op => op === "aiServiceSkillDiag.deleteMany")).toHaveLength(3);
+        expect(f.state.aiServiceSkillDiag.map(r => r.id)).toEqual(["live", "other"]);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(1);
+        expect(f.state.aiServiceDeletionAudit[0]).toMatchObject({ id: "auditId" in result ? result.auditId : null, environment: "PREVIEW", kind: "DIAG_PURGE", requestId: `diag-purge:${runUuid}`, actorId: actor.userId, reasonCode: "ADMIN_REVIEW", scope: "BULK" });
+        expect(f.state.aiServiceDeletionAudit[0].requestId).toMatch(/^diag-purge:[0-9a-f-]{36}$/);
+        seedEligible(f, 1);
+        await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID());
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(2);
+        expect(f.state.aiServiceDeletionAudit[1].requestId).not.toBe(f.state.aiServiceDeletionAudit[0].requestId);
+    });
+    it.each([false, true])("empty or fresh-only purge has no audit (fresh=%s)", async fresh => {
+        const f = fakeDb();
+        if (fresh) f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: now });
+        expect(await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).toEqual({ diagDeleted: 0, beforeEligible: 0, afterEligible: 0, auditWritten: false, auditId: null });
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+        expect(f.state.aiServiceSkillDiag).toHaveLength(fresh ? 1 : 0);
+    });
+    it("refuses 1001 eligible rows inside the wrapper", async () => {
+        const f = fakeDb(); seedEligible(f, 1001);
+        expect(await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).toEqual(failure(1001));
+        expect(f.state.aiServiceSkillDiag).toHaveLength(1001);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+    });
+    it("allows exactly 1000 eligible rows", async () => {
+        const f = fakeDb(); seedEligible(f, 1000);
+        expect(await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).toEqual({ diagDeleted: 1000, beforeEligible: 1000, afterEligible: 0, auditWritten: true, auditId: expect.any(String) });
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(1);
+    });
+    it("returns a recounted failure when the first purge batch throws", async () => {
+        const f = fakeDb(); seedEligible(f, 205); f.failNext("aiServiceSkillDiag.deleteMany");
+        await expect(purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).resolves.toEqual(failure(205));
+        expect(f.state.aiServiceSkillDiag).toHaveLength(205);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+    });
+    it("keeps committed deletions and reports partial=N when the audit write fails", async () => {
+        const f = fakeDb(); seedEligible(f, 205); f.failNext("aiServiceDeletionAudit.create");
+        expect(await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).toEqual(failure(0, 205));
+        expect(f.state.aiServiceSkillDiag).toHaveLength(0);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+        // A retry cannot recreate the lost audit for the already deleted rows.
+        expect(await purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).toEqual({ diagDeleted: 0, beforeEligible: 0, afterEligible: 0, auditWritten: false, auditId: null });
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+    });
+    it.each([
+        { ...actor, role: "SUPER_ADMIN" }, { ...actor, role: "STAFF" }, { ...actor, role: "TEACHER" },
+        { ...actor, active: false }, { ...actor, userId: "" },
+    ])("refuses an unauthorized actor without throwing: %j", async bad => {
+        const f = fakeDb(); seedEligible(f, 2);
+        await expect(purgeSkillDiagManual(f.db, "PREVIEW", bad, now, randomUUID())).resolves.toEqual(failure(2));
+        expect(f.state.aiServiceSkillDiag).toHaveLength(2);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+    });
+    it("returns the failure shape even when both initial count and recount fail", async () => {
+        const f = fakeDb();
+        vi.spyOn(f.db, "$transaction").mockRejectedValue(new Error("synthetic unavailable"));
+        await expect(purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())).resolves.toEqual(failure(0));
+    });
+    it("refuses a non-PREVIEW environment before counting or deleting", async () => {
+        const f = fakeDb(); f.seed("aiServiceSkillDiag", { environment: "PRODUCTION", emittedAt: cutoff });
+        expect(await purgeSkillDiagManual(f.db, "PRODUCTION", actor, now, randomUUID())).toEqual(failure(0));
+        expect(f.operations).toEqual([]);
+        expect(f.state.aiServiceSkillDiag).toHaveLength(1);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(0);
+    });
+    it("concurrent runs delete 150 rows total and audit each non-empty run (R-2)", async () => {
+        const f = fakeDb(); seedEligible(f, 150);
+        const results = await Promise.all([purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID()), purgeSkillDiagManual(f.db, "PREVIEW", actor, now, randomUUID())]);
+        expect(results.every(r => "diagDeleted" in r)).toBe(true);
+        const deleted = results.map(r => "diagDeleted" in r ? r.diagDeleted : 0);
+        expect(deleted.reduce((sum, n) => sum + n, 0)).toBe(150);
+        expect(f.state.aiServiceDeletionAudit).toHaveLength(deleted.filter(n => n > 0).length);
+        expect(await countEligibleSkillDiag(f.db, "PREVIEW", now)).toBe(0);
+    });
+    it("readState returns all three diagnostic fields inside its transaction", async () => {
+        const f = fakeDb();
+        // Ascending seeds: fakeDb.findFirst deliberately does not implement orderBy.
+        const oldest = new Date(+cutoff - 1);
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: oldest });
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: cutoff });
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: now });
+        f.seed("aiServiceSkillDiag", { environment: "PRODUCTION", emittedAt: new Date(+oldest - 1) });
+        expect((await readState(f.db, "PREVIEW", actor, now)).monitoring).toMatchObject({ diagTotalCount: 3, diagEligibleCount: 2, diagOldestEmittedAt: oldest });
     });
 });
