@@ -4,6 +4,12 @@ import { environmentSchema } from "@/server/ai-service/contracts";
 import { skillReply } from "@/server/ai-service/contracts";
 import { SkillDiagCode as C } from "@/server/ai-service/skill-diag";
 import { POST } from "@/app/api/ai-service/v1/skill/route";
+import { assertSyntheticScope } from "@/server/ai-service/synthetic-scope";
+import * as syntheticScope from "@/server/ai-service/synthetic-scope";
+import type { LiveDependenciesInput } from "@/server/ai-service/factory";
+import { skillHandoffCard } from "@/server/ai-service/contracts";
+import { fakeDb } from "./fake-db";
+import { realRequestPayload } from "./real-request-fixture";
 
 const mocks = vi.hoisted(() => ({ create: vi.fn(), handler: vi.fn(), factory: vi.fn() }));
 vi.mock("@/lib/db/prisma", () => ({ prisma: { aiServiceSkillDiag: { create: mocks.create } } }));
@@ -36,6 +42,31 @@ describe("skill route diagnostics", () => {
     it("T-U-5 stage 7 drift detector", async () => { setup(); const original = JSON.parse; let calls = 0; vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => { if (text === payload && ++calls === 2) throw new Error("synthetic"); return original(text, reviver); }); await rejected(request(), C.S7_JSON_INVALID); });
     it("T-U-6 maps unexpected failures to S0_UNKNOWN", async () => { setup(); mocks.factory.mockImplementation(() => { throw new Error("private"); }); await rejected(request(), C.S0_UNKNOWN); });
     it("T-U-8 successful response has no diagnostics", async () => { setup(); const res = await POST(request()); expect(res.status).toBe(200); expect(mocks.create).not.toHaveBeenCalled(); });
+    it("returns a 200 handoff without diagnostics when the synthetic scope expires inside the handler", async () => {
+        setup();
+        const expiry = Date.now() + 60_000;
+        vi.stubEnv("AI_SERVICE_SYNTHETIC_EXPIRES_AT", new Date(expiry).toISOString());
+        const body = realRequestPayload();
+        body.userRequest.user.id = "synthetic-test-run-123";
+        const f = fakeDb();
+        const scopeCheck = vi.spyOn(syntheticScope, "assertSyntheticScope");
+        const actual = await vi.importActual<typeof import("@/server/ai-service/skill")>("@/server/ai-service/skill");
+        mocks.handler.mockImplementation(actual.handleKakaoSkill);
+        mocks.factory.mockImplementation(({ scope }: LiveDependenciesInput) => {
+            expect(() => assertSyntheticScope(scope)).not.toThrow();
+            vi.spyOn(Date, "now").mockReturnValue(expiry);
+            return { db: f.db, environment: "PREVIEW", secret: prod, testSecret: test, botId: "synthetic-bot", syntheticScope: scope,
+                keys: { encryption: { v1: Buffer.alloc(32, 1) }, hmac: { v1: Buffer.alloc(32, 2) }, activeEncryption: "v1", activeHmac: "v1" },
+                tools: { execute: vi.fn() } };
+        });
+        const res = await POST(request(test, JSON.stringify(body)));
+        expect(scopeCheck).toHaveBeenCalledTimes(2);
+        expect(scopeCheck.mock.results[1].type).toBe("throw");
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual(skillHandoffCard());
+        expect(mocks.create).not.toHaveBeenCalled();
+        expect(f.state.aiServiceSkillDiag).toHaveLength(0);
+    });
     it("T-PROD-1 route is inert in production", async () => { setup(); vi.stubEnv("VERCEL_ENV", "production"); const log = vi.spyOn(console, "error"); const res = await POST(request()); expect(res.status).toBe(503); expect(await res.text()).toBe(JSON.stringify(skillReply())); expect(mocks.create).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled(); });
     it("diagnostic failure retains golden response", async () => { setup(); mocks.create.mockRejectedValue(new Error("private")); const log = vi.spyOn(console, "error").mockImplementation(() => { throw new Error("private"); }); const res = await POST(request(prod)); expect(res.status).toBe(503); expect(await res.text()).toBe(JSON.stringify(skillReply())); expect(log).toHaveBeenCalledOnce(); });
 });
