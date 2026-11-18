@@ -89,7 +89,7 @@ describe("inactive daily retention worker using serialized doubles only", () => 
         f.seed("aiServiceRetentionJob", { environment: "PREVIEW", status: "FAILED", attempts: 2, lastSuccessAt: now, nextRetryAt: expiresAt, errorCode: "SYNTHETIC_PRIVATE_ERROR" });
         const state = await readState(f.db, "PREVIEW", admin, expiresAt);
         expect(state.expiredCount).toBe(1);
-        expect(state.monitoring).toEqual({ retentionCadence: "DAILY", schedulerActive: false, retentionAttempts: 2, lastRetentionSuccessAt: now, nextRetentionRetryAt: expiresAt, retentionErrorCode: null, auditCount: 0, auditOldestCreatedAt: null, emergencyPauseCount: 0, lastEmergencyPauseAt: null, lastEmergencyPauseById: null });
+        expect(state.monitoring).toEqual({ retentionCadence: "DAILY", schedulerActive: false, retentionAttempts: 2, lastRetentionSuccessAt: now, nextRetentionRetryAt: expiresAt, retentionErrorCode: null, auditCount: 0, auditOldestCreatedAt: null, diagTotalCount: 0, diagEligibleCount: 0, diagOldestEmittedAt: null, emergencyPauseCount: 0, lastEmergencyPauseAt: null, lastEmergencyPauseById: null });
         expect(JSON.stringify(state.monitoring)).not.toContain("SYNTHETIC_PRIVATE");
     });
 });
@@ -122,6 +122,17 @@ describe("retention cron entry (CRON_SECRET + schedulerEnabled gate)", () => {
         expect(state.monitoring.schedulerActive).toBe(true);
         expect(state.monitoring.auditCount).toBe(1);
         expect(state.monitoring.auditOldestCreatedAt).toEqual(new Date(+expiresAt - 10 * 86400000));
+    });
+
+    it("M-1 keeps exactly the four documented cron 200 body keys", async () => {
+        const f = fakeDb();
+        seedCronConfig(f, true);
+        for (let i = 0; i < 150; i++) f.seed("aiServiceRequest", { ...binding, id: `synthetic-body-keys-${i}`, status: "SETTLED" });
+        seedAudit(f, "body-keys-old", new Date(+expiresAt - 366 * 86400000));
+        seedAudit(f, "body-keys-fresh", expiresAt);
+        const result = await runRetentionCron(f.db, auth, "preview", secret, expiresAt);
+        expect(result.status).toBe(200);
+        expect(Object.keys(result.body).sort()).toEqual(["auditDeleted", "deleted", "expiredRemaining", "waiting"]);
     });
 
     it("refuses a wrong, missing, or absent secret with 401 and deletes nothing", async () => {

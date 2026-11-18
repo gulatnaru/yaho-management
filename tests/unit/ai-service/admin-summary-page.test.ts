@@ -2,12 +2,14 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeDb, now } from "./fake-db";
+import { RETENTION_MS } from "@/server/ai-service/contracts";
 
 const mocked = vi.hoisted(() => ({ adminContext: vi.fn() }));
 vi.mock("@/server/ai-service/admin-context", () => ({ adminContext: mocked.adminContext }));
 vi.mock("@/app/(admin)/ai-service/actions", () => ({
     pauseServiceAction: vi.fn(), saveConfigAction: vi.fn(), saveGuidanceAction: vi.fn(), savePublicationAction: vi.fn(),
     reconcileAction: vi.fn(), retryRetentionAction: vi.fn(),
+    previewSkillDiagPurgeAction: vi.fn(), executeSkillDiagPurgeAction: vi.fn(),
     lookupConsultationsBySubjectAction: vi.fn(), deleteConsultationAction: vi.fn(),
 }));
 
@@ -69,6 +71,27 @@ describe("AI service server-rendered request summary", () => {
         expect(html).toContain(`최근 삭제 성공 (UTC): ${now.toISOString()}`);
         expect(html).toContain("다음 재시도 가능 시각 (UTC): 없음");
         expect(html).toContain("삭제 오류: RETENTION_FAILED");
+    });
+
+    it("renders all three diagnostic retention fields and the preview control", async () => {
+        const oldest = new Date(+now - RETENTION_MS - 1);
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: oldest });
+        f.seed("aiServiceSkillDiag", { environment: "PREVIEW", emittedAt: now });
+        const html = renderToStaticMarkup(await AiServicePage());
+        expect(html).toContain("90일 삭제 상태");
+        expect(html).toContain("<dt>진단 행</dt><dd>2건</dd>");
+        expect(html).toContain("<dt>진단 삭제 대상</dt><dd>1건</dd>");
+        expect(html).toContain(`<dt>가장 오래된 진단 (UTC)</dt><dd>${oldest.toISOString()}</dd>`);
+        expect(html).toContain("삭제 대상 확인");
+        expect(html).not.toContain("진단 삭제 확정");
+    });
+
+    it("does not mount the diagnostic purge form when the admin lock is closed", async () => {
+        mocked.adminContext.mockRejectedValue(new Error("AI_SERVICE_DENIED"));
+        const html = renderToStaticMarkup(await AiServicePage());
+        expect(html).toContain("현재 연결과 설정 변경은 비활성화되어 있습니다.");
+        expect(html).not.toContain("삭제 대상 확인");
+        expect(html).not.toContain("진단 삭제 확정");
     });
 
     it("keeps unavailable context disabled without querying or rendering summary data", async () => {

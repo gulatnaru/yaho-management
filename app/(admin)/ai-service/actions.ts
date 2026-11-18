@@ -1,10 +1,11 @@
 "use server";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { adminContext } from "@/server/ai-service/admin-context";
 import { pauseService, saveConfig, saveGuidance, savePublication, findConsultationsBySubject, deleteConsultation } from "@/server/ai-service/admin";
 import { reconcileMonth } from "@/server/ai-service/ledger";
-import { retryRetention } from "@/server/ai-service/retention";
+import { countEligibleSkillDiag, purgeSkillDiagManual, retryRetention, type SkillDiagPurgeSuccess, type SkillDiagPurgeFailure } from "@/server/ai-service/retention";
 import { parse, ServiceDenied } from "@/server/ai-service/contracts";
 function values(form: FormData) { return Object.fromEntries(form.entries()); }
 async function action(fn: () => Promise<unknown>) {
@@ -99,5 +100,43 @@ export async function deleteConsultationAction(_previousState: ConsultationLooku
         return { deleted };
     } catch {
         return { formError: "AI_SERVICE_DENIED" };
+    }
+}
+
+export type SkillDiagPurgePreviewState = { expectedEligible: number; asOf: string } | SkillDiagPurgeFailure | { formError: "AI_SERVICE_DENIED" } | null;
+export type SkillDiagPurgeExecuteState = SkillDiagPurgeSuccess | SkillDiagPurgeFailure | null;
+
+export async function previewSkillDiagPurgeAction(_previousState: SkillDiagPurgePreviewState, _form: FormData): Promise<SkillDiagPurgePreviewState> {
+    void _previousState;
+    void _form;
+    try {
+        const c = await adminContext();
+        const expectedEligible = await countEligibleSkillDiag(c.db, c.environment, new Date());
+        return { expectedEligible, asOf: new Date().toISOString() };
+    } catch {
+        try {
+            const c = await adminContext();
+            const remainingEligible = await countEligibleSkillDiag(c.db, c.environment, new Date());
+            return { formError: "AI_SERVICE_DENIED", partialDiagDeleted: 0, remainingEligible, auditWritten: false };
+        } catch {
+            return { formError: "AI_SERVICE_DENIED" };
+        }
+    }
+}
+
+export async function executeSkillDiagPurgeAction(_previousState: SkillDiagPurgeExecuteState, form: FormData): Promise<SkillDiagPurgeExecuteState> {
+    let beforeEligible: number | undefined;
+    let expectedEligible: number | undefined;
+    try {
+        const c = await adminContext();
+        ({ expectedEligible } = parse(z.object({ expectedEligible: z.coerce.number().int().nonnegative() }).strict(), { expectedEligible: form.get("expectedEligible") ?? undefined }));
+        const runUuid = randomUUID();
+        beforeEligible = await countEligibleSkillDiag(c.db, c.environment, new Date());
+        if (beforeEligible !== expectedEligible) return { formError: "AI_SERVICE_DENIED", partialDiagDeleted: 0, remainingEligible: beforeEligible, auditWritten: false };
+        const result = await purgeSkillDiagManual(c.db, c.environment, c.actor, new Date(), runUuid);
+        if (!("formError" in result)) revalidatePath("/ai-service");
+        return result;
+    } catch {
+        return { formError: "AI_SERVICE_DENIED", partialDiagDeleted: 0, remainingEligible: beforeEligible ?? expectedEligible ?? 0, auditWritten: false };
     }
 }

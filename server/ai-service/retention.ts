@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
-import { transaction, type Database } from "./repository";
+import { transaction, type Database, type Tx } from "./repository";
 import { recoverInTransaction } from "./ledger";
-import { type Environment, ServiceDenied, assertAdmin, type Actor } from "./contracts";
+import { type Environment, ServiceDenied, assertAdmin, type Actor, RETENTION_MS } from "./contracts";
 export const RETENTION_CADENCE = "DAILY";
 export async function purgeExpired(db: Database, environment: Environment, now: Date, retry = false) {
     try {
@@ -58,9 +58,17 @@ export async function purgeOldAudits(db: Database, environment: Environment, now
     return { auditDeleted };
 }
 
+/** Count eligible diagnostic rows without writing an audit row. */
+export async function countEligibleSkillDiagTx(tx: Tx, environment: Environment, now: Date): Promise<number> {
+    return tx.aiServiceSkillDiag.count({ where: { environment, emittedAt: { lte: new Date(now.getTime() - RETENTION_MS) } } });
+}
+export async function countEligibleSkillDiag(db: Database, environment: Environment, now: Date): Promise<number> {
+    return transaction(db, environment, (tx) => countEligibleSkillDiagTx(tx, environment, now));
+}
+
 /** Purge diagnostics older than 90 days, bounded to 100 rows per transaction. */
 export async function purgeOldSkillDiag(db: Database, environment: Environment, now: Date) {
-    const cutoff = new Date(now.getTime() - 90 * 24 * 3600000);
+    const cutoff = new Date(now.getTime() - RETENTION_MS);
     let diagDeleted = 0;
     for (;;) {
         const deleted = await transaction(db, environment, async tx => {
@@ -72,6 +80,37 @@ export async function purgeOldSkillDiag(db: Database, environment: Environment, 
         if (!deleted) break;
     }
     return { diagDeleted };
+}
+
+export type SkillDiagPurgeSuccess = { diagDeleted: number; beforeEligible: number; afterEligible: number; auditWritten: boolean; auditId: string | null };
+export type SkillDiagPurgeFailure = { formError: "AI_SERVICE_DENIED"; partialDiagDeleted: number; remainingEligible: number; auditWritten: false };
+export type SkillDiagPurgeResult = SkillDiagPurgeSuccess | SkillDiagPurgeFailure;
+export const SKILL_DIAG_PURGE_CAP = 1000;
+
+/** Manual PREVIEW purge: batches commit separately; failures return the best available counts. */
+export async function purgeSkillDiagManual(db: Database, environment: Environment, actor: Actor, now: Date, runUuid: string): Promise<SkillDiagPurgeResult> {
+    let beforeEligible = 0;
+    let diagDeleted = 0;
+    let purgeDone = false;
+    try {
+        assertAdmin(actor);
+        if (environment !== "PREVIEW") return { formError: "AI_SERVICE_DENIED", partialDiagDeleted: 0, remainingEligible: 0, auditWritten: false };
+        beforeEligible = await countEligibleSkillDiag(db, environment, now);
+        if (beforeEligible > SKILL_DIAG_PURGE_CAP) return { formError: "AI_SERVICE_DENIED", partialDiagDeleted: 0, remainingEligible: beforeEligible, auditWritten: false };
+        ({ diagDeleted } = await purgeOldSkillDiag(db, environment, now));
+        purgeDone = true;
+        const afterEligible = await countEligibleSkillDiag(db, environment, now);
+        if (diagDeleted === 0) return { diagDeleted: 0, beforeEligible, afterEligible, auditWritten: false, auditId: null };
+        const audit = await transaction(db, environment, (tx) => tx.aiServiceDeletionAudit.create({ data: {
+            environment, kind: "DIAG_PURGE", requestId: `diag-purge:${runUuid}`, actorId: actor.userId, reasonCode: "ADMIN_REVIEW", scope: "BULK",
+        } }));
+        return { diagDeleted, beforeEligible, afterEligible, auditWritten: true, auditId: audit.id };
+    } catch {
+        // A concurrent purge can over-attribute the inferred count. Re-verify via readState before retrying.
+        const remainingEligible = await countEligibleSkillDiag(db, environment, now).catch(() => beforeEligible);
+        const partialDiagDeleted = purgeDone ? diagDeleted : Math.max(0, beforeEligible - remainingEligible);
+        return { formError: "AI_SERVICE_DENIED", partialDiagDeleted, remainingEligible, auditWritten: false };
+    }
 }
 
 export type RetentionCronResult =

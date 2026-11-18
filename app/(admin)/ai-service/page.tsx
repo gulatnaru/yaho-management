@@ -8,6 +8,7 @@ import { readState } from "@/server/ai-service/admin";
 import { saveConfigAction, saveGuidanceAction, savePublicationAction, reconcileAction, retryRetentionAction } from "./actions";
 import { ConsultationDeleteForm } from "./_components/consultation-delete-form";
 import { PauseServiceForm } from "./_components/pause-service-form";
+import { SkillDiagPurgeForm } from "./_components/skill-diag-purge-form";
 export const dynamic = "force-dynamic";
 const input = "rounded border px-3 py-2 w-full";
 const button = "rounded bg-slate-800 px-3 py-2 text-white";
@@ -99,7 +100,13 @@ export default async function AiServicePage() {
    <p>삭제 오류: {state.monitoring.retentionErrorCode ?? "없음"}</p>
    <p>삭제 감사 기록: {state.monitoring.auditCount}건 · 가장 오래된 기록 (UTC): {state.monitoring.auditOldestCreatedAt?.toISOString() ?? "없음"}</p>
    <p>작업: {state.retention?.status ?? "미실행"} · 누적 삭제 {state.retention?.deletedCount ?? 0}건</p>
+   <dl className="mt-3 grid gap-2 md:grid-cols-3">
+    <div><dt>진단 행</dt><dd>{state.monitoring.diagTotalCount}건</dd></div>
+    <div><dt>진단 삭제 대상</dt><dd>{state.monitoring.diagEligibleCount}건</dd></div>
+    <div><dt>가장 오래된 진단 (UTC)</dt><dd>{state.monitoring.diagOldestEmittedAt?.toISOString() ?? "없음"}</dd></div>
+   </dl>
    <form action={retryRetentionAction}><Button className={button}>삭제 작업 재시도</Button></form>
+   <SkillDiagPurgeForm />
   </section>
   <section className="rounded border p-4"><h2 className="font-bold">개별 삭제</h2>
    <p>카카오 사용자 ID로 해당 이용자의 상담 기록을 조회한 뒤 단건 또는 일괄로 삭제합니다. 원문·해시는 화면에 표시하지 않으며, 조회한 ID는 서버에 저장하지 않습니다.</p>

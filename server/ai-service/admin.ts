@@ -4,7 +4,7 @@ import { assertAdmin, parse, configSchema, publicationSchema, guidanceSchema, Se
 import { transaction, type Database, type Tx } from "./repository";
 import { safePublicText } from "./tools";
 import { decrypt, hashes, type Keys } from "./crypto";
-import { RETENTION_CADENCE } from "./retention";
+import { RETENTION_CADENCE, countEligibleSkillDiagTx } from "./retention";
 export async function saveConfig(db: Database, environment: Environment, actor: Actor, value: unknown, now: Date) {
     assertAdmin(actor);
     const input = parse(configSchema, value);
@@ -121,6 +121,9 @@ export async function readState(db: Database, environment: Environment, actor: A
                 lastEmergencyPauseById: lastEmergencyPause?.actorId ?? null,
                 auditCount: await tx.aiServiceDeletionAudit.count({ where: { environment } }),
                 auditOldestCreatedAt: oldestAudit?.createdAt ?? null,
+                diagTotalCount: await tx.aiServiceSkillDiag.count({ where: { environment } }),
+                diagEligibleCount: await countEligibleSkillDiagTx(tx, environment, now),
+                diagOldestEmittedAt: (await tx.aiServiceSkillDiag.findFirst({ where: { environment }, orderBy: { emittedAt: "asc" }, select: { emittedAt: true } }))?.emittedAt ?? null,
             },
             config,
             programs: await tx.aiServiceProgramPublication.findMany({ where: { environment }, take: 50 }),
