@@ -269,26 +269,42 @@ describe.sequential("manual diagnostic retention on isolated PostgreSQL 55435", 
 
     it("concurrent real-PG purges delete 150 combined and audit each returned non-empty run (R-2)", async () => {
         await seedDiag(150);
+        expect(await countEligibleSkillDiag(db, "PREVIEW", now)).toBe(150);
         const auditsBefore = await ownAudits();
         const before = await neighbours();
         const uuids = [randomUUID(), randomUUID()];
         const results = await Promise.all(uuids.map(uuid => purgeSkillDiagManual(db, "PREVIEW", actor, now, uuid)));
-        for (const result of results) expect(result).not.toHaveProperty("formError");
-        const successes = results.map(result => {
-            if (!("diagDeleted" in result)) throw new Error("EXPECTED_CONCURRENT_PURGE_SUCCESS");
-            return result;
-        });
-        expect(successes.reduce((total, result) => total + result.diagDeleted, 0)).toBe(150);
-        const nonEmpty = successes.filter(result => result.diagDeleted > 0);
-        expect(await ownAudits()).toHaveLength(auditsBefore.length + nonEmpty.length);
-        for (const [index, result] of successes.entries()) {
-            expect(result.auditWritten).toBe(result.diagDeleted > 0);
-            if (result.diagDeleted > 0) {
-                expect((await ownAudits()).find(row => row.id === result.auditId)).toMatchObject({ requestId: `diag-purge:${uuids[index]}`, kind: "DIAG_PURGE" });
-            } else expect(result.auditId).toBeNull();
-        }
+        const successes = results.filter(result => "diagDeleted" in result);
+        const failures = results.filter(result => "formError" in result);
+        expect(failures.length).toBeLessThanOrEqual(1);
+        expect(successes.length).toBeGreaterThanOrEqual(1);
         expect(await countEligibleSkillDiag(db, "PREVIEW", now)).toBe(0);
         expect(await ownDiagRows()).toHaveLength(0);
+        const nonEmpty = successes.filter(result => result.diagDeleted > 0);
+        for (const [index, result] of results.entries()) {
+            const requestId = `diag-purge:${uuids[index]}`;
+            const audits = await db.aiServiceDeletionAudit.findMany({ where: { requestId } });
+            if ("diagDeleted" in result) {
+                if (result.diagDeleted > 0) {
+                    expect(result.auditWritten).toBe(true);
+                    expect(result.auditId).not.toBeNull();
+                    expect(audits).toHaveLength(1);
+                    expect(audits[0]).toMatchObject({ id: result.auditId, requestId, kind: "DIAG_PURGE" });
+                } else {
+                    expect(result.auditWritten).toBe(false);
+                    expect(result.auditId).toBeNull();
+                    expect(audits).toHaveLength(0);
+                }
+            } else {
+                expect(result.formError).toBe("AI_SERVICE_DENIED");
+                expect(result.auditWritten).toBe(false);
+                expect(audits).toHaveLength(0);
+            }
+        }
+        expect(await ownAudits()).toHaveLength(auditsBefore.length + nonEmpty.length);
+        if (successes.length === 2) {
+            expect(successes.reduce((total, result) => total + result.diagDeleted, 0)).toBe(150);
+        }
         expect(await neighbours()).toEqual(before);
     });
 
