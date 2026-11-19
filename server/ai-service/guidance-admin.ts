@@ -17,32 +17,16 @@ export type ApprovedGuidanceRegistry = {
     registryVersion: string;
     entries: Record<string, ApprovedGuidanceEntry>;
 };
-export const APPROVED_GUIDANCE_TOPICS = ["PREPARATION", "RAIN"] as const;
+export const APPROVED_GUIDANCE_TOPICS = ["PREPARATION", "RAIN", "POLICY"] as const;
 const submissionSchema = z.object({
     topic: z.string(),
     content: z.string(),
     expectedVersion: z.number().int().nonnegative(),
-    // Accepted and ignored: the stored value is always approved=true (PLAN §1.5).
-    // The approval proof is the content hash, not this flag.
     approved: z.boolean().optional(),
 });
 function sha256Hex(value: string): string {
     return createHash("sha256").update(value, "utf8").digest("hex");
 }
-/**
- * Approved-guidance registration (OQ-16). Only the two operator-approved v1
- * texts may be stored, and only by an authenticated ADMIN in PREVIEW.
- * Validation order (SPEC §4.3): topic allowlist -> PREVIEW-only -> ADMIN ->
- * newline normalization (D-13) -> content sha256 against the approved
- * registry (normalized submitted bytes, before trim) -> guidanceSchema parse
- * + safePublicText (before entering the transaction, SPEC §4.3 item 9) ->
- * inner write + audit row in a single real transaction (D-12, option 2: no
- * nested $transaction — a Prisma TransactionClient has no $transaction method
- * at runtime). Any failure returns the fixed error only and stores nothing.
- * The form submission layer turns textarea newlines into CRLF, so the hash
- * is computed on the LF-normalized content (D-13); the stored content is
- * byte-identical to the approved LF original.
- */
 export async function saveApprovedGuidance(db: Database, environment: Environment, actor: Actor, value: unknown, registry: ApprovedGuidanceRegistry = approvedRegistry) {
     const input = parse(submissionSchema, value);
     if (!(APPROVED_GUIDANCE_TOPICS as readonly string[]).includes(input.topic))
@@ -53,11 +37,6 @@ export async function saveApprovedGuidance(db: Database, environment: Environmen
     const entry = registry.entries[input.topic];
     if (!entry)
         throw new ServiceDenied();
-    // D-13 (SPEC §4.3 step 0): the form submission layer turns textarea
-    // newlines into CRLF, so normalize newlines to LF before the hash
-    // comparison. Every later step (hash, schema parse, safePublicText,
-    // storage) uses this same normalized value, so the stored content stays
-    // byte-identical to the approved LF original.
     const content = input.content.replace(/\r\n?/g, "\n");
     const digest = sha256Hex(content);
     if (digest !== entry.sha256)
@@ -77,7 +56,6 @@ export type GuidanceRegistrationState = {
     contentSha256: string;
     updatedAt: Date;
 };
-/** Read-only registration state for the guidance page (topic, version, approval, content hash). */
 export async function readApprovedGuidanceState(db: Database, environment: Environment, actor: Actor): Promise<GuidanceRegistrationState[]> {
     assertAdmin(actor);
     if (environment !== "PREVIEW")

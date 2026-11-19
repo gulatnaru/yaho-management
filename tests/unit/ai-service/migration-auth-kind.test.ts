@@ -18,9 +18,9 @@ describe("request authentication migration contract", () => {
         expect(request).toBeDefined();
         expect(request).toMatch(/^\s*authKind\s+String\?\s*$/m);
     });
-    it("adds exactly three known local-only migrations after the existing approved 27", () => {
+    it("adds exactly four known local-only migrations after the existing approved 27", () => {
         const names = readdirSync(root, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort();
-        expect(names).toEqual([...APPROVED_PREVIEW_MIGRATIONS.map(e => e.name), migration, "20261118000000_add_ai_service_skill_diag", "20261118152914_ai_service_audit_diag_purge"]);
+        expect(names).toEqual([...APPROVED_PREVIEW_MIGRATIONS.map(e => e.name), migration, "20261118000000_add_ai_service_skill_diag", "20261118152914_ai_service_audit_diag_purge", "20261119131754_ai_service_guidance_policy_audit"]);
     });
     it("preserves the contents of every previously approved migration", () => {
         for (const entry of APPROVED_PREVIEW_MIGRATIONS) {

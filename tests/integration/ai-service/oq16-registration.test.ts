@@ -127,8 +127,11 @@ describe.sequential("OQ-16 registration on real PostgreSQL (isolated DB 55435)",
         expect(await db.aiServiceGuidanceAudit.findUnique({ where: { id: fresh!.id } })).not.toBeNull();
     });
 
-    it("CHECK constraint rejects an invalid guidance audit topic", async () => {
-        await expect(db.aiServiceGuidanceAudit.create({ data: { environment: "PREVIEW", topic: "POLICY", version: 1,
+    it("CHECK constraint accepts POLICY and rejects an invalid guidance audit topic", async () => {
+        const audit = await db.aiServiceGuidanceAudit.create({ data: { environment: "PREVIEW", topic: "POLICY", version: 1,
+            contentSha256: "0".repeat(64), actorId: "synthetic-admin" } });
+        expect(audit.topic).toBe("POLICY");
+        await expect(db.aiServiceGuidanceAudit.create({ data: { environment: "PREVIEW", topic: "INVALID", version: 1,
             contentSha256: "0".repeat(64), actorId: "synthetic-admin" } })).rejects.toThrow();
     });
 

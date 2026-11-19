@@ -134,7 +134,7 @@ describe("fixed new scope preserves approved migration and old runner",()=>{
   mkdirSync(path.join(root,"20261017000000_unapproved"));writeFileSync(path.join(root,"20261017000000_unapproved","migration.sql"),"-- unapproved");
   expect(()=>evaluateAiServicePreviewMigration(rows,root)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
- it("accepts the approved 27-migration inventory and rejects the three known local-only migrations",()=>{
+ it("accepts the approved 27-migration inventory and rejects the four known local-only migrations",()=>{
   const {root}=approvedMigrationFixture(),names=listRepositoryMigrations(root);
   expect(names).toHaveLength(27);
   expect(names).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES]);
@@ -142,7 +142,7 @@ describe("fixed new scope preserves approved migration and old runner",()=>{
   const rows=names.map(name=>({migration_name:name,checksum:migrationChecksum(root,name),finished_at:new Date(),rolled_back_at:null}));
   expect(evaluateAiServicePreviewMigration(rows,root)).toMatchObject({pendingMigrations:[],deployRequired:false});
   const actual=path.resolve("prisma/migrations");
-  expect(listRepositoryMigrations(actual)).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES, "20261115180000_ai_service_request_auth_kind", "20261118000000_add_ai_service_skill_diag", "20261118152914_ai_service_audit_diag_purge"]);
+  expect(listRepositoryMigrations(actual)).toEqual([...APPROVED_PREVIEW_MIGRATION_NAMES, "20261115180000_ai_service_request_auth_kind", "20261118000000_add_ai_service_skill_diag", "20261118152914_ai_service_audit_diag_purge", "20261119131754_ai_service_guidance_policy_audit"]);
   expect(()=>evaluateAiServicePreviewMigration(rows,actual)).toThrow("AI_SERVICE_MIGRATION_INVENTORY_DENIED");
  });
  it("rejects the Phase 6 Production CRLF checksum in applied rows and in repository files",()=>{

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { saveGuidance } from "@/server/ai-service/admin";
-import { saveApprovedGuidance, readApprovedGuidanceState } from "@/server/ai-service/guidance-admin";
+import { APPROVED_GUIDANCE_TOPICS, saveApprovedGuidance, readApprovedGuidanceState } from "@/server/ai-service/guidance-admin";
 import approvedRegistry from "@/server/ai-service/approved-guidance-v1.json";
 import { safePublicText } from "@/server/ai-service/public-text";
 import { fakeDb } from "./fake-db";
@@ -53,7 +53,9 @@ describe("saveApprovedGuidance (OQ-16 registration)", () => {
         expect(f.state.aiServiceGuidanceAudit[0]).toMatchObject({ environment: "PREVIEW", topic: "RAIN", version: 1,
             contentSha256: approvedRegistry.entries.RAIN.sha256, actorId: "synthetic-admin" });
     });
-    it("rejects the POLICY topic, storing nothing and auditing nothing", async () => {
+    it("allows the POLICY topic but rejects an unapproved hash without storing or auditing", async () => {
+        expect(APPROVED_GUIDANCE_TOPICS).toContain("POLICY");
+        expect(sha256("합성 운영정책 안내입니다.")).not.toBe(approvedRegistry.entries.POLICY.sha256);
         const f = fakeDb();
         await expect(saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "POLICY", content: "합성 운영정책 안내입니다.", expectedVersion: 0 }, approvedRegistry))
             .rejects.toThrow("AI_SERVICE_DENIED");

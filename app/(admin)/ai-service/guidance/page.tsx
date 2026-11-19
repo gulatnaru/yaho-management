@@ -8,7 +8,7 @@ import { saveApprovedGuidanceAction } from "./actions";
 export const dynamic = "force-dynamic";
 const input = "rounded border px-3 py-2 w-full";
 const button = "rounded bg-slate-800 px-3 py-2 text-white";
-const TOPICS = ["PREPARATION", "RAIN"] as const;
+const TOPICS = ["PREPARATION", "RAIN", "POLICY"] as const;
 export default async function AiServiceGuidancePage() {
     const context = await guidanceAdminContext().catch((error) => {
         if (error instanceof ServiceDenied)
@@ -21,7 +21,7 @@ export default async function AiServiceGuidancePage() {
     const byTopic = new Map(state.map((row) => [row.topic, row]));
     return <main className="space-y-6 p-4 md:p-6">
   <h1 className="text-2xl font-bold">승인 안내 원문 등록</h1>
-  <p>환경: {context.environment} · 승인된 원문 v1 2건(PREPARATION·RAIN)만 등록할 수 있습니다. 등록은 운영 활성화를 의미하지 않습니다. Public Skill 잠금과 기존 관리자 잠금은 그대로 유지됩니다.</p>
+  <p>환경: {context.environment} · 승인된 원문 v1 3건(PREPARATION·RAIN·POLICY)만 등록할 수 있습니다. 등록은 운영 활성화를 의미하지 않습니다. Public Skill 잠금과 기존 관리자 잠금은 그대로 유지됩니다.</p>
   {TOPICS.map((topic) => {
       const entry = approvedRegistry.entries[topic];
       const current = byTopic.get(topic);
