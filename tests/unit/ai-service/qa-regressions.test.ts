@@ -30,26 +30,26 @@ describe("QA-MAJOR1 public seat/count boundary", () => {
         "합성 프로그램 모집인원 8인", "예 약 인 원 ８ 명", "참여자 수 3명", "남은 ８자리", "공석 8석", "전체 좌석 여덟 자리",
         "모\u200b집\u200b인\u200b원 8인", "모\u2060집인원８인", "모집\u202e인원 8인", "모☆집☆인☆원8인",
         "ca\u0338pa\u0338city 8", "8 participants", "remaining seats: ８", "maximum class size 8", "2 people booked", "８人", "8 reservations", "current bookings eight", "eight children registered",
-    ])("rejects normalized count expression %s", text => {
-        expect(() => safePublicText(text)).toThrow("AI_SERVICE_DENIED");
-        expect(() => groundedReply({ kind: "GUIDANCE", content: text })).toThrow("AI_SERVICE_DENIED");
-        expect(() => groundedReply({ kind: "PROGRAMS", items: [{ handle: "p", name: text, description: null }] })).toThrow("AI_SERVICE_DENIED");
+    ])("allows normalized count expression %s", text => {
+        expect(safePublicText(text)).toBe(text.normalize("NFKC").replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").normalize("NFKC"));
+        expect(groundedReply({ kind: "GUIDANCE", content: text })).toBe(safePublicText(text));
+        expect(groundedReply({ kind: "PROGRAMS", items: [{ handle: "p", name: text, description: null }] })).toBe(safePublicText(text));
     });
     it.each(["2026년 10월 15일 오전 10시 05분", "합성 숲 12번 출구", "B동 2층 104호", "２０２６년１０월１５일１０시"])("preserves allowed schedule/location digits %s", text => expect(safePublicText(text, 1000, /출구|층/.test(text) ? "LOCATION" : "FREE")).toBe(text.normalize("NFKC")));
-    it("ADMIN cannot approve counts in Program/guidance/location", async () => {
+    it("ADMIN can approve counts in Program/guidance/location", async () => {
         const f = fakeDb(), text = "합성 프로그램 모집인원 8인";
         f.seed("program", { id: "p", name: text, description: null, status: "ACTIVE", updatedAt: now });
-        await expect(savePublication(f.db, "PREVIEW", actor, { kind: "PROGRAM", id: "p", enabled: true, expectedVersion: 0 })).rejects.toThrow();
-        await expect(saveGuidance(f.db, "PREVIEW", actor, { topic: "RAIN", content: text, approved: true, expectedVersion: 0 })).rejects.toThrow();
+        await savePublication(f.db, "PREVIEW", actor, { kind: "PROGRAM", id: "p", enabled: true, expectedVersion: 0 });
+        await saveGuidance(f.db, "PREVIEW", actor, { topic: "RAIN", content: text, approved: true, expectedVersion: 0 });
         f.seed("classSchedule", { id: "c", programId: "p", startsAt: now, endsAt: new Date(+now + 3600000), location: text, status: "SCHEDULED", updatedAt: now });
-        await expect(savePublication(f.db, "PREVIEW", actor, { kind: "CLASS", id: "c", enabled: true, expectedVersion: 0 })).rejects.toThrow();
-        expect(f.state.aiServiceProgramPublication).toHaveLength(0);
-        expect(f.state.aiServiceClassPublication).toHaveLength(0);
+        await savePublication(f.db, "PREVIEW", actor, { kind: "CLASS", id: "c", enabled: true, expectedVersion: 0 });
+        expect(f.state.aiServiceProgramPublication).toHaveLength(1);
+        expect(f.state.aiServiceClassPublication).toHaveLength(1);
     });
-    it("persisted unsafe approved guidance still fails final projection", async () => {
+    it("persisted numeric approved guidance reaches final projection", async () => {
         const f = fakeDb();
         f.seed("aiServiceKnowledgeEntry", { environment: "PREVIEW", topic: "RAIN", approved: true, content: "합성 프로그램 모집인원 8인" });
-        await expect(createTools(f.db, "PREVIEW", () => now).execute({ name: "get_approved_guidance", args: { topic: "RAIN" } }, new AbortController().signal)).rejects.toThrow();
+        expect(groundedReply(await createTools(f.db, "PREVIEW", () => now).execute({ name: "get_approved_guidance", args: { topic: "RAIN" } }, new AbortController().signal))).toBe("합성 프로그램 모집인원 8인");
     });
 });
 describe("QA-MAJOR3 immutable HMAC material identity", () => {

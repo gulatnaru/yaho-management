@@ -255,7 +255,7 @@ describe.sequential("POLICY approved guidance", () => {
     });
 });
 
-describe.sequential("H-4 approved guidance full path on real PostgreSQL (isolated DB 55435)", () => {
+describe.sequential("approved guidance full path on real PostgreSQL (isolated DB 55435)", () => {
     it("returns the POLICY v1 bytes through get_approved_guidance and groundedReply", async () => {
         const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
         const row = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });

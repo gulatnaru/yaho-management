@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorizeSelection, decideSelection, selectionCatalog } from "@/server/ai-service/selection-policy";
+import { authorizeSelection, decideToolSelection as decideSelection, selectionCatalog } from "@/server/ai-service/selection-policy";
 import type { ToolCall } from "@/server/ai-service/contracts";
 import { syntheticContext } from "../../eval/ai-service/synthetic";
 import { fixtures, HANDLES } from "../../eval/ai-service/fixtures";

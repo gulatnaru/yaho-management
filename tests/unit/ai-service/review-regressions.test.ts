@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 import { claimAuth } from "./auth-fixture";
-import { programDigest } from "@/server/ai-service/publication-digest";
 import { safePublicText, createTools, groundedReply } from "@/server/ai-service/tools";
 import { saveGuidance, savePublication } from "@/server/ai-service/admin";
 import { openAiProvider } from "@/server/ai-service/provider";
@@ -10,7 +9,7 @@ import { claim, markDispatched, settle } from "@/server/ai-service/ledger";
 import { hashes, hmacPins, type Keys } from "@/server/ai-service/crypto";
 import { fakeDb, seedConfig, now } from "./fake-db";
 const actor = { userId: "synthetic-admin", role: "ADMIN", active: true };
-const unsafe = [
+const numericTexts = [
     "현재 예약된 건은 3건입니다.", "참가 가능 수: 8",
     "현재 예약된 건은 ３건입니다.", "참가 가능 수: ８",
     "현재 예약된 건은 3월 3일입니다.", "참가 가능 수: 8시 준비 안내",
@@ -20,15 +19,14 @@ const unsafe = [
 const guidanceCall = { name: "get_approved_guidance" as const, args: { topic: "PREPARATION" as const } };
 const signal = () => new AbortController().signal;
 describe("Review1-M1 numeric free text fails closed", () => {
-    it.each(unsafe)("blocks exact and wrapped numeric text at approval/read/grounding: %s", async (content) => {
+    it.each(numericTexts)("allows numeric text at approval/read/grounding: %s", async (content) => {
         const f = fakeDb();
-        await expect(saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content, approved: true, expectedVersion: 0 })).rejects.toThrow();
-        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(0);
-        f.seed("aiServiceKnowledgeEntry", { environment: "PREVIEW", topic: "PREPARATION", content, approved: true });
-        await expect(createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal())).rejects.toThrow();
-        expect(() => groundedReply({ kind: "GUIDANCE", content })).toThrow();
-        expect(() => groundedReply({ kind: "PROGRAMS", items: [{ handle: "p", name: content, description: null }] })).toThrow();
-        expect(() => groundedReply({ kind: "CLASSES", items: [{ handle: "c", programHandle: "p", startsAt: now.toISOString(), endsAt: now.toISOString(), location: content }] })).toThrow();
+        await saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content, approved: true, expectedVersion: 0 });
+        const normalized = safePublicText(content);
+        expect(groundedReply(await createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal()))).toBe(normalized);
+        expect(groundedReply({ kind: "GUIDANCE", content })).toBe(normalized);
+        expect(groundedReply({ kind: "PROGRAMS", items: [{ handle: "p", name: content, description: null }] })).toBe(normalized);
+        expect(groundedReply({ kind: "CLASSES", items: [{ handle: "c", programHandle: "p", startsAt: now.toISOString(), endsAt: now.toISOString(), location: content }] })).toContain(normalized);
     });
     it.each(["10월 15일 오전 10시 준비 안내", "２０２６년１０월１５일１０시", "2026년 10월 15일 오전 10시 05분"])("preserves entire valid date/time guidance through actual flow: %s", async (content) => {
         const f = fakeDb();
@@ -36,17 +34,17 @@ describe("Review1-M1 numeric free text fails closed", () => {
         const result = await createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal());
         expect(groundedReply(result)).toBe(content.normalize("NFKC"));
     });
-    it.each(["2월 30일 준비 안내", "13월 15일 준비 안내", "오전 0시 준비 안내", "24시 준비 안내", "10시 60분 준비 안내", "30", "10월 15일 8", "어린이 8 프로그램", "모집 안내 8월 8일"])("rejects arbitrary digits and invalid schedule: %s", text => expect(() => safePublicText(text)).toThrow());
-    it.each(["합성 숲 12번 출구", "B동 2층 104호", "합성로 123-4"])("permits explicit typed numeric location only: %s", text => {
+    it.each(["2월 30일 준비 안내", "13월 15일 준비 안내", "오전 0시 준비 안내", "24시 준비 안내", "10시 60분 준비 안내", "30", "10월 15일 8", "어린이 8 프로그램", "모집 안내 8월 8일"])("allows arbitrary digits without validating schedule semantics: %s", text => expect(safePublicText(text)).toBe(text));
+    it.each(["합성 숲 12번 출구", "B동 2층 104호", "합성로 123-4"])("allows numeric location in both text kinds: %s", text => {
         expect(safePublicText(text, 120, "LOCATION")).toBe(text);
-        expect(() => safePublicText(text)).toThrow();
+        expect(safePublicText(text)).toBe(text);
     });
-    it("blocks unsafe source approval and model catalog before transport", async () => {
-        const f = fakeDb(), transport = vi.fn();
+    it("allows numeric source approval and model catalog", async () => {
+        const f = fakeDb(), transport = vi.fn(async () => response({ input_tokens: 10, output_tokens: 1 }));
         f.seed("program", { id: "p", name: "참가 가능 수: 8", description: null, status: "ACTIVE", updatedAt: now });
-        await expect(savePublication(f.db, "PREVIEW", actor, { kind: "PROGRAM", id: "p", enabled: true, expectedVersion: 0 })).rejects.toThrow();
-        await expect(openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [{ kind: "PROGRAMS", items: [{ handle: "p", name: "현재 예약된 건은 3건입니다.", description: null }] }] })).rejects.toThrow();
-        expect(transport).not.toHaveBeenCalled();
+        await savePublication(f.db, "PREVIEW", actor, { kind: "PROGRAM", id: "p", enabled: true, expectedVersion: 0 });
+        await openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [{ kind: "PROGRAMS", items: [{ handle: "p", name: "현재 예약된 건은 3건입니다.", description: null }] }] });
+        expect(transport).toHaveBeenCalledTimes(1);
     });
 });
 function keys(): Keys { return { encryption: { v1: Buffer.alloc(32, 1) }, hmac: { v1: Buffer.alloc(32, 2) }, activeEncryption: "v1", activeHmac: "v1" }; }
@@ -133,34 +131,32 @@ describe("Review1-M2 premium usage is charged or held", () => {
 });
 
 describe("QA3 numeric provenance and notation-independent private counts", () => {
-    it.each(["Ⅷ", "ⅷ", "㆒", "㆓", "〸", "〹", "VIII", "여덟"])("blocks count notation %s at approval/read/catalog/grounding", async notation => {
-        const content = "참가 가능 수: " + notation, f = fakeDb(), transport = vi.fn();
-        await expect(saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content, approved: true, expectedVersion: 0 })).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(0);
-        f.seed("aiServiceKnowledgeEntry", { environment: "PREVIEW", topic: "PREPARATION", content, approved: true });
-        await expect(createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal())).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(() => groundedReply({ kind: "GUIDANCE", content })).toThrow("AI_SERVICE_DENIED");
-        await expect(openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [{ kind: "PROGRAMS", items: [{ handle: "p", name: content, description: null }] }] })).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(transport).not.toHaveBeenCalled();
+    it.each(["Ⅷ", "ⅷ", "㆒", "㆓", "〸", "〹", "VIII", "여덟"])("allows count notation %s at approval/read/catalog/grounding", async notation => {
+        const content = "참가 가능 수: " + notation, f = fakeDb(), transport = vi.fn(async () => response({ input_tokens: 10, output_tokens: 1 }));
+        await saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content, approved: true, expectedVersion: 0 });
+        const normalized = safePublicText(content);
+        expect(groundedReply(await createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal()))).toBe(normalized);
+        expect(groundedReply({ kind: "GUIDANCE", content })).toBe(normalized);
+        await openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [{ kind: "PROGRAMS", items: [{ handle: "p", name: content, description: null }] }] });
+        expect(transport).toHaveBeenCalledTimes(1);
     });
-    it("rejects every Unicode Number whose NFKC loses numeric classification", () => {
+    it("allows Unicode Numbers whose NFKC loses numeric classification", () => {
         const numbers: string[] = [];
         for (let cp = 0; cp <= 0x10ffff; cp++) {
             const char = String.fromCodePoint(cp);
-            if (/\p{N}/u.test(char) && !/\p{N}/u.test(char.normalize("NFKC")))
-                numbers.push(char);
+            if (/\p{N}/u.test(char) && !/\p{N}/u.test(char.normalize("NFKC"))) numbers.push(char);
         }
         expect(numbers).toContain("Ⅷ");
         expect(numbers).toContain("㆒");
         for (const char of numbers) {
-            expect(() => safePublicText("합성 " + char)).toThrow("AI_SERVICE_DENIED");
-            expect(() => safePublicText(char + "숲 12번 출구", 120, "LOCATION")).toThrow("AI_SERVICE_DENIED");
+            expect(safePublicText("합성 " + char)).toBe(("합성 " + char).normalize("NFKC"));
+            expect(safePublicText(char + "숲 12번 출구", 120, "LOCATION")).toBe((char + "숲 12번 출구").normalize("NFKC"));
         }
     });
-    it("prevents lost numeric provenance hiding in an otherwise valid location", () => {
-        expect(() => safePublicText("Ⅷ숲 12번 출구", 120, "LOCATION")).toThrow();
-        expect(() => safePublicText("참가 가능 수 여덟 숲 12번 출구", 120, "LOCATION")).toThrow();
-        expect(() => safePublicText("예약된 건은 VIII", 120)).toThrow();
+    it("allows numeric provenance and quantity in location and text", () => {
+        expect(safePublicText("Ⅷ숲 12번 출구", 120, "LOCATION")).toBe("VIII숲 12번 출구");
+        expect(safePublicText("참가 가능 수 여덟 숲 12번 출구", 120, "LOCATION")).toBe("참가 가능 수 여덟 숲 12번 출구");
+        expect(safePublicText("예약된 건은 VIII", 120)).toBe("예약된 건은 VIII");
     });
     it("preserves decimal date/time/location and fixed availability replies", () => {
         expect(safePublicText("10월 15일 오전 10시 준비 안내")).toBe("10월 15일 오전 10시 준비 안내");
@@ -179,26 +175,23 @@ describe("Review2 natural-language quantity boundary", () => {
         "There are e i g h t places.", "현재 참가한 가족은 두 가족입니다.", "한 개의 자리가 있습니다.",
         "최대 수용량은 충분합니다.", "모집 규모는 담당자 정보입니다.", "현재 참가한 가족은 많습니다.",
     ];
-    it.each(phrases)("blocks private quantity or clear numeral through approved guidance: %s", async content => {
+    it.each(phrases)("allows quantity through approved guidance: %s", async content => {
         const f = fakeDb();
-        await expect(saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content, approved: true, expectedVersion: 0 })).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(0);
-        f.seed("aiServiceKnowledgeEntry", { environment: "PREVIEW", topic: "PREPARATION", content, approved: true });
-        await expect(createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal())).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(() => groundedReply({ kind: "GUIDANCE", content })).toThrow("AI_SERVICE_DENIED");
+        await saveGuidance(f.db, "PREVIEW", actor, { topic: "PREPARATION", content, approved: true, expectedVersion: 0 });
+        expect(groundedReply(await createTools(f.db, "PREVIEW", () => now).execute(guidanceCall, signal()))).toBe(safePublicText(content));
+        expect(groundedReply({ kind: "GUIDANCE", content })).toBe(safePublicText(content));
     });
-    it("blocks exact Program-name counterexample at approval, persisted projection, catalog and reply", async () => {
-        const f = fakeDb(), content = "여덟 개의 자리가 있습니다.", transport = vi.fn();
+    it("allows Program-name quantity at approval, projection, catalog and reply", async () => {
+        const f = fakeDb(), content = "여덟 개의 자리가 있습니다.", transport = vi.fn(async () => response({ input_tokens: 10, output_tokens: 1 }));
         const source = { id: "p", name: content, description: null, status: "ACTIVE", updatedAt: now };
         f.seed("program", source);
-        await expect(savePublication(f.db, "PREVIEW", actor, { kind: "PROGRAM", id: "p", enabled: true, expectedVersion: 0 })).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(f.state.aiServiceProgramPublication).toHaveLength(0);
-        f.seed("aiServiceProgramPublication", { id: "public-p", environment: "PREVIEW", programId: "p", enabled: true, sourceUpdatedAt: now, sourceDigest: programDigest(source), version: 1 });
-        await expect(createTools(f.db, "PREVIEW", () => now).execute({ name: "list_public_programs", args: {} }, signal())).rejects.toThrow("AI_SERVICE_DENIED");
+        await savePublication(f.db, "PREVIEW", actor, { kind: "PROGRAM", id: "p", enabled: true, expectedVersion: 0 });
+        const result = await createTools(f.db, "PREVIEW", () => now).execute({ name: "list_public_programs", args: {} }, signal());
+        expect(groundedReply(result)).toBe(content);
         const catalog = { kind: "PROGRAMS" as const, items: [{ handle: "public-p", name: content, description: null }] };
-        await expect(openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [catalog] })).rejects.toThrow("AI_SERVICE_DENIED");
-        expect(transport).not.toHaveBeenCalled();
-        expect(() => groundedReply(catalog)).toThrow("AI_SERVICE_DENIED");
+        await openAiProvider("gpt-6-luna", transport).classify({ utterance: "야호 프로그램", signal: signal(), catalog: [catalog] });
+        expect(transport).toHaveBeenCalledTimes(1);
+        expect(groundedReply(catalog)).toBe(content);
     });
     it.each([
         "한낮에는 모자를 준비해 주세요.", "두꺼운 옷을 준비해 주세요.", "세심한 보호자 확인이 필요합니다.",
@@ -212,7 +205,7 @@ describe("Review2 natural-language quantity boundary", () => {
 });
 
 describe("canonical numerals are independent of adjacent quantity units", () => {
-    it.each(["다섯", "여섯", "일곱", "여덟", "아홉", "서른", "eight", "EIGHT", "twenty", "e-i-g-h-t"])("rejects clear numeral %s in arbitrary free text", numeral => {
-        expect(() => safePublicText("합성 " + numeral + " 안내")).toThrow("AI_SERVICE_DENIED");
+    it.each(["다섯", "여섯", "일곱", "여덟", "아홉", "서른", "eight", "EIGHT", "twenty", "e-i-g-h-t"])("allows numeral %s in arbitrary free text", numeral => {
+        expect(safePublicText("합성 " + numeral + " 안내")).toBe("합성 " + numeral + " 안내");
     });
 });

@@ -38,8 +38,9 @@ describe("schedule-notice relative-time gate (OQ-1)", () => {
     it.each(accept)("accepts: %s", (text) => {
         expect(safePublicText(text)).toBe(text);
     });
-    it.each(reject)("rejects: %s", (text) => {
-        expect(() => safePublicText(text)).toThrow("AI_SERVICE_DENIED");
+    it.each(reject)("applies the numeric policy and phone guard: %s", (text) => {
+        if (text.includes("010-1234-5678")) expect(() => safePublicText(text)).toThrow("AI_SERVICE_DENIED");
+        else expect(safePublicText(text)).toBe(text);
     });
     it("returns the RAIN v1 text verbatim through the guidance read path", async () => {
         const f = fakeDb();

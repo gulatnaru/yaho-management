@@ -5,7 +5,7 @@ import { hashes, hmacPins, validateKeys, encrypt, type Keys } from "./crypto";
 import { claim, markDispatched, settle } from "./ledger";
 import { transaction, type Database } from "./repository";
 import { type Tools } from "./tools";
-import { decideSelection, executeSelection, selectionCatalog } from "./selection-policy";
+import { decideSelection, executeSelection, isCountQuestion, selectionCatalog } from "./selection-policy";
 export type Dependencies = {
     db: Database;
     environment: Environment;
@@ -50,7 +50,7 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         // Reject obvious secret/PII/execution requests before external dispatch, regardless of model behavior.
         // OQ-12 P0-A: health/allergy vocabulary and birthdate words are also
         // gated here — such questions go to staff without any model call.
-        if (!/야호|숲|프로그램|일정|예약|준비물|우천|비가|운영정책|추우면|추워도|한파|신발|운동화|비\s*오면/.test(utterance) ||
+        if ((!/야호|숲|프로그램|일정|예약|준비물|우천|비가|운영정책|추우면|추워도|한파|신발|운동화|비\s*오면/.test(utterance) && !isCountQuestion(utterance)) ||
             /(?:이전|모든)\s*지시|무시|system\s*prompt|ignore|SQL|개인정보|비밀번호|카드번호|계좌번호|주민번호|생년월일|0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}|[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(utterance)
             || healthKeywordPattern.test(utterance))
             return skillReply();
@@ -78,15 +78,15 @@ export async function handleSkill(headers: Headers, raw: string, stableRequestId
         await stage(() => markDispatched(deps.db, deps.environment, row.id, row.attempt, clock()), 200);
         dispatched = true;
         const selected = await stage(async () => decideSelection(utterance, catalog), 200);
-        const response = await stage(signal => executeSelection(utterance, selected, catalog, deps.tools, signal), 200);
+        const response = selected.kind === "COUNT" ? { text: "현재 인원은 확인이 어려워 담당자에게 문의해 주세요.", category: "HUMAN_HANDOFF" as const } : await stage(signal => executeSelection(utterance, selected.kind === "TOOL" ? selected.call : null, catalog, deps.tools, signal), 200);
         const { text, category } = response;
         const encrypted = encrypt(deps.keys, binding, { utterance, reply: text });
         const recorded = await settle(deps.db, deps.environment, row.id, row.attempt, { kind: "KNOWN",
             inputTokens: 0, outputTokens: 0, billingUsage: { inputTokens: 0, outputTokens: 0 }, category, modelCalled: false, ...encrypted }, clock());
         if (!recorded || controller.signal.aborted || Date.now() - started >= 3500)
             return skillReply();
-        if (selected && text !== HANDOFF) {
-            const final = await stage(signal => executeSelection(utterance, selected, catalog, deps.tools, signal), 200);
+        if (selected.kind === "TOOL" && text !== HANDOFF) {
+            const final = await stage(signal => executeSelection(utterance, selected.call, catalog, deps.tools, signal), 200);
             if (final.text !== text)
                 return skillReply();
         }

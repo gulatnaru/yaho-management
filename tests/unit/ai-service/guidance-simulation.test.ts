@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { HANDOFF } from "@/server/ai-service/contracts";
-import { decideSelection, executeSelection, selectionCatalog } from "@/server/ai-service/selection-policy";
+import { decideToolSelection as decideSelection, executeSelection, selectionCatalog } from "@/server/ai-service/selection-policy";
 import { safePublicText } from "@/server/ai-service/tools";
 import { syntheticContext } from "../../eval/ai-service/synthetic";
 
