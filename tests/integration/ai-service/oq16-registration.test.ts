@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { saveApprovedGuidance, readApprovedGuidanceState } from "@/server/ai-service/guidance-admin";
 import approvedRegistry from "@/server/ai-service/approved-guidance-v1.json";
 import { createTools, groundedReply } from "@/server/ai-service/tools";
@@ -236,7 +236,21 @@ describe.sequential("POLICY approved guidance", () => {
         expect(groundedReply(result)).toBe(content);
     });
     it("denies a directly inserted mimic row", async () => {
-        await db.aiServiceKnowledgeEntry.update({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } }, data: { content: "수업 전날 오후 6시까지 신청할 수 있습니다.", approved: true } });
-        await expect(createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal())).rejects.toThrow("AI_SERVICE_DENIED");
+        const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
+        expect(rowBefore).not.toBeNull();
+        let caught: unknown;
+        try {
+            await db.aiServiceKnowledgeEntry.update({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } }, data: { content: "수업 전날 오후 6시까지 신청할 수 있습니다.", approved: true } });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(Prisma.PrismaClientUnknownRequestError);
+        expect((caught as Error).message).toContain("23514");
+        expect((caught as Error).message).toContain("ai_service_knowledge_entry_policy_content");
+        const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
+        expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rowBefore!.content });
+        const result = await createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal());
+        expect(result).toEqual({ kind: "GUIDANCE", content: rowBefore!.content });
+        expect(groundedReply(result)).toBe(rowBefore!.content);
     });
 });
