@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import registry from "@/server/ai-service/approved-guidance-v1.json";
 import { safeApprovedGuidanceText } from "@/server/ai-service/approved-guidance-text";
 
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -9,7 +10,8 @@ const texts = Object.fromEntries((["PREPARATION", "RAIN", "POLICY"] as const).ma
 const deniedV1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1-denied.txt", import.meta.url), "utf8");
 
 describe("numeric guidance policy", () => {
-    it("allows the revised unapproved v2 draft with exact bytes", () => {
+    it("allows the approved v2 with exact bytes", () => {
+        expect(registry.entries.POLICY).toMatchObject({ version: 2, filename: "yaho_oq16_policy_v2.txt", characters: 220, bytes: 508, sha256: sha256(draftV2) });
         expect(draftV2.length).toBe(220);
         expect(Buffer.byteLength(draftV2)).toBe(508);
         expect(draftV2.endsWith("\n")).toBe(false);

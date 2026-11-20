@@ -11,7 +11,7 @@ import { fakeDb } from "./fake-db";
 
 const admin = { userId: "synthetic-admin", role: "ADMIN", active: true };
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
-const texts = Object.fromEntries((["PREPARATION", "RAIN", "POLICY"] as const).map(topic => [topic, readFileSync(new URL(`../../fixtures/approved-guidance-v1/${topic.toLowerCase()}-v1.txt`, import.meta.url), "utf8")])) as Record<"PREPARATION" | "RAIN" | "POLICY", string>;
+const texts = Object.fromEntries((["PREPARATION", "RAIN", "POLICY"] as const).map(topic => [topic, readFileSync(new URL(`../../fixtures/approved-guidance-v1/${topic.toLowerCase()}-${topic === "POLICY" ? "v2-draft" : "v1"}.txt`, import.meta.url), "utf8")])) as Record<"PREPARATION" | "RAIN" | "POLICY", string>;
 const allowed = ["정원이 먼저 차면 조기 마감됩니다", "정원이 차면 조기 마감될 수 있습니다", "수업 전날 오후 6시까지 신청할 수 있으며", "수업 전날 오후 6시까지 마감됩니다", "만 4세부터 만 7세까지", "만 네 살부터 만 일곱 살까지", "1. 신청 마감 및 신청 방법", "2. 참여 연령 및 보호자 동반", "신청할 수 있습니다", "예약할 수 있습니다", "참가할 수 있습니다", "오후 여섯 시까지 신청할 수 있습니다", "오전 열 시까지 접수할 수 있습니다", "신청 링크를 통해 접수할 수 있고, 입금 확인 후 예약이 확정됩니다.", "야호 숲체험은 만 4세부터 만 7세까지의 어린이를 대상으로 합니다.", "보호자 없이 아이들만 선생님과 함께 참여하는 수업입니다."];
 const denied = ["지도사 2명이 함께합니다", "8명", "잔여석 3석이 남았습니다", "정원 8명", "현재 5명이 신청했습니다", "남은 자리 2자리가 있습니다", "신청자수 3명입니다", "수업 시작 2시간 전에 정원은 8명입니다", "안내는 3건입니다", "만 30세부터", "오후 6시", "남은 정원", "정원 현황", "정원 규모", "만 4세부터", "신청 수가 3명입니다", "신청자 수 3명", "한 반의 아동 정원은 8명이고 지도사 2명이 함께합니다."];
 const mimic = "1. 신청 안내\n수업 전날 오후 6시까지 신청할 수 있습니다. 만 4세부터 만 7세까지 참여합니다.";
@@ -104,6 +104,26 @@ describe("approved guidance text", () => {
     it("denies the superseded complete policy", () => {
         const old = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1-denied.txt", import.meta.url), "utf8");
         expect(safeApprovedGuidanceText(old, "POLICY")).toBe(old);
+    });
+    it("rejects v1 and altered v2 registration and preserves a saved v2 row and audit", async () => {
+        const f = fakeDb();
+        const v1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "POLICY", content: texts.POLICY, expectedVersion: 0 });
+        for (const content of [v1, texts.POLICY + "!"]) {
+            await expect(saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "POLICY", content, expectedVersion: 1 })).rejects.toThrow("AI_SERVICE_DENIED");
+        }
+        expect(f.state.aiServiceKnowledgeEntry).toHaveLength(1);
+        expect(f.state.aiServiceKnowledgeEntry[0]).toMatchObject({ content: texts.POLICY, version: 1 });
+        expect(f.state.aiServiceGuidanceAudit).toHaveLength(1);
+    });
+    it("uses public-text fallback for retained v1 in both read paths", async () => {
+        const f = fakeDb();
+        const v1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        await saveApprovedGuidance(f.db, "PREVIEW", admin, { topic: "POLICY", content: texts.POLICY, expectedVersion: 0 });
+        f.state.aiServiceKnowledgeEntry[0].content = v1;
+        expect(sha(v1)).not.toBe(registry.entries.POLICY.sha256);
+        expect(await createTools(f.db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, new AbortController().signal)).toEqual({ kind: "GUIDANCE", content: safePublicText(v1) });
+        expect(groundedReply({ kind: "GUIDANCE", content: v1 })).toBe(safePublicText(v1));
     });
     it.each(["PREPARATION", "RAIN", "POLICY"] as const)("registers, retrieves and formats %s without changing bytes", async topic => {
         const content = texts[topic], f = fakeDb();

@@ -14,6 +14,7 @@ assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: 
 const db = new PrismaClient();
 const admin = { userId: "synthetic-admin", role: "ADMIN", active: true };
 const policyV1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+const policyV2 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v2-draft.txt", import.meta.url), "utf8");
 const prep = readFileSync(new URL("../../fixtures/approved-guidance-v1/preparation-v1.txt", import.meta.url), "utf8");
 const rain = readFileSync(new URL("../../fixtures/approved-guidance-v1/rain-v1.txt", import.meta.url), "utf8");
 const mimic = "수업 전날 오후 6시까지 신청할 수 있습니다.";
@@ -42,14 +43,21 @@ afterAll(async () => {
 });
 
 describe.sequential("H-1 approved POLICY content CHECK on real PostgreSQL (isolated DB 55435)", () => {
-    it("(a) accepts the byte-identical POLICY v1 approved row via saveApprovedGuidance and via direct upsert", async () => {
-        expect(sha256(policyV1)).toBe(approvedRegistry.entries.POLICY.sha256);
-        const saved = await saveApprovedGuidance(db, "PREVIEW", admin, { topic: "POLICY", content: policyV1, expectedVersion: 0 }, approvedRegistry);
-        expect(saved.content).toBe(policyV1);
+    it("has one validated POLICY CHECK containing both approved literals", async () => {
+        const rows = await db.$queryRaw<Array<{ contype: string; convalidated: boolean; definition: string }>>`SELECT c.contype::text, c.convalidated, pg_get_constraintdef(c.oid) AS definition FROM pg_constraint c WHERE c.conrelid = '"AiServiceKnowledgeEntry"'::regclass AND c.conname = 'ai_service_knowledge_entry_policy_content'`;
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ contype: "c", convalidated: true });
+        expect(rows[0].definition.includes(policyV1)).toBe(true);
+        expect(rows[0].definition.includes(policyV2)).toBe(true);
+    });
+    it("(a) saves POLICY v2 and accepts POLICY v1 via direct upsert", async () => {
+        expect(sha256(policyV2)).toBe(approvedRegistry.entries.POLICY.sha256);
+        const saved = await saveApprovedGuidance(db, "PREVIEW", admin, { topic: "POLICY", content: policyV2, expectedVersion: 0 }, approvedRegistry);
+        expect(saved.content).toBe(policyV2);
         expect(saved.approved).toBe(true);
         const row = await policyRow();
         expect(row).not.toBeNull();
-        expect(row!.content).toBe(policyV1);
+        expect(row!.content).toBe(policyV2);
         const direct = await db.aiServiceKnowledgeEntry.upsert({
             where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } },
             update: { content: policyV1, approved: true, version: { increment: 1 } },
@@ -57,6 +65,13 @@ describe.sequential("H-1 approved POLICY content CHECK on real PostgreSQL (isola
         });
         expect(direct.content).toBe(policyV1);
         expect(direct.approved).toBe(true);
+    });
+
+    it("allows updating the retained approved v1 row to v2 and back", async () => {
+        const updated = await db.aiServiceKnowledgeEntry.update({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } }, data: { content: policyV2 } });
+        expect(updated.content).toBe(policyV2);
+        const restored = await db.aiServiceKnowledgeEntry.update({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } }, data: { content: policyV1 } });
+        expect(restored.content).toBe(policyV1);
     });
 
     it("(b) rejects a mimic approved upsert with the CHECK violation and rolls back the transaction", async () => {

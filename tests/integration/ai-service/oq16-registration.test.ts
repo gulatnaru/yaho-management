@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+const pageContext = vi.hoisted(() => vi.fn());
+vi.mock("@/server/ai-service/guidance-context", () => ({ guidanceAdminContext: pageContext }));
+vi.mock("@/app/(admin)/ai-service/guidance/actions", () => ({ saveApprovedGuidanceAction: async () => {} }));
+import GuidancePage from "@/app/(admin)/ai-service/guidance/page";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { saveApprovedGuidance, readApprovedGuidanceState } from "@/server/ai-service/guidance-admin";
 import approvedRegistry from "@/server/ai-service/approved-guidance-v1.json";
-import { createTools, groundedReply } from "@/server/ai-service/tools";
+import { createTools, groundedReply, safePublicText } from "@/server/ai-service/tools";
 import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_INTEGRATION_LOCAL_ONLY");
@@ -228,12 +234,34 @@ describe.sequential("OQ-16 registration on real PostgreSQL (isolated DB 55435)",
 
 describe.sequential("POLICY approved guidance", () => {
     it("registers, retrieves and formats the approved bytes", async () => {
-        const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v2-draft.txt", import.meta.url), "utf8");
         const saved = await saveApprovedGuidance(db, "PREVIEW", admin, { topic: "POLICY", content, expectedVersion: 0 });
         expect(saved.content).toBe(content);
         const result = await createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal());
         expect(result).toEqual({ kind: "GUIDANCE", content });
         expect(groundedReply(result)).toBe(content);
+    });
+    it("rejects v1 and a one-byte change without changing the v2 row or audit", async () => {
+        const v1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        const row = await db.aiServiceKnowledgeEntry.findUniqueOrThrow({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
+        const before = await guidanceAuditCount();
+        for (const content of [v1, row.content + "!"]) {
+            await expect(saveApprovedGuidance(db, "PREVIEW", admin, { topic: "POLICY", content, expectedVersion: row.version })).rejects.toThrow("AI_SERVICE_DENIED");
+        }
+        expect(await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } })).toEqual(row);
+        expect(await guidanceAuditCount()).toBe(before);
+    });
+    it("routes a retained v1 row through both public-text fallbacks", async () => {
+        const v1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        const row = await db.aiServiceKnowledgeEntry.findUniqueOrThrow({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
+        await db.aiServiceKnowledgeEntry.update({ where: { id: row.id }, data: { content: v1 } });
+        try {
+            const result = await createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal());
+            expect(result).toEqual({ kind: "GUIDANCE", content: safePublicText(v1) });
+            expect(groundedReply({ kind: "GUIDANCE", content: v1 })).toBe(safePublicText(v1));
+        } finally {
+            await db.aiServiceKnowledgeEntry.update({ where: { id: row.id }, data: { content: row.content } });
+        }
     });
     it("denies a directly inserted mimic row", async () => {
         const rowBefore = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
@@ -256,8 +284,8 @@ describe.sequential("POLICY approved guidance", () => {
 });
 
 describe.sequential("approved guidance full path on real PostgreSQL (isolated DB 55435)", () => {
-    it("returns the POLICY v1 bytes through get_approved_guidance and groundedReply", async () => {
-        const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+    it("returns the POLICY v2 bytes through get_approved_guidance and groundedReply", async () => {
+        const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v2-draft.txt", import.meta.url), "utf8");
         const row = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
         expect(row).not.toBeNull();
         expect(row!.content).toBe(content);
@@ -278,6 +306,29 @@ describe.sequential("approved guidance full path on real PostgreSQL (isolated DB
         expect(state).toHaveLength(3);
         for (const topic of ["PREPARATION", "RAIN", "POLICY"] as const) {
             expect(state.find((entry) => entry.topic === topic)).toMatchObject({ approved: true, contentSha256: approvedRegistry.entries[topic].sha256 });
+        }
+    });
+});
+
+describe.sequential("POLICY page render with isolated DB rows", () => {
+    it("shows v1, v2, unapproved and absent states without submitting the form", async () => {
+        const where = { environment_topic: { environment: "PREVIEW", topic: "POLICY" } };
+        const original = await db.aiServiceKnowledgeEntry.findUniqueOrThrow({ where });
+        const v1 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        const v2 = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v2-draft.txt", import.meta.url), "utf8");
+        pageContext.mockResolvedValue({ db, environment: "PREVIEW", actor: admin });
+        vi.stubGlobal("React", React);
+        try {
+            for (const [content, approved, version, label] of [[v1, true, 7, "v1 원문 잔존"], [v2, true, 9, "현재 v2 원문 일치"], [v2, false, 11, "현재 v2 원문 일치"]] as const) {
+                const row = await db.aiServiceKnowledgeEntry.update({ where, data: { content, approved, version } });
+                const html = renderToStaticMarkup(await GuidancePage());
+                for (const value of ["POLICY (v2)", "yaho_oq16_policy_v2.txt", "220자", "508바이트", approvedRegistry.entries.POLICY.sha256, sha256(content), `DB 버전 ${version}`, approved ? " · 승인 · " : " · 미승인 · ", row.updatedAt.toISOString(), label, "PREPARATION (v1)", "RAIN (v1)"]) expect(html).toContain(value);
+            }
+            await db.aiServiceKnowledgeEntry.delete({ where });
+            expect(renderToStaticMarkup(await GuidancePage())).toContain("미등록");
+        } finally {
+            await db.aiServiceKnowledgeEntry.upsert({ where, create: original, update: { content: original.content, approved: original.approved, version: original.version, updatedById: original.updatedById, updatedAt: original.updatedAt } });
+            vi.unstubAllGlobals();
         }
     });
 });
