@@ -4,11 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { saveApprovedGuidance, readApprovedGuidanceState } from "@/server/ai-service/guidance-admin";
 import approvedRegistry from "@/server/ai-service/approved-guidance-v1.json";
-import { createTools } from "@/server/ai-service/tools";
+import { createTools, groundedReply } from "@/server/ai-service/tools";
 import { assertSafeE2eDatabaseUrls } from "../../e2e/support/db-safety";
 
 if (process.env.VERCEL_ENV || process.env.PLAYWRIGHT_PREVIEW_E2E === "1") throw new Error("UX_INTEGRATION_LOCAL_ONLY");
-assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL });
+assertSafeE2eDatabaseUrls({ DATABASE_URL: process.env.DATABASE_URL, DIRECT_URL: process.env.DIRECT_URL }, { additionalPorts: ["55435"] });
 
 const db = new PrismaClient();
 const admin = { userId: "synthetic-admin", role: "ADMIN", active: true };
@@ -23,20 +23,16 @@ async function guidanceAuditCount() {
 }
 
 beforeAll(async () => {
-    await db.aiServiceKnowledgeEntry.deleteMany({ where: { environment: "PREVIEW", topic: { in: ["PREPARATION", "RAIN"] } } });
+    await db.aiServiceKnowledgeEntry.deleteMany({ where: { environment: "PREVIEW", topic: { in: ["PREPARATION", "RAIN", "POLICY"] } } });
 });
 
 afterAll(async () => {
-    // Restore the standing state of this throwaway cluster (oq12-p0 seeds the
-    // synthetic PREPARATION row; no RAIN row existed before this file ran).
-    // Guidance audit rows are append-only by the guard trigger and stay as
-    // documented residue, like the AiServiceDeletionAudit rows before them.
     await db.aiServiceKnowledgeEntry.upsert({
         where: { environment_topic: { environment: "PREVIEW", topic: "PREPARATION" } },
         update: { content: syntheticGuidance, approved: true },
         create: { environment: "PREVIEW", topic: "PREPARATION", content: syntheticGuidance, approved: true, updatedById: "synthetic-admin" },
     });
-    await db.aiServiceKnowledgeEntry.deleteMany({ where: { environment: "PREVIEW", topic: "RAIN" } });
+    await db.aiServiceKnowledgeEntry.deleteMany({ where: { environment: "PREVIEW", topic: { in: ["RAIN", "POLICY"] } } });
     await db.$disconnect();
 });
 
@@ -226,5 +222,21 @@ describe.sequential("OQ-16 registration on real PostgreSQL (isolated DB 55435)",
         expect(await guidanceAuditCount()).toBe(before);
         const rowAfter = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "RAIN" } } });
         expect(rowAfter).toMatchObject({ version: rowBefore!.version, content: rain });
+    });
+});
+
+
+describe.sequential("POLICY approved guidance", () => {
+    it("registers, retrieves and formats the approved bytes", async () => {
+        const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        const saved = await saveApprovedGuidance(db, "PREVIEW", admin, { topic: "POLICY", content, expectedVersion: 0 });
+        expect(saved.content).toBe(content);
+        const result = await createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal());
+        expect(result).toEqual({ kind: "GUIDANCE", content });
+        expect(groundedReply(result)).toBe(content);
+    });
+    it("denies a directly inserted mimic row", async () => {
+        await db.aiServiceKnowledgeEntry.update({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } }, data: { content: "수업 전날 오후 6시까지 신청할 수 있습니다.", approved: true } });
+        await expect(createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal())).rejects.toThrow("AI_SERVICE_DENIED");
     });
 });

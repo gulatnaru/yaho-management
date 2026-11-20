@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertAdmin, parse, guidanceSchema, ServiceDenied, type Actor, type Environment } from "./contracts";
 import { saveGuidanceInTransaction } from "./admin";
-import { safePublicText } from "./public-text";
+import { safeApprovedGuidanceText } from "./approved-guidance-text";
 import { transaction, type Database } from "./repository";
 import approvedRegistry from "./approved-guidance-v1.json";
 export type ApprovedGuidanceEntry = {
@@ -41,8 +41,8 @@ export async function saveApprovedGuidance(db: Database, environment: Environmen
     const digest = sha256Hex(content);
     if (digest !== entry.sha256)
         throw new ServiceDenied();
+    safeApprovedGuidanceText(content, input.topic);
     const guidanceInput = parse(guidanceSchema, { topic: input.topic, content, approved: true, expectedVersion: input.expectedVersion });
-    safePublicText(guidanceInput.content);
     return transaction(db, environment, async (tx) => {
         const saved = await saveGuidanceInTransaction(tx, environment, actor, guidanceInput);
         await tx.aiServiceGuidanceAudit.create({ data: { environment, topic: input.topic, version: saved.version, contentSha256: digest, actorId: actor.userId } });

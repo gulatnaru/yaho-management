@@ -86,6 +86,7 @@ export async function saveGuidanceInTransaction(tx: Tx, environment: Environment
 export async function saveGuidance(db: Database, environment: Environment, actor: Actor, value: unknown) {
     assertAdmin(actor);
     const input = parse(guidanceSchema, value);
+    if (input.topic === "POLICY") throw new ServiceDenied();
     safePublicText(input.content);
     return transaction(db, environment, (tx) => saveGuidanceInTransaction(tx, environment, actor, input));
 }
