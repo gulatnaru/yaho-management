@@ -286,7 +286,7 @@ jobs:
             IF v_def LIKE '%기본 8명%' THEN RAISE EXCEPTION 'verification failed: v2 literal present too early'; END IF;
             SELECT COUNT(*) INTO v_ke_before FROM "AiServiceKnowledgeEntry";
             BEGIN
-              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-v1','PROBE','POLICY',$policy$신청 마감 및 신청 방법
+              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-v1','PRODUCTION','POLICY',$policy$신청 마감 및 신청 방법
           
           야호 숲체험은 수업 전날까지 신청하면 됩니다. 신청이 몰리면 조기 마감될 수 있습니다. 신청 링크를 통해 접수할 수 있고, 입금 확인 후 예약이 확정됩니다.
           
@@ -298,7 +298,7 @@ jobs:
               IF SQLERRM <> 'probe-rollback' THEN RAISE EXCEPTION 'verification failed: CHECK rejects v1: %', SQLERRM; END IF;
             END;
             BEGIN
-              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-v2','PROBE','POLICY',$policy$1. 신청 마감 및 신청 방법
+              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-v2','PRODUCTION','POLICY',$policy$1. 신청 마감 및 신청 방법
           
           야호 숲체험은 수업 전날 오후 6시까지 신청할 수 있으며, 정원이 먼저 차면 조기 마감됩니다. 신청 링크를 통해 접수할 수 있고, 입금 확인 후 예약이 확정됩니다.
           
@@ -310,19 +310,19 @@ jobs:
               NULL;
             END;
             BEGIN
-              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-other','PROBE','POLICY','not an approved text',true,1,now(),'probe');
+              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-other','PRODUCTION','POLICY','not an approved text',true,1,now(),'probe');
               RAISE EXCEPTION 'verification failed: CHECK accepted other';
             EXCEPTION WHEN check_violation THEN
               NULL;
             END;
             BEGIN
-              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-unapproved','PROBE','POLICY','not an approved text',false,1,now(),'probe');
+              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-unapproved','PRODUCTION','POLICY','not an approved text',false,1,now(),'probe');
               RAISE EXCEPTION 'probe-rollback';
             EXCEPTION WHEN OTHERS THEN
               IF SQLERRM <> 'probe-rollback' THEN RAISE EXCEPTION 'verification failed: CHECK rejects unapproved: %', SQLERRM; END IF;
             END;
             BEGIN
-              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-rain','PROBE','RAIN','anything',true,1,now(),'probe');
+              INSERT INTO "AiServiceKnowledgeEntry" ("id","environment","topic","content","approved","version","updatedAt","updatedById") VALUES ('h1-probe-rain','PRODUCTION','RAIN','anything',true,1,now(),'probe');
               RAISE EXCEPTION 'probe-rollback';
             EXCEPTION WHEN OTHERS THEN
               IF SQLERRM <> 'probe-rollback' THEN RAISE EXCEPTION 'verification failed: CHECK rejects RAIN: %', SQLERRM; END IF;
