@@ -254,3 +254,30 @@ describe.sequential("POLICY approved guidance", () => {
         expect(groundedReply(result)).toBe(rowBefore!.content);
     });
 });
+
+describe.sequential("H-4 approved guidance full path on real PostgreSQL (isolated DB 55435)", () => {
+    it("returns the POLICY v1 bytes through get_approved_guidance and groundedReply", async () => {
+        const content = readFileSync(new URL("../../fixtures/approved-guidance-v1/policy-v1.txt", import.meta.url), "utf8");
+        const row = await db.aiServiceKnowledgeEntry.findUnique({ where: { environment_topic: { environment: "PREVIEW", topic: "POLICY" } } });
+        expect(row).not.toBeNull();
+        expect(row!.content).toBe(content);
+        expect(sha256(row!.content)).toBe(approvedRegistry.entries.POLICY.sha256);
+        const result = await createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic: "POLICY" } }, signal());
+        expect(result).toEqual({ kind: "GUIDANCE", content });
+        expect(groundedReply(result)).toBe(content);
+    });
+    it("returns the PREPARATION and RAIN v1 bytes through get_approved_guidance", async () => {
+        for (const [topic, content] of [["PREPARATION", prep], ["RAIN", rain]] as const) {
+            const result = await createTools(db, "PREVIEW").execute({ name: "get_approved_guidance", args: { topic } }, signal());
+            expect(result).toEqual({ kind: "GUIDANCE", content });
+            expect(groundedReply(result)).toBe(content);
+        }
+    });
+    it("reads the registration state with matching content hashes for all three topics", async () => {
+        const state = await readApprovedGuidanceState(db, "PREVIEW", admin);
+        expect(state).toHaveLength(3);
+        for (const topic of ["PREPARATION", "RAIN", "POLICY"] as const) {
+            expect(state.find((entry) => entry.topic === topic)).toMatchObject({ approved: true, contentSha256: approvedRegistry.entries[topic].sha256 });
+        }
+    });
+});

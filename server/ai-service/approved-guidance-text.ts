@@ -99,15 +99,51 @@ const englishNumbers = new RegExp("(?:^|[^a-z])(?:" + english.map(word => [...wo
 function numeric(value: string) {
     return /^\d+$/.test(value) ? Number(value) : korean.indexOf(value);
 }
+const capacitySuffixes = ["이상", "초과", "이하", "미만", "정도", "쯤"];
+const capacityParticles = ["은", "는", "이", "가", "을", "를", "도", "의"];
+const capacityCandidate = new RegExp("(?:(한\\s*반의\\s*아동\\s+))?(?:(기본)\\s*)?정원\\s*(?:은|는|이|가|의)?\\s*(?:(기본)\\s*)?(?<!\\p{N})8(?!\\p{N})\\s*명", "gu");
+function capacityHasExcludedSuffix(sentence: string, end: number) {
+    let rest = sentence.slice(end).replace(/^\s+/u, "");
+    if (capacitySuffixes.some(word => rest.startsWith(word))) return true;
+    const particle = capacityParticles.find(word => rest.startsWith(word));
+    if (!particle) return false;
+    rest = rest.slice(particle.length).replace(/^\s+/u, "");
+    return capacitySuffixes.some(word => rest.startsWith(word));
+}
+function capacityHasContinuation(sentence: string, end: number) {
+    const rest = sentence.slice(end).replace(/^\s+/u, "");
+    return rest.length > 0 && (copulas.some(word => rest.startsWith(word)) || /^[.!?。,;:]/.test(rest));
+}
+function consumeCapacityCarveOut(text: string): string {
+    return text.split(/(?<=[.!?。\n])/u).map(sentence => {
+        const spans: Array<{ start: number; end: number }> = [];
+        for (const match of sentence.matchAll(capacityCandidate)) {
+            const start = match.index ?? 0;
+            const end = start + match[0].length;
+            if (match[2] && match[3]) continue;
+            if (start > 0 && !/[\s\p{P}]/u.test(sentence[start - 1])) continue;
+            if (capacityHasExcludedSuffix(sentence, end)) continue;
+            if (!capacityHasContinuation(sentence, end)) continue;
+            spans.push({ start, end });
+        }
+        if (spans.length === 0) return sentence;
+        let blanked = sentence;
+        for (let i = spans.length - 1; i >= 0; i--) blanked = blanked.slice(0, spans[i].start) + blanked.slice(spans[i].end);
+        const blankedCompact = blanked.toLowerCase().replace(/[\p{White_Space}\p{Punctuation}\p{Symbol}\p{Mark}]/gu, "");
+        if (/\p{N}/u.test(blanked) || containsQuantity(blankedCompact) || remainingKoreanNumerals(blanked, blankedCompact, true)) return sentence;
+        return blanked;
+    }).join("");
+}
 export function safeApprovedGuidanceText(content: string, topic: string): string {
     void topic;
     const sourceNumbers = Array.from(content).filter(char => /\p{N}/u.test(char));
     if (sourceNumbers.some(char => !/\p{N}/u.test(char.normalize("NFKC")))) throw new ServiceDenied();
     const text = content.normalize("NFKC").replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").normalize("NFKC");
-    const compact = text.toLowerCase().replace(/[\p{White_Space}\p{Punctuation}\p{Symbol}\p{Mark}]/gu, "");
+    const consumed = consumeCapacityCarveOut(text);
+    const compact = consumed.toLowerCase().replace(/[\p{White_Space}\p{Punctuation}\p{Symbol}\p{Mark}]/gu, "");
     if (!text.trim() || text.length > 1000 || /[<>]|https?:|[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:\+?82[- ]?)?0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}/i.test(text) || /ignore.*instructions|system\s*prompt|이전\s*지시.*무시|개인정보.*조회|SQL/i.test(text) || englishNumbers.test(text)) throw new ServiceDenied();
     if (/(?:정원|수용량|인원|신청자수|예약자수|참가자수|참여자수|예약건수|신청건수)\p{N}|(?:잔여|남은|빈)(?:자리|좌석|석|정원)|정원(?:현황|규모)|(?:인원|신청자수|예약자수|참가자수|참여자수|예약건수|신청건수|수용량)|\p{N}+(?:인|명|자리|좌석|석|건|人|席)|(?:참가|참여|참석|신청|예약|입장|수용)(?:할)?(?:(?:가능|예정|완료|확정|접수)(?:한|된)?|된|한|할|할수있는)?(?:수(?!(?:는|도|만)?(?:있|없))|건|명|인원|자리|좌석)/u.test(compact)) throw new ServiceDenied();
-    let remaining = text.replace(/^(?:[1-9])\.(?=\s+\S)/gm, "");
+    let remaining = consumed.replace(/^(?:[1-9])\.(?=\s+\S)/gm, "");
     remaining = remaining.replace(/(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/g, (match, y, m, d) => {
         const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
         return date.getUTCFullYear() === Number(y) && date.getUTCMonth() + 1 === Number(m) && date.getUTCDate() === Number(d) ? "" : match;
